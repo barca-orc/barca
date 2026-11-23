@@ -427,6 +427,7 @@ async fn fresh_read(
         &state.config.python,
         &request,
         &spec.batch,
+        &spec.rules,
     )
     .await
     .ok()??;

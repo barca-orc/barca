@@ -20,6 +20,10 @@ files?: Array<string>,
  */
 refresh?: Array<string>,
 /**
+ * Bring Manual assets up to date and run Manual upstream tasks too, without forcing cached results.
+ */
+include_manual?: boolean,
+/**
  * `--refresh-all`.
  */
 refresh_all?: boolean,

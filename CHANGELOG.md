@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Server requests now hold paused inputs even during hard refresh. `allow_paused` overrides paused targets only; paused inputs without a readable result fail instead of being recomputed (#937).
+
 - Worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).
 
 - `barca logs` and server logs now keep each multiline stderr write and failed-attempt traceback in one entry, with newlines in `line`, instead of one entry per physical line (#671). Stdout and old recorded logs keep their boundaries. Use `--pretty` when piping to a pager.
@@ -17,6 +19,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
 
 ### Features
+
+- Run controls offer Including Manual (off by default) and explicit hard refresh with a scope confirmation. Server runs hold paused inputs across these options, dry runs, and queue recovery; an override permits only named paused targets (#937).
 
 - Tasks can raise `barca.Skip(reason)` to record skipped work without retrying or producing a result. Scheduled skips preserve the failure streak; history, run outcomes and schedule inspection distinguish them from success and failure (#811).
 

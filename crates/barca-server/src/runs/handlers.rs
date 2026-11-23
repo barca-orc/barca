@@ -119,6 +119,7 @@ async fn create_run(
             ));
         }
     }
+    let rules = request.rules();
     let admitted = crate::runs::admit(
         &state,
         RunSpec {
@@ -132,7 +133,7 @@ async fn create_run(
             partition,
             batch: request.batch.clone(),
             // The run contract runs what `barca get` / `barca run` would run here.
-            rules: barca_service::freshness::RunRules::request(),
+            rules,
             timeout: None,
             kill_requeues: 0,
             queue: request.queue,
@@ -180,7 +181,7 @@ async fn dry_run(
     let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let result = barca_service::queries::explain(
+    let result = barca_service::queries::explain_with_rules(
         &cfg,
         &request.targets,
         run_files(state, files),
@@ -189,6 +190,7 @@ async fn dry_run(
         request.command.as_str(),
         partition_of(request)?.as_ref(),
         &batch_of(request)?,
+        &request.rules(),
     )
     .await
     .map_err(|e| ApiError::run(e, context(request.command, files)))?;

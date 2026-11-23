@@ -3,7 +3,10 @@ import { useTriggerGet } from '@/hooks/useTriggerGet'
 import { useTriggerRun } from '@/hooks/useTriggerRun'
 import { useRunDetail } from '@/hooks/useRuns'
 import { runNotice, type RunNotice } from '@/lib/runFeedback'
+import type { RunSettings } from '@/lib/api'
 import type { ListNode } from '@/lib/types'
+
+const DEFAULT_OPTIONS: RunSettings = {}
 
 type Target = Pick<ListNode, 'id' | 'kind'>
 
@@ -17,6 +20,7 @@ type Target = Pick<ListNode, 'id' | 'kind'>
 export function useTriggerNode(
   asset: Target | null,
   onTrigger: (handle: string, nodeId: string) => void,
+  options: RunSettings = DEFAULT_OPTIONS,
 ) {
   const getTrigger = useTriggerGet()
   const runTrigger = useTriggerRun()
@@ -27,16 +31,16 @@ export function useTriggerNode(
   const { mutate: run, reset: resetRun } = runTrigger
 
   /** Start `node`, whichever is selected: a failures list retries any of its rows. */
-  const fireFor = useCallback((node: Target, allowPaused = false) => {
+  const fireFor = useCallback((node: Target, allowPaused = false, settings = options) => {
     const mutate = node.kind === 'task' ? run : get
     setAsked(node.id)
-    mutate(allowPaused ? { target: node.id, allowPaused } : node.id, {
+    mutate({ target: node.id, allowPaused, options: settings }, {
       onSuccess: (data) => {
         setStarted({ runId: data.run_id, target: node.id })
         onTrigger(data.run_id, node.id)
       },
     })
-  }, [get, run, onTrigger])
+  }, [get, run, onTrigger, options])
 
   // Strictly `true`: a button's onClick passes its event here.
   const fire = useCallback((allowPaused?: unknown) => {

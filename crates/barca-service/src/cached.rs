@@ -140,10 +140,17 @@ fn keys(
 }
 
 pub async fn get(cfg: &ResolvedConfig, python: &Path, req: &Request) -> Result<Answer, BarcaError> {
-    Ok(read(cfg, python, req, false, &[])
-        .await?
-        .expect("latest read always answers")
-        .0)
+    Ok(read(
+        cfg,
+        python,
+        req,
+        false,
+        &[],
+        &crate::freshness::RunRules::status(),
+    )
+    .await?
+    .expect("latest read always answers")
+    .0)
 }
 
 /// Ordinary get may reuse only a plan that needs no execution, under request rules.
@@ -153,8 +160,9 @@ pub async fn fresh(
     python: &Path,
     req: &Request,
     batch: &[String],
+    rules: &crate::freshness::RunRules,
 ) -> Result<Option<(Answer, crate::results::ExplainResult)>, BarcaError> {
-    read(cfg, python, req, true, batch).await
+    read(cfg, python, req, true, batch, rules).await
 }
 
 async fn read(
@@ -163,6 +171,7 @@ async fn read(
     req: &Request,
     fresh_only: bool,
     batch: &[String],
+    rules: &crate::freshness::RunRules,
 ) -> Result<Option<(Answer, crate::results::ExplainResult)>, BarcaError> {
     if req.tier == Tier::Local && req.url_expires.is_some() {
         return Err(BarcaError::Usage(
@@ -210,11 +219,7 @@ async fn read(
         crate::cache::CachePolicy::CacheAware,
         if fresh_only { "get" } else { "status" },
         if fresh_only { selection.as_ref() } else { None },
-        &if fresh_only {
-            crate::freshness::RunRules::request()
-        } else {
-            crate::freshness::RunRules::status()
-        },
+        rules,
         &req.files,
         Some(&mut expected_hashes),
         Some(&mut phases),

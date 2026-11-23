@@ -82,6 +82,10 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub refresh: Vec<String>,
+    /// Bring Manual assets up to date and run Manual upstream tasks too, without forcing cached results.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
+    pub include_manual: bool,
     /// `--refresh-all`.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
@@ -148,6 +152,7 @@ impl RunRequest {
             files: Vec::new(),
             refresh: Vec::new(),
             refresh_all: false,
+            include_manual: false,
             cascade: true,
             dry_run: false,
             agent: false,
@@ -157,6 +162,16 @@ impl RunRequest {
             allow_paused: false,
             queue: QueuePlace::Next,
             reason: None,
+        }
+    }
+
+    /// Server requests hold pauses unless explicitly overridden, including after a restart.
+    pub fn rules(&self) -> crate::freshness::RunRules {
+        crate::freshness::RunRules {
+            pin_manual: !self.include_manual,
+            hold_paused: true,
+            allow_paused_targets: self.allow_paused,
+            ..crate::freshness::RunRules::request()
         }
     }
 

@@ -513,6 +513,33 @@ pub async fn explain(
     partition: Option<&crate::selection::PartitionSelection>,
     batch: &crate::batch::BatchOverride,
 ) -> Result<ExplainResult, BarcaError> {
+    explain_with_rules(
+        cfg,
+        target_names,
+        file_args,
+        python,
+        policy,
+        command_label,
+        partition,
+        batch,
+        &crate::freshness::RunRules::request(),
+    )
+    .await
+}
+
+/// Predict a server request using the same Manual and pause rules as its execution.
+#[allow(clippy::too_many_arguments)]
+pub async fn explain_with_rules(
+    cfg: &crate::config::ResolvedConfig,
+    target_names: &[String],
+    file_args: &[String],
+    python: &std::path::Path,
+    policy: CachePolicy,
+    command_label: &str,
+    partition: Option<&crate::selection::PartitionSelection>,
+    batch: &crate::batch::BatchOverride,
+    rules: &crate::freshness::RunRules,
+) -> Result<ExplainResult, BarcaError> {
     let dag = build_dag(file_args, python).await?;
     batch.check(&dag).map_err(BarcaError::Usage)?;
     if command_label == "get"
@@ -521,13 +548,14 @@ pub async fn explain(
     {
         crate::errln!("{note}");
     }
-    let result = crate::predict::explain_dag(
+    let (result, _, _, _) = crate::predict::explain_dag_with_keys(
         &dag,
         cfg,
         target_names,
         policy,
         command_label,
         partition,
+        rules,
         file_args,
     )
     .await?;

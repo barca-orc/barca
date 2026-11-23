@@ -5092,6 +5092,13 @@ Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per 
 with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
 not exhaustive at its limit; ordinary step outcomes still report independent failures.
 
+### Server run options (experimental)
+
+`POST /runs` accepts `include_manual: true` to bring Manual assets up to date and execute
+Manual upstream tasks. Current assets still use the cache. Hard refresh (`refresh_all`)
+remains unconditional for unheld nodes. Paused inputs remain held; `allow_paused` permits
+paused targets, not their paused inputs. Prediction and queue recovery preserve these rules.
+
 See also: [Scripts and AI Agents](/reference/agents/) (how to drive barca from scripts and agents), [Agent Skill](/reference/agent-skill/).
 
 ---

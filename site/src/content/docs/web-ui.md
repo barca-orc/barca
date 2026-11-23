@@ -114,6 +114,12 @@ recompute. `Manual` upstreams are read as they are. Hard refresh (`--refresh-all
 `refresh_all: true` in the API) explicitly recomputes everything in the cone, including
 `Manual` nodes; it is not needed to make a plain run fresh.
 
+The node panel and page toolbar offer **Including Manual** (unchecked by default) and a
+separate **Hard refresh…** action. Including Manual brings those nodes up to date using the
+cache. Hard refresh asks for confirmation and names the Manual nodes it would recompute.
+Both keep paused upstreams and pinned assets held. A paused input with no readable result
+fails the run; it is not silently computed. A paused target needs its own confirmation.
+
 The Runs page lists the queue (running runs first, then the waiting ones with how long they have
 waited; it folds to one line) above the run history. While runs wait, the sidebar shows the queue
 on every page: how many run and wait, and the oldest wait.

@@ -150,6 +150,10 @@ struct Stored {
     #[serde(default)]
     pin_manual: bool,
     #[serde(default)]
+    hold_paused: bool,
+    #[serde(default)]
+    allow_paused_targets: bool,
+    #[serde(default)]
     tick: Option<String>,
     /// `Schedule(..., timeout_seconds=N)` of the tick that started it.
     #[serde(default)]
@@ -191,6 +195,8 @@ pub(crate) fn store(spec: &RunSpec, accepted_at: f64) -> String {
         partition: spec.partition.as_ref().map(|p| p.to_json()),
         batch: spec.batch.clone(),
         pin_manual: spec.rules.pin_manual,
+        hold_paused: spec.rules.hold_paused,
+        allow_paused_targets: spec.rules.allow_paused_targets,
         tick: spec.rules.tick.clone(),
         timeout: spec.timeout,
         kill_requeues: spec.kill_requeues,
@@ -227,6 +233,8 @@ pub(crate) fn load(text: &str) -> Result<(RunSpec, f64), String> {
         batch: stored.batch,
         rules: barca_service::freshness::RunRules {
             pin_manual: stored.pin_manual,
+            hold_paused: stored.hold_paused,
+            allow_paused_targets: stored.allow_paused_targets,
             tick: stored.tick,
             status: false,
         },

@@ -32,6 +32,10 @@ pub struct RunRules {
     /// Read a `Manual` asset or task that is not a target and not named in `--refresh` as it
     /// is, instead of recomputing it (`barca get`, `barca run` and ticks).
     pub pin_manual: bool,
+    /// Hold paused nodes even outside a scheduled tick (server requests).
+    pub hold_paused: bool,
+    /// Explicit server request may run paused targets, while still holding paused inputs.
+    pub allow_paused_targets: bool,
     /// A tick of this scheduled node: every other task fires only when it is out of date.
     pub tick: Option<String>,
     /// `barca status` and `GET /state` ([`RunRules::status`]): decide every node on its own,
@@ -46,6 +50,8 @@ impl RunRules {
     pub fn request() -> Self {
         RunRules {
             pin_manual: true,
+            hold_paused: false,
+            allow_paused_targets: false,
             tick: None,
             status: false,
         }
@@ -58,6 +64,8 @@ impl RunRules {
     pub fn status() -> Self {
         RunRules {
             pin_manual: false,
+            hold_paused: false,
+            allow_paused_targets: false,
             tick: None,
             status: true,
         }
@@ -67,6 +75,8 @@ impl RunRules {
     pub fn tick(scheduled: &str) -> Self {
         RunRules {
             pin_manual: true,
+            hold_paused: false,
+            allow_paused_targets: false,
             tick: Some(scheduled.to_string()),
             status: false,
         }
@@ -352,6 +362,7 @@ pub struct Pin {
     pub(crate) output: OutputRef,
     /// Its inputs' latest results or its code differ from the ones it was computed with.
     pub(crate) stale: bool,
+    pub(crate) paused: bool,
     /// Set for an asset pinned with `barca pin` (not a `Manual` node): the pin it is read by.
     pub user: Option<db::AssetPin>,
 }
@@ -390,6 +401,7 @@ pub(crate) async fn load_pins(
                             run_hash: pin.run_hash.clone(),
                             output,
                             stale: false,
+                            paused: false,
                             user: Some(pin.clone()),
                         },
                     );
@@ -412,6 +424,7 @@ pub(crate) async fn load_pins(
                         run_hash: row.run_hash,
                         output: row.output,
                         stale,
+                        paused: false,
                         user: None,
                     },
                 );

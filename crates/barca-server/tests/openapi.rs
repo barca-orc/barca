@@ -402,6 +402,8 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(
         request.is_valid(&json!({"command":"get","targets":["a"],"values":true,"partition":"k=a"}))
     );
+    assert!(request.is_valid(&json!({"command":"run","targets":["task"],"include_manual":true})));
+    assert!(!request.is_valid(&json!({"command":"run","include_manual":"yes"})));
     assert!(!request.is_valid(&json!({"command":"sql"})));
     assert!(!request.is_valid(&json!({"command":"get","invented":1})));
     let load_error = validator(&json!({"$ref":"#/components/schemas/LoadError"}));

@@ -725,7 +725,11 @@ async fn predict_steps(
                 ctx.all_outputs.insert(step.step_id.display(), oref);
                 if !matches!(
                     held,
-                    Some(crate::cache::Held::Manual { .. } | crate::cache::Held::Pinned)
+                    Some(
+                        crate::cache::Held::Manual { .. }
+                            | crate::cache::Held::Pinned
+                            | crate::cache::Held::Paused
+                    )
                 ) {
                     ctx.cached_steps.remember(step);
                 }

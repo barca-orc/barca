@@ -788,6 +788,15 @@ queue entries, and each node's `running` badge. Cancel is reachable on these sur
 notice after starting a run, with the same confirmation dialog. While health or ownership is
 unknown, Cancel stays visible but disabled and explains what is being checked.
 
+## Manual and paused inputs of server runs
+
+`POST /runs` is cache-aware by default. `include_manual: true` brings Manual assets up to
+date and runs Manual upstream tasks; current assets still use the cache. `refresh_all: true`
+is a hard refresh of the cone, including Manual nodes. Paused inputs remain held in both
+cases. A paused input without a readable result fails the run. `allow_paused: true` permits
+paused targets only; it does not resume or recompute their paused inputs. Whole-file/project
+requests skip paused targets unless overridden. Prediction and queue recovery preserve these rules.
+
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 
 ---

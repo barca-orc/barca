@@ -1,3 +1,5 @@
+import { usePausedRunGuard } from '@/hooks/usePausedRunGuard'
+import { manualInScope } from '@/lib/runTarget'
 import { restingStatus } from '@/lib/status'
 import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useState } from 'react'
@@ -73,14 +75,23 @@ export function GraphPage() {
     (handle: string, nodeId: string) => setRun({ handle, nodeId }),
     [],
   )
-  const trigger = useTriggerNode(selectedAsset, onTrigger)
-  const readOnly = useWriteControl() === 'hidden'
+  const [includeManual, setIncludeManual] = useState(false)
+  const options = useMemo(() => includeManual ? { include_manual: true } : {}, [includeManual])
+  const trigger = useTriggerNode(selectedAsset, onTrigger, options)
+  const { fireFor } = trigger
+  const hardRefresh = useCallback((allowPaused = false) => {
+    if (selectedAsset) fireFor(selectedAsset, allowPaused, { refresh_all: true })
+  }, [selectedAsset, fireFor])
+  const runGuard = usePausedRunGuard(selectedAsset?.id ?? '', trigger.fire)
+  const refreshGuard = usePausedRunGuard(selectedAsset?.id ?? '', hardRefresh)
+  const writes = useWriteControl()
+  const readOnly = writes === 'hidden'
 
   // The toolbar's Run acts on what is open; the inspector's on its node; the command palette on
   // the selected node, else what is open.
   const onStarted = useCallback((handle: string) => setRun({ handle, nodeId: null }), [])
   const topbar = useTopbarRun({
-    node: selectedAsset, show: true, scopes: true, fireNode: trigger.fire,
+    node: selectedAsset, show: true, scopes: true, fireNode: runGuard.onRun,
     busy: trigger.isPending || stream.running, onStarted,
   })
 
@@ -139,13 +150,20 @@ export function GraphPage() {
             running={stream.running}
             error={selectedError}
             readOnly={readOnly}
+            disabled={writes === 'disabled'}
             triggering={trigger.isPending}
             triggerError={trigger.error}
-            onFire={trigger.fire}
+            onFire={runGuard.onRun}
+            options={{ includeManual, onIncludeManual: setIncludeManual,
+              onRefresh: refreshGuard.onRun,
+              manualNames: manualInScope(assets, selectedAsset.id),
+            }}
             onClose={() => setSelected(null)}
           />
         )}
       </div>
+      {runGuard.dialog}
+      {refreshGuard.dialog}
     </div>
   )
 }

@@ -67,7 +67,7 @@ pub async fn pin_manual<'a>(
         return Ok(planned);
     }
     // A tick does not compute a paused node (`barca_store::pauses`): a paused target is skipped.
-    if rules.tick.is_some() {
+    if rules.tick.is_some() || rules.hold_paused {
         planned.paused = db::get_asset_pauses(&cfg.db_path)
             .await?
             .into_iter()
@@ -75,7 +75,7 @@ pub async fn pin_manual<'a>(
             .collect();
         let paused = &planned.paused;
         targets.retain(|(name, id)| {
-            if paused.contains(id) {
+            if paused.contains(id) && !rules.allow_paused_targets {
                 planned.blocked.push((
                     name.clone(),
                     paused_outcome(id, barca_store::pauses::detail(id)),
@@ -97,7 +97,7 @@ pub async fn pin_manual<'a>(
     };
     let user_ids: HashSet<String> = user.keys().cloned().collect();
     planned.user_pins = user.values().cloned().collect();
-    if !rules.pin_manual && user.is_empty() {
+    if !rules.pin_manual && user.is_empty() && planned.paused.is_empty() {
         return Ok(planned);
     }
     let ids: Vec<&str> = targets.iter().map(|(_, id)| id.as_str()).collect();
@@ -112,7 +112,10 @@ pub async fn pin_manual<'a>(
     if walk.stops.is_empty() {
         return Ok(planned);
     }
-    let pins = crate::freshness::load_pins(cache.as_ref(), dag, &walk.stops, &user).await;
+    let mut pins = crate::freshness::load_pins(cache.as_ref(), dag, &walk.stops, &user).await;
+    for (id, pin) in &mut pins.pinned {
+        pin.paused = planned.paused.contains(id);
+    }
     drop(cache);
     if let Some(first) = pins.lost.first()
         && rules.tick.is_none()
@@ -122,6 +125,12 @@ pub async fn pin_manual<'a>(
     if let Some(first) = pins.never.first()
         && rules.tick.is_none()
     {
+        if planned.paused.contains(first) {
+            return Err(BarcaError::Usage(format!(
+                "'{}' is paused and has no readable result; resume it before running its dependents",
+                short_name(first)
+            )));
+        }
         return Err(crate::freshness::never_computed(dag, first, file_args));
     }
     if !pins.never.is_empty() || !pins.lost.is_empty() {
@@ -197,7 +206,7 @@ pub async fn pin_manual<'a>(
         for id in pins
             .pinned
             .iter()
-            .filter(|(_, pin)| pin.user.is_none())
+            .filter(|(id, pin)| pin.user.is_none() && !planned.paused.contains(*id))
             .map(|(id, _)| id)
         {
             for up in dag.upstream(id) {

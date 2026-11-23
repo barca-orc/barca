@@ -94,6 +94,23 @@ it in that target's cone re-runs.
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
 consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
 
+### Run options in the web UI
+
+A plain **Run** brings the asset DAG up to date. **Including Manual**, unchecked by default,
+also brings Manual assets up to date and runs Manual upstream tasks. Current asset results
+still use the cache; tasks execute when included.
+**Hard refresh** is the explicit `--refresh-all` operation: it recomputes the whole cone,
+including Manual nodes, regardless of the cache. Its confirmation lists the Manual nodes in
+scope. It is not needed to make a plain run fresh.
+
+Server requests hold paused upstreams, including during hard refresh. A paused input without
+a readable result fails the run instead of computing it. Confirming a run of a paused target
+allows that target only; other paused inputs stay held. Paused targets in whole-file/project
+runs are skipped. Assets pinned with `barca pin` remain pinned under every option.
+
+The HTTP request uses `include_manual: true` for Including Manual and `refresh_all: true` for
+hard refresh. Dry runs and requests recovered after a server restart use the same rules.
+
 ### A `Manual` upstream is read as it is
 
 A `Manual` asset or task (`@asset(freshness=Manual)`) is refreshed by hand only. When
