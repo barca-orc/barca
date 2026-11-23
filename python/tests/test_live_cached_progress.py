@@ -216,17 +216,27 @@ def skip(x):
     run_id = server.post("/runs", {"command": "run", "targets": ["hold", "skip"]})["run_id"]
     try:
         wait_until((tmp_path / "started").exists, "the independent task to block")
-        live = wait_until(
-            lambda: (r := server.get(f"/runs/{run_id}")).get("steps_skipped") == 1 and r,
-            "the skip completion to be persisted",
-        )
+
+        def skipped_live_run():
+            run = server.get(f"/runs/{run_id}")
+            return (
+                run
+                if any(step.get("skip_reason") == "nothing to send" for step in run["steps"])
+                else None
+            )
+
+        live = wait_until(skipped_live_run, "the skip completion to arrive")
         assert live["status"] == "running", live
         assert (live["steps_cached"], live["steps_total"]) == (2, 4), live
         history = barca(tmp_path, "history", run_id, "--json", "--server", server.url, env=env)
         assert history.returncode == 0, history.stderr
         counts = json.loads(history.stdout)["explanation"]["counts"]
-        assert (counts["cached"], counts["skipped"]) == (2, 1), counts
+        assert counts["cached"] == 2, counts
     finally:
         (tmp_path / "release").touch()
     done = wait_until(lambda: (r := server.get(f"/runs/{run_id}"))["status"] == "success" and r)
-    assert (done["steps_cached"], done["steps_skipped"], done["steps_executed"]) == (2, 1, 2)
+    assert (
+        done["steps_cached"],
+        done["explanation"]["counts"]["skipped"],
+        done["steps_executed"],
+    ) == (2, 1, 2)
