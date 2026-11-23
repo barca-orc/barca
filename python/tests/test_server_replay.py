@@ -158,3 +158,17 @@ def test_replay_retains_paused_target_override_and_rejects_unknown_old_scope(tmp
     assert status == 409, body
     assert "no recorded request scope" in body["error"]
     assert calls(tmp_path, "publish") == 2
+
+
+def test_cli_run_scope_can_be_replayed_by_the_server(tmp_path, serve):
+    from .helpers import barca
+
+    (tmp_path / "pipeline.py").write_text(PIPELINE)
+    result = barca(tmp_path, "get", "regional", "--partition", "region=emea", "--json")
+    assert result.returncode == 0, result.stderr
+    run_id = json.loads(result.stdout)["run_id"]
+    server = serve("--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
+    first = server.get(f"/runs/{run_id}")
+    assert first["scope"]["command"] == "get"
+    replay(server, run_id, cache="refresh_all")
+    assert [calls(tmp_path, n) for n in ("emea", "amer")] == [2, 0]
