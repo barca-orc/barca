@@ -1167,6 +1167,10 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
+            previous_attempts: Vec::new(),
+            parent_run_id: None,
+            run_attempt: None,
+            stop_reason: None,
             run_id: record.run_id.clone(),
             status: record.status.clone(),
             command: record.command.clone(),

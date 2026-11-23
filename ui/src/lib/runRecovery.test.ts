@@ -75,6 +75,17 @@ describe('incident summary', () => {
     expect(md).toContain('- `p.py:load`: ValueError: bad (raised at `/x/p.py:9 in load`)')
     expect(md).not.toContain('p.py:ok')
   })
+  it('retains the original worker cause and recovery alongside independent failures', () => {
+    const diagnosed = { ...view, explanation: { ...view.explanation, worker_failures: [
+      { node_id: 'p.py:worker', first_error: 'FatalException: original', retry_error: 'RuntimeError: retry', recovered: false },
+      { node_id: 'p.py:recovered', first_error: 'FatalException: transient', retry_error: null, recovered: true },
+    ] } }
+    const md = incidentSummary(diagnosed, 'http://h/runs?run=r1')
+    expect(md).toContain('Original cause: FatalException: original')
+    expect(md).toContain('Later attempt: RuntimeError: retry')
+    expect(md).toContain('recovered after worker replacement')
+    expect(md).toContain('`p.py:load`: ValueError: bad')
+  })
   it('links each failed step to its Datadog trace when the server names a site', () => {
     const traced = { ...view, steps: [{ ...step, trace_id: 'ab'.repeat(16) }] } as unknown as RunView
     const md = incidentSummary(traced, 'http://h/runs?run=r1', 'https://app.datadoghq.eu')

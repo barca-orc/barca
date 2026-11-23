@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 5; protocol version 5. Batched calls are implemented for 0.32.0.
+Specification 6; protocol version 5. Batched calls are implemented for 0.32.0.
 
 ## Framing and negotiation
 
@@ -222,13 +222,15 @@ moves no bytes: `done` carries its `size_bytes` and, for a store that is a plain
 `sha256`; a missing object is an `error` with `missing: true`. It is additive: the protocol
 version is unchanged, and a coordinator sends it only to a helper from the same build.
 
-`log` is `{type, node_id, line, stream?, t?}`, one frame per line, sent when the line is
-complete (or flushed at the end of the step). `stream` is `stdout` or `stderr` (absent:
+`log` is `{type, node_id, line, stream?, t?}`, one frame per entry, sent when complete
+(or flushed at the end of the step). Stdout entries are physical lines; stderr entries
+contain the complete lines of one write, with embedded newlines. `stream` is `stdout` or `stderr` (absent:
 `stdout`): the worker records Python's `sys.stdout` and `sys.stderr` while a step runs, and
 writes stderr through to its own stderr as well. `t` is when the line was written, seconds
 since the epoch as a float (absent: the coordinator stamps it on arrival). Both are additive
-fields of protocol version 3. Lines are not batched, so a line written just before a worker
-dies still arrives.
+fields of protocol version 3. Entries are sent immediately, so a complete line written just
+before a worker dies still arrives. Grouped stderr changes string content, not the wire
+shape or negotiated protocol version.
 
 A successful parallel response requires `artifact: {path,format,frame_type?}`. Every
 branch return value, including small JSON, is written to its run/group-owned file.

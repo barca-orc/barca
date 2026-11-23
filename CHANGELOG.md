@@ -10,9 +10,17 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- `barca logs` and server logs now keep each multiline stderr write and failed-attempt traceback in one entry, with newlines in `line`, instead of one entry per physical line (#671). Stdout and old recorded logs keep their boundaries. Use `--pretty` when piping to a pager.
+
 - Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
 
+### Features
+
+- Run history and the run page retain the original worker-fatal cause and distinguish recovery after worker replacement from terminal retry failure, without hiding independent failures (#1106).
+
 ### Bug Fixes
+
+- Recover queue-owned predecessor runs even when their host or PID cannot be checked. Retain stopped executions and their logs across server requeues, link them from run detail, and keep local log followers waiting for the next execution (#930, #931).
 
 - Cancel, drain timeout, forced stop and local SIGTERM now stop worker process groups, including inherited subprocesses and suspended `parallel()` callers. Children that ignore TERM are killed after the grace period even when their worker has exited (#935).
 

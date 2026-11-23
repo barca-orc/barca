@@ -236,6 +236,33 @@ mod tests {
     }
 
     #[test]
+    fn predecessor_with_indeterminate_owner_is_interrupted() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let first = state(dir.path());
+            let _ = pause(State(first.clone())).await.unwrap();
+            let spec = RunSpec::api(RunCommand::Get, vec!["a".into()], vec![]);
+            let id = admit(&first, spec).await.unwrap().run_id;
+            let path = first.config.resolved.db_path.clone();
+            run_queue::mark_running(&path, &id).await.unwrap();
+            db::create_run(&path, &id, "get", "[]", None, Some(1))
+                .await
+                .unwrap();
+            {
+                let (_db, conn) = db::open_conn(&path).await.unwrap();
+                conn.execute("UPDATE runs SET host = 'another-host', pid = NULL, owner = NULL WHERE run_id = ?1", [id.as_str()]).await.unwrap();
+            }
+            drop(first);
+            let next = state(dir.path());
+            resume_at_startup(&next).await.unwrap();
+            assert_eq!(
+                db::get_run(&path, &id).await.unwrap().unwrap().status,
+                "interrupted"
+            );
+        });
+    }
+
+    #[test]
     fn queued_exact_keys_do_not_widen_after_reload() {
         let spec = RunSpec {
             partition: Some(

@@ -354,7 +354,19 @@ pub async fn get_run_steps_window(
     }
     drop(rows);
     if run_traced(&conn, run_id).await? {
-        attach_trace_ids(&mut steps, run_id);
+        let parent = if has_column(&conn, "runs", "parent_run_id").await? {
+            let mut rows = conn
+                .query("SELECT parent_run_id FROM runs WHERE run_id = ?1", [run_id])
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?;
+            rows.next()
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?
+                .and_then(|r| r.get::<String>(0).ok())
+        } else {
+            None
+        };
+        attach_trace_ids(&mut steps, parent.as_deref().unwrap_or(run_id));
     }
     // A failed step's last lines (#627). Failed steps are kept first in a page (#623), so every
     // failed step listed has its tail; only the listed failed steps' lines are read.
@@ -483,7 +495,7 @@ fn output_tail(lines: &[(String, String)], node_id: &str) -> Vec<String> {
     let mut own: Vec<&str> = lines
         .iter()
         .filter(|(node, _)| node == node_id)
-        .map(|(_, line)| line.as_str())
+        .flat_map(|(_, line)| line.split('\n'))
         .collect();
     if let Some(at) = own
         .iter()
@@ -726,6 +738,15 @@ mod output_tail_tests {
         assert_eq!(tail.first().unwrap(), "line 10");
         assert_eq!(tail.last().unwrap(), "line 29");
         assert!(output_tail(&lines, "p.py:c").is_empty());
+        // New records group the traceback; old line-at-a-time records stay readable.
+        lines.truncate(lines.len() - 3);
+        lines.push((
+            "p.py:a".into(),
+            "Traceback (most recent call last):\n  File \"p.py\", line 3, in a\nValueError: no"
+                .into(),
+        ));
+        assert_eq!(output_tail(&lines, "p.py:a"), tail);
+        assert_eq!(output_tail(&[("blank".into(), "".into())], "blank"), [""]);
     }
 }
 

@@ -6,6 +6,9 @@ use libsql::Connection;
 pub const VERSION: i64 = 1;
 
 pub(crate) const RUN_COLUMNS: &[&str] = &[
+    "parent_run_id TEXT",
+    "run_attempt INTEGER",
+    "stop_reason TEXT",
     "pid INTEGER",
     "host TEXT",
     // What the coordinator knew about itself when it started the run (#290, JSON, see
@@ -43,6 +46,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // JSON): written as each phase is decided and with the outcome (#925). NULL for a run that
     // executed nothing and on older rows.
     "plan_reasons TEXT",
+    "worker_failures TEXT",
     // Why a cancelled run was cancelled (`barca_model::run_explain::Cancellation`, JSON; #925).
     // NULL otherwise and on older rows.
     "cancellation TEXT",
@@ -143,6 +147,7 @@ pub(crate) const INDEXES: &[&str] = &[
     // Eviction and `last_read_at` address results by artifact path.
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
     // A notification integration finds a job's previous finished run through this index.
+    "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id, run_attempt)",
     "CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job, id)",
     // `barca status` finds a node's last change in bytes for the same run hash through this
     // index: only the rows whose bytes changed are in it, so it costs nothing to keep.

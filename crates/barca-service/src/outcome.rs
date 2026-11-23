@@ -552,6 +552,17 @@ impl<'de> Deserialize<'de> for OrderedMap {
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunView {
+    /// Stopped server executions, oldest first, with ids for their own logs and steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<crate::db::runs::RunAttempt>,
+    /// Original request id, on a retained stopped execution only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
     /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.

@@ -7546,6 +7546,7 @@ components:
       - stdout
       - stderr
     Log:
+      description: A recorded entry. Multiline stderr writes and failed-attempt tracebacks retain embedded newlines in line; stdout remains line-oriented.
       type: object
       additionalProperties: false
       required:
@@ -8604,6 +8605,20 @@ components:
         counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
         the same object. The wording may change; parse the recorded fields. Experimental.
       properties:
+        worker_failures:
+          type: array
+          description: Original worker-fatal errors and their retry outcome, at most 64 affected steps and 8 KiB per error. Shortened errors carry a diagnostic truncated marker. Not exhaustive at the limit; independent failures remain in ordinary step outcomes. Absent when none were recorded.
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, first_error, retry_error, recovered]
+            properties:
+              node_id: {type: string}
+              first_error: {type: string}
+              retry_error: {type: [string, 'null']}
+              recovered: {type: boolean}
+
         target_line: {type: string}
         counts:
           type: object
@@ -8831,6 +8846,29 @@ components:
       - steps_page
       - logs
       properties:
+        previous_attempts:
+          type: array
+          description: Stopped executions of this accepted request, oldest first; absent when none.
+          items:
+            type: object
+            additionalProperties: false
+            required: [run_id, attempt, stop_reason]
+            properties:
+              run_id:
+                type: string
+              attempt:
+                type: integer
+                minimum: 1
+              stop_reason:
+                type: string
+        parent_run_id:
+          type: string
+          description: Original request id, present only on an archived execution.
+        run_attempt:
+          type: integer
+          minimum: 1
+        stop_reason:
+          type: string
         run_id: *id005
         status:
           type: string
@@ -9333,6 +9371,29 @@ components:
       - trigger_reason
       - cancellation
       properties:
+        previous_attempts:
+          type: array
+          description: Stopped executions of this accepted request, oldest first; absent when none.
+          items:
+            type: object
+            additionalProperties: false
+            required: [run_id, attempt, stop_reason]
+            properties:
+              run_id:
+                type: string
+              attempt:
+                type: integer
+                minimum: 1
+              stop_reason:
+                type: string
+        parent_run_id:
+          type: string
+          description: Original request id, present only on an archived execution.
+        run_attempt:
+          type: integer
+          minimum: 1
+        stop_reason:
+          type: string
         run_id: *id005
         command: *id005
         files:

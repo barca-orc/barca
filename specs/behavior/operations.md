@@ -104,6 +104,13 @@ grace period and forces cleanup. Preserve recovery state/outcomes, flush logs, a
 locks, connections and listeners. The precise durable transition ordering is implementation
 work; cleanup must not imply that state can be discarded before recovery is possible.
 
+Queue-owned predecessor records are terminated or requeued under the existing killed-drain
+retry rule even when host/PID checks are indeterminate. Requeue preserves linked execution
+records, stop reasons, diagnostics and logs, without changing the accepted request's ID or
+time. Original-ID history and logs discover earlier executions, and local log followers wait
+across requeues instead of reporting a terminal interruption. Each execution's outcome stays
+separate; logical run counts exclude archived executions. Conformance: `test_serve_queue.py`.
+
 Startup reconciles interrupted work before admitting new work, recovering assets while
 leaving tasks interrupted and avoiding duplicate surviving workers. One-off execution exits
 and cleans its owned workers/connections when finished; a pre-existing server remains running.
