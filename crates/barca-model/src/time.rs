@@ -90,6 +90,25 @@ pub fn parse_db_timestamp(at: &str) -> Option<f64> {
     Some(t.timestamp() as f64 + t.timestamp_subsec_nanos() as f64 / 1e9)
 }
 
+/// Serialize a metadata timestamp as RFC 3339 without changing its stored representation.
+pub fn serialize_datetime<S: serde::Serializer>(
+    at: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&sql_datetime_rfc3339(at))
+}
+
+/// Optional counterpart of [`serialize_datetime`]; an unknown time remains null.
+pub fn serialize_optional_datetime<S: serde::Serializer>(
+    at: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match at {
+        Some(at) => serializer.serialize_some(&sql_datetime_rfc3339(at)),
+        None => serializer.serialize_none(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -145,24 +164,5 @@ mod tests {
             unix_nanos(UNIX_EPOCH + std::time::Duration::from_nanos(1_500_000_000)),
             1_500_000_000
         );
-    }
-}
-
-/// Serialize a metadata timestamp as RFC 3339 without changing its stored representation.
-pub fn serialize_datetime<S: serde::Serializer>(
-    at: &str,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    serializer.serialize_str(&sql_datetime_rfc3339(at))
-}
-
-/// Optional counterpart of [`serialize_datetime`]; an unknown time remains null.
-pub fn serialize_optional_datetime<S: serde::Serializer>(
-    at: &Option<String>,
-    serializer: S,
-) -> Result<S::Ok, S::Error> {
-    match at {
-        Some(at) => serializer.serialize_some(&sql_datetime_rfc3339(at)),
-        None => serializer.serialize_none(),
     }
 }

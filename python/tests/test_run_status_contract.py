@@ -90,6 +90,9 @@ def test_pending_runs_are_filterable_history_before_execution(tmp_path):
         local = cli(tmp_path, "history", "--local", "--status", "pending", "--json")
         assert any(r["run_id"] == run_id and r["status"] == "pending" for r in local["runs"])
         server.request("DELETE", f"/runs/{run_id}")
+        cancelled = cli(tmp_path, "history", run_id, "--local", "--json")["run"]
+        assert cancelled["status"] == "cancelled"
+        rfc3339(cancelled["finished_at"])
 
 
 @pytest.mark.parametrize("restart", [False, True])
@@ -149,3 +152,19 @@ def test_interrupted_run_has_a_reason_without_inventing_an_end_time(tmp_path):
         assert run["status"] == "interrupted", run
         assert run["error"], run
         assert run["finished_at"] is None
+
+
+def test_pending_history_survives_restart_and_becomes_one_completed_run(tmp_path):
+    project(tmp_path)
+    with Serve(tmp_path, "--no-schedule", env=clean_env(BARCA_POOL_SIZE="2")) as server:
+        server.post("/queue/pause", {})
+        run_id = server.post("/runs", {"command": "get", "targets": ["good"]})["run_id"]
+    local = cli(tmp_path, "history", "--local", "--status", "pending", "--json")
+    assert [r["run_id"] for r in local["runs"]] == [run_id]
+    with Serve(tmp_path, "--no-schedule", env=clean_env(BARCA_POOL_SIZE="2")) as server:
+        assert server.get(f"/runs/{run_id}")["run"]["status"] == "pending"
+        server.post("/queue/resume", {})
+        assert finished(server, run_id)["run"]["status"] == "success"
+    rows = cli(tmp_path, "history", "--local", "--json")["runs"]
+    assert len(rows) == 1 and rows[0]["run_id"] == run_id
+    assert rows[0]["status"] == "success"

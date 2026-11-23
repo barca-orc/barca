@@ -36,6 +36,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
+
 - Preserve the original partition, refresh, batch, pause and tick scope when replaying a run; retry task followers using their task kind (#938).
 
 - The UI’s Run button for tasks now brings upstream assets up to date using the cache, like `barca run`, instead of implicitly forcing `--refresh-all` and recomputing Manual upstreams (#937).

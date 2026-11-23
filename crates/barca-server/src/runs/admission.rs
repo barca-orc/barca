@@ -119,9 +119,18 @@ pub async fn admit_as(
     {
         let _admitting = state.runs.queue.admit.lock().await;
         ensure_db(state).await?;
-        run_queue::push_with_slot(
+        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
+        let scope = spec.scope(&state.config.files);
+        barca_service::serve::record_queued_run(
             &state.config.resolved.db_path,
-            &run_id,
+            barca_service::serve::UnstartedRun {
+                run_id: &run_id,
+                command: spec.command.as_str(),
+                files: super::run_files(state, &spec.files),
+                target: target.as_deref(),
+                trigger: &spec.trigger,
+                scope: Some(&scope),
+            },
             &store(&spec, accepted_at),
             &timestamp(accepted_at),
             super::lifecycle::tick_of(&spec),
@@ -376,7 +385,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
                 target: target.as_deref(),
                 trigger: &spec.trigger,
             },
-            "error",
+            "failed",
             outcome.text(),
         )
         .await;

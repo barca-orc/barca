@@ -283,6 +283,13 @@ every database from before 0.29.2 (#629):
   in the queue once, counted in `spec.kill_requeues`, and interrupted the next time. Older
   binaries read `draining` as `queued`. Only `barca serve` writes it; readers of a database without it find the
   queue empty, and older binaries ignore it.
+  Admission now commits a `runs` row with status `pending` in the same transaction as its
+  queue entry. The pending row has no execution owner or finish time; `started_at` is the
+  acceptance time until execution replaces it with its start. Starting claims that same row,
+  and pre-execution cancellation or refusal records a terminal outcome there. Requeueing
+  archives execution evidence and restores a pending row under the original request id;
+  requeueing an already-pending request creates no attempt. History filters, counts and
+  activity therefore include accepted work even without a running server.
 - `schedule_ticks (schedule_id, scheduled_at, action, skipped_for, run_id, started_at,
   finished_at, run_status, queue_wait_seconds, rebuilt, up_to_date, failed, not_reached,
   targets)` (0.44.0, #960, [health](../behavior/health.md), "What a tick records"), primary key

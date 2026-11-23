@@ -1654,7 +1654,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let st = state_at(&path);
     crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
-    assert_eq!(row.run_status.as_deref(), Some("failed"));
+    assert_eq!(row.run_status.as_deref(), Some("interrupted"));
     assert_eq!(
         (row.started_at, row.queue_wait_seconds),
         (Some(241.0), Some(1.0))

@@ -80,3 +80,32 @@ pub async fn record_cached_run(
     )
     .await
 }
+
+/// Accept a queue entry and its pending history record in one transaction.
+pub async fn record_queued_run(
+    db_path: &str,
+    run: UnstartedRun<'_>,
+    spec: &str,
+    queued_at: &str,
+    slot: Option<(&str, i64)>,
+) -> Result<i64, crate::BarcaError> {
+    run_queue::push_with_record(
+        db_path,
+        run.run_id,
+        spec,
+        queued_at,
+        slot,
+        Some(crate::db::NewRun {
+            run_id: run.run_id,
+            command: run.command,
+            files: &crate::db::encode_files(run.files),
+            target: run.target,
+            steps_total: None,
+            job: None,
+            trigger: run.trigger,
+            traced: false,
+            scope: run.scope,
+        }),
+    )
+    .await
+}
