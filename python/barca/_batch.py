@@ -169,7 +169,15 @@ def _duckdb_table(param: str, fmt: str, dimensions: dict, paths: list[str]):
     _bound.append(mapping)
     q = _duckdb._quote
     if fmt == "parquet":
-        reader = con.read_parquet(paths, filename=True, union_by_name=True)
+        if len(paths) > 1 and any(_storage.is_remote(p) for p in paths):
+            # DuckDB 1.x binds union_by_name files in parallel while create_view
+            # holds the GIL. Python filesystem callbacks then deadlock, including
+            # when this input is rebound by name or returned as a batch result.
+            # Bind each file separately and let SQL align the schemas instead.
+            scans = [con.read_parquet(p, filename=True).sql_query() for p in paths]
+            reader = con.sql(" UNION ALL BY NAME ".join(f"({sql})" for sql in scans))
+        else:
+            reader = con.read_parquet(paths, filename=True, union_by_name=True)
     elif fmt == "csv":
         reader = con.read_csv(paths, filename=True, union_by_name=True, header=True)
     else:

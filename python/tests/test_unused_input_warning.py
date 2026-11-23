@@ -190,8 +190,8 @@ def orders() -> duckdb.DuckDBPyRelation:
 
 
 @sensor()
-def etag() -> tuple[bool, str]:
-    return True, "v1"
+def etag() -> str:
+    return "v1"
 
 
 def helper(value):
