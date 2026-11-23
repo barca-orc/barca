@@ -128,3 +128,59 @@ def test_completed_tasks_can_repeat_after_drain(tmp_path, serve):
     restarted = serve("--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
     assert restarted.finished(run_id)["status"] == "success"
     assert (tmp_path / "quick.runs").read_text() == "xx"
+
+
+def test_local_refresh_reuses_success_recorded_during_planning(tmp_path):
+    """A concurrent refresh can satisfy a local request after its acceptance time."""
+    import json
+    import subprocess
+
+    from barca.api import _find_binary
+    from .helpers import barca
+
+    (tmp_path / "pipeline.py").write_text("""
+import os
+import time
+from pathlib import Path
+from barca import asset, partitions
+
+def keys():
+    if os.environ.get("WAIT_FOR_OTHER_REFRESH"):
+        Path("planning").touch()
+        while not Path("release").exists():
+            time.sleep(0.02)
+    return ["a"]
+
+@asset()
+def base() -> int:
+    return 1
+
+@asset(partitions={"key": partitions(keys())})
+def keyed(key: str) -> str:
+    return key
+""")
+    process = subprocess.Popen(
+        [_find_binary(), "get", "pipeline.py", "--local", "--refresh-all", "--json"],
+        cwd=tmp_path,
+        env=clean_env(WAIT_FOR_OTHER_REFRESH="1", BARCA_POOL_SIZE="2"),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        wait_until((tmp_path / "planning").exists, "refresh planning to wait")
+        other = barca(tmp_path, "get", "base", "pipeline.py", "--local", "--refresh-all", "--json")
+        assert other.returncode == 0, other.stderr
+        (tmp_path / "release").touch()
+        stdout, stderr = process.communicate(timeout=20)
+        assert process.returncode == 0, stderr
+    finally:
+        (tmp_path / "release").touch()
+        if process.poll() is None:
+            process.terminate()
+            process.wait(timeout=10)
+    result = json.loads(stdout)
+    assert result["steps_executed"] == 1, result
+    base = next(step for step in result["steps"] if step["id"].endswith(":base"))
+    assert base["status"] == "cached", base
+    assert base["reason"] == "refreshed_by_this_run", base
