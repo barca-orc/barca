@@ -393,8 +393,7 @@ the commands need a server, as `barca pause` does (`barca docs incidents`).
 
 Each answers the job's `GET /schedule` entry, which `--json` prints as it is (without `--json`:
 one line, `pipeline.py:daily_report: paused until resumed · cron 0 6 * * * · next fire ...`,
-and a note on stderr). It reports `paused` and `paused_until` (unix
-epoch seconds, `null` for a pause until resumed). `barca pause` with no target lists the paused
+and a note on stderr). It reports `paused` and `paused_until` (RFC 3339 UTC, `null` for a pause until resumed). `barca pause` with no target lists the paused
 schedules under `schedules` beside the paused nodes, and `barca status --problems` lists a
 paused schedule's node. While a job is paused its due ticks are
 skipped: a line on stderr, `skip_reason: "paused"` in `GET /schedule`, and with telemetry on a
@@ -413,10 +412,10 @@ in the tz database. Any other value is a usage error: the server exits 2 and nam
 `barca list` talks to no server and does not know its `--timezone`. Its next fire times (the
 `NEXT FIRE (LOCAL TIME)` column, `next_fire` in JSON) are the next match of the cron expression
 in the local time of the machine `list` runs on. For a server started with another zone, ask the
-server: `GET /schedule` returns `next_fire` as unix epoch seconds, computed in the server's zone.
+server: `GET /schedule` returns `next_fire` as RFC 3339 UTC, computed in the server's zone.
 
 ```bash
-curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "next_fire": 1791522000, "failures": 0, "failing": false, ...}]
+curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "next_fire": "2026-10-09T05:00:00Z", "failures": 0, "failing": false, ...}]
 ```
 
 ```bash

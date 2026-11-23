@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Schedule API timestamps (`next_fire`, `last_fired`, `last_skipped`, `late_since`, and `paused_until`) now use RFC 3339 UTC strings instead of Unix seconds. Parse them as timestamps rather than multiplying by 1,000.
+
 - Server requests now hold paused inputs even during hard refresh. `allow_paused` overrides paused targets only; paused inputs without a readable result fail instead of being recomputed (#937).
 
 - Worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).

@@ -324,6 +324,9 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         }
         view.error = outcome.envelope().map(|e| e.error);
     }
+    if view.status == "interrupted" && view.error.is_none() {
+        view.error = Some("The execution owner stopped before recording an outcome.".into());
+    }
     view.control = run_control(read_path, id, &view.status, in_progress).await?;
     view.outcome = outcome;
     let (steps, mut steps_page) = db::get_run_steps_window(read_path, id, limit, offset).await?;

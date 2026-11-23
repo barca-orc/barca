@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '36'
+  version: '38'
   description: 'Normative current wire contract; specification version 35 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -7593,14 +7593,16 @@ components:
           - sensor
         next_fire:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         last_fired:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
           description: The schedule's newest tick, the slot of the newest run it started or queued
-            (unix epoch seconds); null when none is recorded.
+            (RFC 3339 UTC); null when none is recorded.
         last_run_id:
           anyOf:
           - *id003
@@ -7637,15 +7639,17 @@ components:
             Never while paused. GET /state and barca status report the same value.
         late_since:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: The first slot after the newest scheduler decision that has passed (unix epoch seconds); null
+          description: The first slot after the newest scheduler decision that has passed (RFC 3339 UTC); null
             while on time, while paused and when no tick is recorded.
         last_skipped:
-          description: Last time a due tick was skipped (unix epoch seconds), because a run of the node
+          description: Last time a due tick was skipped (RFC 3339 UTC), because a run of the node
             was in flight or the job is paused; in memory only, null after a restart
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         skipped_for:
           description: The in-flight run that caused last_skipped; null for a paused job
@@ -7664,10 +7668,10 @@ components:
           description: Held back by POST /schedule/{id}/pause; kept across a restart.
         paused_until:
           anyOf:
-          - &id056
-            type: integer
+          - type: string
+            format: date-time
           - type: 'null'
-          description: When the pause ends (unix epoch seconds); null when paused until resumed, or not
+          description: When the pause ends (RFC 3339 UTC); null when paused until resumed, or not
             paused.
         failures:
           description: Consecutive failed ticks (RFC-0008); persisted across restarts
@@ -8465,9 +8469,10 @@ components:
           id: *id005
           paused: &id059
             type: boolean
-          paused_until: &id058
+          paused_until:
             anyOf:
-            - type: integer
+            - type: string
+              format: date-time
             - type: 'null'
     TriggeredBy:
       type: string
@@ -8707,7 +8712,8 @@ components:
           run_id: *id005
           elapsed_seconds:
             type: number
-          steps_executed: *id056
+          steps_executed: &id056
+            type: integer
           phases: *id056
           metadata_seconds:
             type: number
@@ -9125,7 +9131,10 @@ components:
           anyOf:
           - type: number
           - type: 'null'
-        steps_total: *id058
+        steps_total: &id058
+          anyOf:
+          - type: integer
+          - type: 'null'
         steps_executed: *id056
         steps_cached: *id056
         job:

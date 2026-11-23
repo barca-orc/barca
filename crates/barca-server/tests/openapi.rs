@@ -1759,7 +1759,9 @@ async fn schedule_pause_and_resume_match_contract() {
         200,
     )
     .await;
-    let until = timed["paused_until"].as_i64().unwrap();
+    let until = chrono::DateTime::parse_from_rfc3339(timed["paused_until"].as_str().unwrap())
+        .unwrap()
+        .timestamp();
     let now = chrono::Utc::now().timestamp();
     assert!((7190..=7210).contains(&(until - now)), "{timed}");
     let pauses = checked(&router, "GET", "/pauses", "/pauses", 200).await;
