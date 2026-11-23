@@ -297,7 +297,6 @@ ALL_CASES = (
     + [PARTITION_RUN_CASE]
     + SINK_CASES
     + ATTEMPT_CASES
-
     + [CANCEL_CASE]
 )
 

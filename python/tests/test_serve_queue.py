@@ -566,12 +566,14 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         assert len(attempts) == number
         # Terminal diagnostic evidence belongs to the archived execution, never the
         # synthetic pending view of the same logical request.
-        failures = [{
-            "node_id": "pipeline.py:long",
-            "first_error": "worker failed before drain",
-            "retry_error": None,
-            "recovered": True,
-        }]
+        failures = [
+            {
+                "node_id": "pipeline.py:long",
+                "first_error": "worker failed before drain",
+                "retry_error": None,
+                "recovered": True,
+            }
+        ]
         with sqlite3.connect(project / ".barca" / "metadata.db") as db:
             db.execute(
                 "UPDATE runs SET worker_failures = ? WHERE run_id = ?",
@@ -645,6 +647,7 @@ def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drai
     assert view["finished_at"] is not None
     assert any(line["line"] == "before kill" for line in view["logs"])
     assert restarted.request("GET", "/queue")[1]["running"] == []
+
 
 @pytest.mark.parametrize("refresh_all", [False, True])
 def test_requeued_failed_key_records_success_under_the_same_hash(project, serve, refresh_all):
