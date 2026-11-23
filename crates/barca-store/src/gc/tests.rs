@@ -1096,8 +1096,13 @@ async fn a_writer_does_not_wait_for_a_whole_scan() {
     ))
     .await;
     let db = f.db.clone();
+    let (started, scanning_started) = tokio::sync::oneshot::channel();
     let scanning = tokio::spawn(async move {
+        let mut started = Some(started);
         let rows = scan(&db, "node_id", "status = 'success'", |_| {
+            if let Some(started) = started.take() {
+                let _ = started.send(());
+            }
             std::thread::sleep(std::time::Duration::from_micros(20));
             Ok(())
         })
@@ -1105,20 +1110,20 @@ async fn a_writer_does_not_wait_for_a_whole_scan() {
         .unwrap();
         (rows.len(), Instant::now())
     });
-    // Once the scan holds the lock for its first chunk.
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    let mut written = Instant::now();
-    for i in 0..3 {
-        barca_db::db::create_run(&f.db, &format!("r{i}"), "get", "[]", None, Some(1))
-            .await
-            .unwrap();
-        written = Instant::now();
-    }
+    // Observe the first chunk holding the lock; a timer is not evidence that a loaded
+    // runtime has started the scan. One writer completing before the scan ends proves
+    // the lock was released between chunks. Requiring three writes also orders the final
+    // writer against the scan's empty final chunk, which is not the contract under test.
+    scanning_started.await.unwrap();
+    barca_db::db::create_run(&f.db, "during-scan", "get", "[]", None, Some(1))
+        .await
+        .unwrap();
+    let written = Instant::now();
     let (read, scanned) = scanning.await.unwrap();
     assert!(read >= n);
     assert!(
         written < scanned,
-        "the writes landed between chunks, before the scan ended"
+        "the write landed between chunks, before the scan ended"
     );
 }
 

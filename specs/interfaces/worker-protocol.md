@@ -301,6 +301,8 @@ size and content digest. This is producer-owned data, not access to the metadata
 An unchanged observation can reuse it without rewriting the artifact. Results carry
 `sensor_changed` independently of `content_hash`: the coordinator records a freshness
 revision while the content digest continues to describe actual bytes.
+`sensor_explicit_value: true` is an optional diagnostic hint for `(True, non-None)` returns;
+the host warns once per node per process, without changing freshness. Older hosts ignore it.
 
 An unpartitioned source of `partitions_from` reports `source_observation`: count,
 `keyed`, membership digest, and, when verified previous bytes are available, the previous
