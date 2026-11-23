@@ -78,6 +78,12 @@ impl PartitionSelection {
         })
     }
 
+    /// Exact coordinate tuples, when this selection is not a rectangular filter.
+    /// Readers can enumerate a sparse selection without expanding its cross-product.
+    pub fn exact_keys(&self) -> Option<&[BTreeMap<String, String>]> {
+        self.exact_keys.as_deref()
+    }
+
     /// Preserve tuples in queued requests; legacy rectangular selections remain objects.
     pub fn to_json(&self) -> serde_json::Value {
         match &self.exact_keys {

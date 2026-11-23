@@ -163,9 +163,12 @@ impl RunRequest {
     /// The cache policy the flags ask for, as the CLI derives it.
     pub fn policy(&self) -> CachePolicy {
         if self.refresh_all {
-            CachePolicy::RefreshAll
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            }
         } else if !self.refresh.is_empty() {
             CachePolicy::RefreshSelective {
+                since: barca_model::time::now_secs_f64(),
                 names: self.refresh.clone(),
                 cascade: self.cascade,
             }
@@ -556,6 +559,17 @@ pub struct RunView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub skip_reason: Option<String>,
+    /// Stopped server executions, oldest first, with ids for their own logs and steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<crate::db::runs::RunAttempt>,
+    /// Original request id, on a retained stopped execution only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
     /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
@@ -867,7 +881,7 @@ mod tests {
             CachePolicy::RefreshSelective { cascade: false, .. }
         ));
         request.refresh_all = true;
-        assert!(matches!(request.policy(), CachePolicy::RefreshAll));
+        assert!(matches!(request.policy(), CachePolicy::RefreshAll { .. }));
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"get","invented":1}"#).is_err());
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"sql"}"#).is_err());
         assert_eq!(

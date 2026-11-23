@@ -327,12 +327,17 @@ pub async fn scheduled_runs(
     let failure = |e| BarcaError::Db(format!("failed to read scheduled runs: {e}"));
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
+    let archive_filter = if has_column(&conn, "runs", "parent_run_id").await? {
+        " AND parent_run_id IS NULL"
+    } else {
+        ""
+    };
     let mut out = HashMap::new();
     for schedule in schedules {
         let mut rows = conn
             .query(
-                "SELECT run_id, scheduled_at, status, started_at, finished_at FROM runs \
-                 WHERE schedule_id = ?1 AND scheduled_at IS NOT NULL ORDER BY id DESC LIMIT ?2",
+                &format!("SELECT run_id, scheduled_at, status, started_at, finished_at FROM runs \
+                 WHERE schedule_id = ?1 AND scheduled_at IS NOT NULL{archive_filter} ORDER BY id DESC LIMIT ?2"),
                 libsql::params![schedule.clone(), SCHEDULED_RUNS_WINDOW as i64],
             )
             .await

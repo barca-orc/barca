@@ -395,3 +395,39 @@ pub(crate) fn name_run(run: &barca_service::db::RunRecord, follow: bool) {
         barca_service::report::utc_cell(&run.started_at)
     );
 }
+
+/// Shared local/server presentation for a cached read; misses retain every key's outcome.
+pub(crate) fn print_cached(
+    answer: &barca_service::cached::Answer,
+    mode: crate::input::GetMode,
+    fields: Option<&[String]>,
+) -> Result<(), barca_service::BarcaError> {
+    if mode.shape == barca_service::report::GetShape::Json {
+        let mut value = serde_json::to_value(answer)
+            .map_err(|e| barca_service::BarcaError::Other(e.to_string()))?;
+        if let Some(fields) = fields
+            && let Some(obj) = value.as_object_mut()
+        {
+            obj.retain(|k, _| fields.contains(k));
+        }
+        barca_service::outln!("{}", value);
+    } else if mode.values {
+        if let Some(value) = &answer.final_output {
+            barca_service::outln!("{}", value);
+        }
+    } else {
+        for outcome in &answer.outcomes {
+            if let Some(path) = outcome
+                .get(if mode.url_expires.is_some() {
+                    "url"
+                } else {
+                    "path"
+                })
+                .and_then(serde_json::Value::as_str)
+            {
+                barca_service::outln!("{path}");
+            }
+        }
+    }
+    answer.check()
+}

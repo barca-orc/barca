@@ -1535,7 +1535,7 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
         200,
     )
     .await;
-    assert_eq!(cancelled["status"], "cancelling");
+    assert_eq!(cancelled["status"], "cancelled");
     let run = checked(
         &router,
         "GET",

@@ -303,6 +303,8 @@ pub(crate) async fn run_detail(
     let outputs =
         serde_json::from_value(body["explanation"]["outputs"].clone()).unwrap_or_default();
     let detail = barca_service::queries::RunDetail {
+        worker_failures: serde_json::from_value(body["explanation"]["worker_failures"].clone())
+            .unwrap_or_default(),
         run,
         steps,
         steps_page,

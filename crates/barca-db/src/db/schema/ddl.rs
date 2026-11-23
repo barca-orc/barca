@@ -6,6 +6,9 @@ use libsql::Connection;
 pub const VERSION: i64 = 1;
 
 pub(crate) const RUN_COLUMNS: &[&str] = &[
+    "parent_run_id TEXT",
+    "run_attempt INTEGER",
+    "stop_reason TEXT",
     "pid INTEGER",
     "host TEXT",
     // What the coordinator knew about itself when it started the run (#290, JSON, see
@@ -43,6 +46,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // JSON): written as each phase is decided and with the outcome (#925). NULL for a run that
     // executed nothing and on older rows.
     "plan_reasons TEXT",
+    "worker_failures TEXT",
     // Why a cancelled run was cancelled (`barca_model::run_explain::Cancellation`, JSON; #925).
     // NULL otherwise and on older rows.
     "cancellation TEXT",
@@ -145,6 +149,7 @@ pub(crate) const INDEXES: &[&str] = &[
     // Eviction and `last_read_at` address results by artifact path.
     "CREATE INDEX IF NOT EXISTS idx_mat_path ON materializations(artifact_path)",
     // A notification integration finds a job's previous finished run through this index.
+    "CREATE INDEX IF NOT EXISTS idx_runs_parent ON runs(parent_run_id, run_attempt)",
     "CREATE INDEX IF NOT EXISTS idx_runs_job ON runs(job, id)",
     // `barca status` finds a node's last change in bytes for the same run hash through this
     // index: only the rows whose bytes changed are in it, so it costs nothing to keep.
@@ -209,6 +214,10 @@ pub const SERVER_STATE: &str = "CREATE TABLE IF NOT EXISTS server_state (
 /// Tables added after version 1 was introduced: (name, its `CREATE TABLE IF NOT EXISTS`).
 /// Created by `init_db`, and by the additive migration in a version-1 database that lacks one.
 pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
+    (
+        "metadata_info",
+        "CREATE TABLE IF NOT EXISTS metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
+    ),
     // Derived per-node freshness witnesses; never a second ledger.
     ("freshness_proofs", FRESHNESS_PROOFS),
     // Results whose upload failed after their step succeeded (#390).
@@ -312,7 +321,9 @@ pub(crate) fn compatible_version(version: i64) -> Result<i64, String> {
 /// The format version, or [`BarcaError::MetadataUnusable`] (naming no path) for one this
 /// release cannot read.
 pub(crate) async fn check(conn: &Connection) -> Result<i64, BarcaError> {
-    compatible_version(read_version(conn).await?).map_err(crate::db::unusable)
+    let version = compatible_version(read_version(conn).await?).map_err(crate::db::unusable)?;
+    super::writer::warn(conn).await?;
+    Ok(version)
 }
 
 /// Whether a version-1 database lacks an additive column, table or index of this release, so that

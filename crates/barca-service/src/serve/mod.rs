@@ -50,3 +50,30 @@ pub async fn record_unstarted_run(
     )
     .await
 }
+
+/// Record a get served entirely from cache, including its ordinary history counters.
+pub async fn record_cached_run(
+    db_path: &str,
+    run: UnstartedRun<'_>,
+    job: &str,
+    steps: usize,
+    elapsed_seconds: f64,
+    outcome_json: &str,
+) -> Result<(), crate::BarcaError> {
+    crate::db::record_cached_run(
+        db_path,
+        crate::db::NewRun {
+            run_id: run.run_id,
+            command: run.command,
+            files: &crate::db::encode_files(run.files),
+            target: run.target,
+            steps_total: Some(steps),
+            job: Some(job),
+            trigger: run.trigger,
+            traced: false,
+        },
+        elapsed_seconds,
+        outcome_json,
+    )
+    .await
+}

@@ -66,6 +66,7 @@ const LAYERS: &[(Layer, &[&str])] = &[
         Layer::Part,
         &[
             "auth_http",
+            "host_guard",
             "queue",
             "replay",
             "scheduler_progress",
@@ -91,6 +92,7 @@ const LAYERS: &[(Layer, &[&str])] = &[
             "inspect",
             "ledger",
             "pins",
+            "cached",
             "queue_routes",
             "reset",
             "schedule_routes",

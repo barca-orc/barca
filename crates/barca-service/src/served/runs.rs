@@ -119,6 +119,7 @@ pub struct RunDraft {
     view: RunView,
     record: Option<db::RunRecord>,
     steps_page: db::StepsPage,
+    worker_failures: Vec<barca_model::run_explain::WorkerFailure>,
     read_path: String,
     /// The live run has not recorded how it ended.
     unfinished: bool,
@@ -143,7 +144,40 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         live,
         ..
     } = req;
-    let record = db::get_run(read_path, id).await?;
+    let mut record = db::get_run(read_path, id).await?;
+    if record.is_none()
+        && live.is_none()
+        && barca_store::run_queue::list(read_path)
+            .await?
+            .iter()
+            .any(|r| r.run_id == id)
+    {
+        let previous = db::runs::previous_attempts(read_path, id).await?;
+        if let Some(last) = previous.last()
+            && let Some(mut queued) = db::get_run(read_path, &last.run_id).await?
+        {
+            queued.run_id = id.to_string();
+            queued.status = "pending".to_string();
+            queued.parent_run_id = None;
+            queued.run_attempt = None;
+            queued.stop_reason = None;
+            queued.previous_attempts = previous;
+            queued.finished_at = None;
+            queued.elapsed_seconds = None;
+            queued.steps_total = None;
+            queued.steps_executed = 0;
+            queued.steps_cached = 0;
+            queued.steps_failed = None;
+            queued.steps_skipped = None;
+            queued.skip_reason = None;
+            queued.attempts = None;
+            queued.failure = None;
+            queued.cancellation = None;
+            queued.plan_reasons = None;
+            queued.retries = None;
+            record = Some(queued);
+        }
+    }
     let stored = match live {
         Some(LiveRun {
             outcome: Some(_), ..
@@ -155,6 +189,10 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let outcome = live.and_then(|r| r.outcome.clone()).or(stored);
     let mut view = match (&record, live) {
         (Some(record), _) => RunView {
+            previous_attempts: record.previous_attempts.clone(),
+            parent_run_id: record.parent_run_id.clone(),
+            run_attempt: record.run_attempt,
+            stop_reason: record.stop_reason.clone(),
             run_id: record.run_id.clone(),
             status: record.status.clone(),
             skip_reason: record.skip_reason.clone(),
@@ -192,6 +230,10 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
             logs: Vec::new(),
         },
         (None, Some(run)) => RunView {
+            previous_attempts: db::runs::previous_attempts(read_path, id).await?,
+            parent_run_id: None,
+            run_attempt: None,
+            stop_reason: None,
             run_id: run.handle.clone(),
             status: run.status.as_str().into(),
             skip_reason: None,
@@ -242,7 +284,9 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         view.queue = run.queue.shown();
     }
     if let Some(outcome) = &outcome {
-        view.status = outcome.status().as_str().into();
+        if view.stop_reason.is_none() {
+            view.status = outcome.status().as_str().into();
+        }
         view.error = outcome.envelope().map(|e| e.error);
     }
     view.outcome = outcome;
@@ -337,9 +381,14 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     steps_page.next_offset = (limit.is_some() && listed_to < steps_page.total).then_some(listed_to);
     // The steps streamed and not yet recorded get their trace ids as the recorded ones did.
     if record.is_some() && db::get_run_traced(read_path, &view.run_id).await? {
-        db::attach_trace_ids(&mut view.steps, &view.run_id);
+        db::attach_trace_ids(
+            &mut view.steps,
+            view.parent_run_id.as_deref().unwrap_or(&view.run_id),
+        );
     }
+    let worker_failures = barca_db::db::runs::get_worker_failures(read_path, id).await?;
     Ok(Some(RunDraft {
+        worker_failures,
         view,
         record,
         steps_page,
@@ -399,6 +448,7 @@ impl RunDraft {
             mut view,
             record,
             steps_page,
+            worker_failures,
             ..
         } = self;
         view.steps_page = steps_page;
@@ -415,6 +465,7 @@ impl RunDraft {
             &view.steps,
             crate::time::now_secs_f64(),
         );
+        view.explanation.worker_failures = worker_failures;
         // What the targets returned, as rows: nothing prints the raw pointers (#1042).
         let outcome = view
             .outcome
@@ -474,6 +525,7 @@ pub async fn run_detail(
         steps: view.steps,
         steps_page: view.steps_page,
         outputs: view.explanation.outputs,
+        worker_failures: view.explanation.worker_failures,
     })
 }
 
@@ -517,20 +569,28 @@ pub struct RunHandle {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunCancelling {
     pub run_id: String,
-    /// Always `cancelling`.
+    /// `cancelled` after a queued cancellation completes; `cancelling` while a run stops.
     pub status: Cancelling,
 }
 
-/// The one word of [`RunCancelling::status`].
+/// The status of a cancellation request.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum Cancelling {
     #[default]
     Cancelling,
+    Cancelled,
 }
 
 impl RunCancelling {
+    pub fn cancelled(run_id: impl Into<String>) -> Self {
+        Self {
+            run_id: run_id.into(),
+            status: Cancelling::Cancelled,
+        }
+    }
+
     pub fn of(run_id: impl Into<String>) -> Self {
         RunCancelling {
             run_id: run_id.into(),

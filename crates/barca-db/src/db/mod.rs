@@ -112,7 +112,7 @@ pub(crate) use runs::create_run_with;
 pub use runs::{
     ActivityDuration, ActivityFailure, ActivityRow, NewRun, RunActivityFacts, RunFilter, RunRecord,
     count_runs, count_runs_filtered, create_run, encode_files, finish_run, generate_run_id,
-    get_recent_runs, get_run, get_run_outcome, get_runs_filtered, reconcile_run,
+    get_recent_runs, get_run, get_run_outcome, get_runs_filtered, reconcile_run, record_cached_run,
     record_unstarted_run, replace_run_outcome, run_activity, run_artifact, set_cancellation,
     set_plan_reasons, set_run_outcome,
 };
@@ -1235,6 +1235,7 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
+    schema::writer::install(&conn).await?;
     Ok((db, conn))
 }
 

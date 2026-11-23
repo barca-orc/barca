@@ -19,6 +19,8 @@ pub const API_VERSION: u32 = 1;
 pub enum ErrorKind {
     /// A user step raised (traceback included). Fix the code; retrying barca will not help.
     StepFailed,
+    /// A cached-only lookup missed at least one selected key.
+    CacheMiss,
     /// Bad arguments, unknown target, wrong command for the node kind, invalid config.
     Usage,
     /// barca or its environment failed: metadata DB, worker spawn, remote state, I/O.
@@ -39,7 +41,7 @@ impl ErrorKind {
     /// | 130  | `cancelled`   |
     pub const fn exit_code(self) -> i32 {
         match self {
-            ErrorKind::StepFailed => 1,
+            ErrorKind::StepFailed | ErrorKind::CacheMiss => 1,
             ErrorKind::Usage => 2,
             ErrorKind::Infra => 3,
             ErrorKind::Cancelled => 130,
@@ -49,6 +51,7 @@ impl ErrorKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             ErrorKind::StepFailed => "step_failed",
+            ErrorKind::CacheMiss => "cache_miss",
             ErrorKind::Usage => "usage",
             ErrorKind::Infra => "infra",
             ErrorKind::Cancelled => "cancelled",
@@ -59,13 +62,15 @@ impl ErrorKind {
     pub fn of(e: &BarcaError) -> Self {
         match e {
             BarcaError::WorkerFailed(_) => ErrorKind::StepFailed,
+            BarcaError::CacheMiss(_) => ErrorKind::CacheMiss,
             BarcaError::AssetNotFound(..)
             | BarcaError::AmbiguousTarget(_)
             | BarcaError::Usage(_)
             | BarcaError::Parse(_)
             | BarcaError::Dag(_) => ErrorKind::Usage,
             BarcaError::Cancelled => ErrorKind::Cancelled,
-            BarcaError::Io(_)
+            BarcaError::CachedValueUnsupported(_)
+            | BarcaError::Io(_)
             | BarcaError::Db(_)
             | BarcaError::MetadataUnusable { .. }
             | BarcaError::Other(_) => ErrorKind::Infra,
@@ -163,6 +168,7 @@ pub struct ErrorEnvelope {
     /// A stable name for an error a client may handle on its own, when barca has one:
     /// `metadata_unusable`, `authentication_required` or `invalid_token`. Absent otherwise.
     pub reason: Option<String>,
+    pub outcomes: Option<Vec<Value>>,
     /// Human-mode text (the existing prose).
     prose: String,
     /// Whether `prose` already contains the remediation (so it is not printed twice).
@@ -195,6 +201,8 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             phase: Option<String>,
             #[serde(default)]
             reason: Option<String>,
+            #[serde(default)]
+            outcomes: Option<Vec<Value>>,
         }
         let wire = WireEnvelope::deserialize(deserializer)?;
         if wire.code != wire.kind.exit_code() {
@@ -241,6 +249,7 @@ impl<'de> Deserialize<'de> for ErrorEnvelope {
             phase: wire.phase,
             artifact_dir: wire.artifact_dir,
             reason: wire.reason,
+            outcomes: wire.outcomes,
             prose,
             prose_has_remediation: false,
             run_failure_line: None,
@@ -343,6 +352,7 @@ impl ErrorEnvelope {
             phase: None,
             artifact_dir: None,
             reason: None,
+            outcomes: None,
             prose_has_remediation: true,
             run_failure_line: None,
             prose: prose.trim_end().to_string(),
@@ -366,6 +376,16 @@ impl ErrorEnvelope {
     /// An engine error, with a remediation that names the next command to run.
     pub fn from_barca(e: BarcaError, ctx: &Context) -> Self {
         let kind = ErrorKind::of(&e);
+        if let BarcaError::CachedValueUnsupported(message) = &e {
+            let mut envelope = Self::from_prose(ErrorKind::Infra, message);
+            envelope.reason = Some("cached_value_unsupported".into());
+            return envelope;
+        }
+        if let BarcaError::CacheMiss(outcomes) = &e {
+            let mut envelope = Self::from_prose(kind, e.to_string());
+            envelope.outcomes = Some(outcomes.clone());
+            return envelope;
+        }
         if let BarcaError::WorkerFailed(step) = &e {
             return ErrorEnvelope {
                 kind,
@@ -376,6 +396,7 @@ impl ErrorEnvelope {
                 phase: step.phase.map(|p| p.as_str().to_string()),
                 artifact_dir: step.artifact_dir.clone(),
                 reason: None,
+                outcomes: None,
                 prose: format!("{}{}", failed_head(&step.node, step.phase), step.message),
                 prose_has_remediation: false,
                 run_failure_line: Some(format!(
@@ -433,6 +454,9 @@ impl ErrorEnvelope {
                     ctx.list_cmd()
                 ),
             },
+            BarcaError::CacheMiss(_) => {
+                "Choose a caller-controlled fallback or run ordinary get explicitly.".into()
+            }
             BarcaError::Usage(_) => format!("See `{}`.", ctx.help_cmd()),
             BarcaError::Cancelled => "Re-run the same command; steps that finished before the \
                                       cancel are cached and will not re-run."
@@ -442,7 +466,10 @@ impl ErrorEnvelope {
                                   failing, check that .barca/ is writable and that no other \
                                   program holds the metadata DB."
                 .to_string(),
-            BarcaError::Io(_) | BarcaError::Other(_) | BarcaError::WorkerFailed(_) => {
+            BarcaError::CachedValueUnsupported(_)
+            | BarcaError::Io(_)
+            | BarcaError::Other(_)
+            | BarcaError::WorkerFailed(_) => {
                 "Not a problem in your code: barca or its environment failed. Retrying may \
                  succeed."
                     .to_string()
@@ -472,6 +499,7 @@ impl ErrorEnvelope {
                 phase: None,
                 artifact_dir: None,
                 reason: None,
+                outcomes: None,
                 prose: prose.trim_end().to_string(),
                 prose_has_remediation: false,
                 run_failure_line: None,
@@ -525,6 +553,9 @@ impl ErrorEnvelope {
         m.insert("code".into(), json!(self.code()));
         m.insert("kind".into(), json!(self.kind.as_str()));
         m.insert("remediation".into(), json!(self.remediation));
+        if let Some(outcomes) = &self.outcomes {
+            m.insert("outcomes".into(), json!(outcomes));
+        }
         if let Some(reason) = &self.reason {
             m.insert("reason".into(), json!(reason));
         }

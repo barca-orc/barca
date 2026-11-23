@@ -382,3 +382,53 @@ A `materializations` row with `status = skipped` records an executed task attemp
 no run hash, output, artifact or observation. Cache/current-success queries must continue
 requiring `status = success`. Such history is not a produced materialization. Tick counts
 retain skipped outcomes after the bounded per-target list is trimmed.
+## Requeued execution evidence
+
+Format 1 adds nullable `runs.parent_run_id`, `runs.run_attempt` and `runs.stop_reason`,
+indexed by `(parent_run_id, run_attempt)`. On requeue, one transaction moves the stopped
+execution's existing run row, logs and materializations to a linked attempt ID and marks the
+original queue entry queued. Updating the existing row preserves every diagnostic column,
+including outcome, plan reasons, cancellation and worker diagnostics. Materialization
+hashes and creation times do not change. Complete spool lines are persisted before reuse.
+Repeated recovery without a new run row creates no extra attempt.
+
+The queue retains the original run ID, ordering and acceptance timestamp. Each subsequent
+execution records fresh results under that original ID. Archived executions are excluded
+from logical run lists, activity and schedule counts. History retention selects logical
+parents; deleting a parent removes its archived run rows and logs together. Ordinary cache
+retention still applies to materializations. Older snapshots without these columns read as
+having no archived attempts. Startup uses predecessor queue ownership to finish running
+records without depending on host/PID liveness, preserving the existing killed-drain retry
+limit. Conformance: run_queue tests, queue_routes tests, and `test_serve_queue.py` restart and
+local follower cases.
+
+Successful materialization `created_at` values written by step persistence include fractional
+seconds (`YYYY-MM-DD HH:MM:SS.nnnnnnnnn`, UTC) to distinguish refresh acceptance within a
+second. Readers accept legacy whole-second values too. No column or schema migration is needed.
+
+## Last writer version
+
+`metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)` is an additive format-1 table.
+`last_writer_version` records the barca package version of the last metadata write, including
+schema initialization/migration. Connection-local triggers update it with successful row
+writes, in the same transaction, including when a server keeps its connection open. Reads
+leave it untouched. Preexisting databases gain the table at the next schema initialization.
+Older releases that predate this feature cannot update the marker.
+
+Opening metadata last written by a newer semantic version prints a stderr warning naming
+both versions. This is advisory; schema compatibility still decides admission. The warning
+is deduplicated within a process. Missing or unrecognized writer versions do not block access.
+Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
+`crates/barca-db/src/db/schema/writer.rs`.
+## Worker-fatal diagnostics
+
+Format 1 adds nullable `runs.worker_failures` JSON through the additive column migration.
+It records each affected step's original error, its terminal retry error if any, and whether
+it recovered. The terminal ledger writes it in the same transaction as the run outcome.
+It is independent of successful materializations; no failure is fabricated for a recovered
+step. Old databases and runs read as no recorded diagnostic. Run-history deletion removes it
+with the run, and backup/restore includes it as ordinary metadata.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.

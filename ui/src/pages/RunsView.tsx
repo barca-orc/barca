@@ -256,6 +256,13 @@ function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: Run
   // A run that failed before any step did (it could not plan, say): its own error, said here once.
   const runError = runSummaryError(data)
   return <div className="barca-run-summary">
+    {(data.explanation.worker_failures?.length ?? 0) > 0 && <Section title="Worker failures">
+      {data.explanation.worker_failures?.map((failure) => <div key={failure.node_id}>
+        <p><code>{failure.node_id}</code>: {failure.recovered ? 'Recovered after worker replacement' : failure.retry_error ? 'Failed after worker replacement' : 'Did not complete after worker replacement'}</p>
+        <p>Original cause:</p><pre>{failure.first_error}</pre>
+        {failure.retry_error && <><p>Later attempt:</p><pre>{failure.retry_error}</pre></>}
+      </div>)}
+    </Section>}
     {failed.length > 0 && <>
       <strong className="barca-run-summary-head"><StatusGlyph glyph="failed" />{failed.length.toLocaleString()} failed step{failed.length === 1 ? '' : 's'}</strong>
       <ul className="barca-run-summary-failed">
@@ -299,6 +306,7 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
   return <StepToolsContext.Provider value={{ run: data, logStep, setLogStep, onStarted, datadogUrl }}>
     <RunSummary data={data} root={root} datadogUrl={datadogUrl} onStarted={onStarted} onFilter={setLogStep} />
     <RunOverview run={data} />
+
     <Section title="Run">
       {/* The run's facts, two to a line. Its state is said once: by the summary above when a
           step failed or the run did, else here. */}

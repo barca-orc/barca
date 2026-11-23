@@ -605,6 +605,6 @@ pub(crate) fn keys_failed(node: &NodeStatus) -> bool {
 /// When `created_at` (UTC `YYYY-MM-DD HH:MM:SS`, as materializations record it) was, unix
 /// seconds. A time that cannot be read is the end of time: newer than any check.
 pub(crate) fn recorded_at(created_at: &str) -> i64 {
-    chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S")
+    chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S%.f")
         .map_or(i64::MAX, |at| at.and_utc().timestamp())
 }

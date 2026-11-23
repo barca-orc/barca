@@ -27,6 +27,13 @@ const HEADLINE_REASONS: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunExplanation {
+    /// Each original worker-fatal cause and whether its step recovered after replacement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "ts",
+        ts(as = "Option<Vec<barca_model::run_explain::WorkerFailure>>", optional)
+    )]
+    pub worker_failures: Vec<barca_model::run_explain::WorkerFailure>,
     /// The run's targets, one each: its job's node ids, else the targets as given. Empty for a
     /// run of every asset.
     pub targets: Vec<String>,
@@ -307,6 +314,7 @@ pub fn explain(
     let live = matches!(run.status, "pending" | "running");
     let counts = run_counts(run, nodes, steps);
     RunExplanation {
+        worker_failures: Vec::new(),
         targets: targets(run),
         requested_by: requested_by(run.triggered_by, run.principal),
         attempts: counts.attempts_line.clone(),
@@ -1102,6 +1110,29 @@ pub fn target_line(target: Option<&str>) -> String {
 
 fn is_zero_count(value: &u64) -> bool {
     *value == 0
+}
+
+/// A terminal summary of one worker failure; independent failures stay separate.
+pub fn worker_failure_line(f: &barca_model::run_explain::WorkerFailure) -> String {
+    let outcome = if f.recovered {
+        "recovered after worker replacement"
+    } else if f.retry_error.is_some() {
+        "failed after worker replacement"
+    } else {
+        "did not complete after worker replacement"
+    };
+    let mut line = format!(
+        "{}: {outcome}; original cause: {}",
+        f.node_id,
+        f.first_error.lines().next().unwrap_or("unknown")
+    );
+    if let Some(error) = &f.retry_error {
+        line.push_str(&format!(
+            "; later attempt: {}",
+            error.lines().next().unwrap_or("unknown")
+        ));
+    }
+    line
 }
 
 #[cfg(test)]

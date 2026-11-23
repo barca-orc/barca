@@ -71,6 +71,7 @@ def test_refresh_set_preserves_siblings_and_full_fanin(project, selected):
     assert step(preview, "final")["action"] == "run"
     assert calls(project) == []
     result = get(project, "final", "--refresh", selector)
+    assert all(not item.get("warning") for item in result["steps"])
     actual = calls(project)
     assert actual == sorted(
         [f"source {k}" for k in selected]
@@ -98,6 +99,7 @@ def test_keyed_cutoff_stops_cascade(project):
     calls(project)
     result = get(project, "final", "--refresh", "source[account=A]")
     assert calls(project) == ["source A"]
+    assert all(not item.get("warning") for item in result["steps"])
     assert step(result, "aligned")["status"] == "cached"
     assert "propagation stopped" in step(result, "aligned")["detail"]
     assert step(result, "final")["status"] == "cached"
@@ -111,8 +113,10 @@ def test_unknown_key_fails_clearly(project):
 
 
 def test_no_cascade(project):
-    get(project, "final", "--refresh", "source[account=A]", "--no-cascade")
+    result = get(project, "final", "--refresh", "source[account=A]", "--no-cascade")
     assert calls(project) == ["source A"]
+    for node in ("aligned", "batched", "final"):
+        assert "refreshed 'source'" in step(result, node)["warning"]
 
 
 def env() -> dict[str, str]:
@@ -210,3 +214,16 @@ def test_python_api_refresh_set_on_server(project, monkeypatch):
         assert calls(project) == sorted(
             ["source A", "source C", "aligned A", "aligned C", "batched A,C", "final"]
         )
+
+
+def test_no_cascade_explicitly_refreshed_consumers_do_not_warn_for_cached_siblings(project):
+    result = get(
+        project,
+        "final",
+        "--refresh",
+        "source[account=A],aligned[account=A],batched[account=A]",
+        "--no-cascade",
+    )
+    for node in ("aligned", "batched"):
+        assert not step(result, node).get("warning")
+    assert "refreshed 'batched'" in step(result, "final")["warning"]

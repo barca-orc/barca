@@ -72,17 +72,25 @@ def _plain(value: Any) -> Any:
     return repr(value)
 
 
-def value(path: str, fmt: str) -> dict:
+def value(path: str, fmt: str, *, cached: bool = False) -> dict:
     """One artifact as {"value": ...}, or {"error": ...}. Never raises."""
     try:
-        return {
-            "value": _plain(
-                _artifacts.deserialize(path, fmt, frame_type=_pyarrow_reader_if_available(fmt))
-            )
-        }
+        if cached:
+            from barca import _cached_value
+
+            reader = _cached_value.deserialize
+        else:
+            reader = _artifacts.deserialize
+        return {"value": _plain(reader(path, fmt, frame_type=_pyarrow_reader_if_available(fmt)))}
     except Exception as e:  # noqa: BLE001 — reported per artifact, never fails the command
         first = str(e).splitlines()[0] if str(e) else ""
-        return {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
+        answer = {"error": f"{type(e).__name__}: {first}".rstrip(": ")}
+        if cached:
+            from barca._cached_value import UnsupportedValue
+
+            if isinstance(e, UnsupportedValue):
+                answer["kind"] = "cached_value_unsupported"
+        return answer
 
 
 def check(path: str, fmt: str) -> dict:
@@ -132,7 +140,10 @@ def answers(request: dict) -> list[dict]:
         return [sign(o) for o in request.get("objects", [])]
     if request.get("op") == "check":
         return [check(a["path"], a["format"]) for a in request.get("artifacts", [])]
-    return [value(a["path"], a["format"]) for a in request.get("artifacts", [])]
+    return [
+        value(a["path"], a["format"], cached=request.get("op") == "cached_value")
+        for a in request.get("artifacts", [])
+    ]
 
 
 def main() -> None:

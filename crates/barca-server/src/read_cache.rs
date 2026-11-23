@@ -322,6 +322,8 @@ impl ReadCache {
 /// (`State<Reads>`) and reaches nothing else.
 #[derive(Clone)]
 pub struct Reads {
+    /// Artifact reads have capacity independent of pipeline execution.
+    pub artifact_reads: Arc<tokio::sync::Semaphore>,
     pub config: Arc<ServeConfig>,
     /// The graph loaded from the configured files, shared with execution.
     pub sources: Sources,
@@ -342,6 +344,7 @@ impl Reads {
         scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
+            artifact_reads: Arc::new(tokio::sync::Semaphore::new(4)),
             sources: Sources::new(config.clone()),
             config,
             cache: Arc::default(),

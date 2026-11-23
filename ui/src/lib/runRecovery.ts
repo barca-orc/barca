@@ -171,6 +171,12 @@ export function incidentSummary(run: RunView, link: string, datadogUrl?: string 
     `- **Started:** ${run.started_at}`,
     `- **Duration:** ${seconds(run.elapsed_seconds)}`,
   ]
+  for (const failure of run.explanation.worker_failures ?? []) {
+    const outcome = failure.recovered ? 'recovered after worker replacement' : failure.retry_error ? 'failed after worker replacement' : 'did not complete after worker replacement'
+    out.push('', `**Worker failure:** \`${failure.node_id}\` — ${outcome}`,
+      `- Original cause: ${firstLine(failure.first_error)}`)
+    if (failure.retry_error) out.push(`- Later attempt: ${firstLine(failure.retry_error)}`)
+  }
   const runError = firstLine(run.error ?? run.failure?.error)
   if (runError) out.push(`- **Error:** ${runError}`)
   if (failed.length > 0) {

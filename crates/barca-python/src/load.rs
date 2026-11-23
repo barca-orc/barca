@@ -6,6 +6,7 @@
 use crate::parse::extract_pipeline;
 use barca_model::BarcaError;
 use barca_model::dag::Dag;
+use barca_model::process::Until;
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -14,11 +15,52 @@ use std::process::Command;
 /// parsing, and a Python subprocess for dynamic partitions), so it runs on the
 /// blocking pool rather than an async worker thread.
 pub async fn build_dag(file_args: &[String], python: &std::path::Path) -> Result<Dag, BarcaError> {
+    build_dag_until(file_args, python, Until::done()).await
+}
+
+/// Build a run's graph with cancellation reaching its resolver subprocesses.
+pub async fn build_dag_until(
+    file_args: &[String],
+    python: &std::path::Path,
+    until: Until<'_>,
+) -> Result<Dag, BarcaError> {
     let files = file_args.to_vec();
     let py = python.to_path_buf();
-    tokio::task::spawn_blocking(move || build_dag_blocking(&files, &py))
-        .await
-        .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
+    let cancel = until.cancel.cloned();
+    let deadline = until.deadline;
+    tokio::task::spawn_blocking(move || {
+        load_blocking(
+            &files,
+            &py,
+            false,
+            Until {
+                cancel: cancel.as_ref(),
+                deadline,
+            },
+        )
+        .map(|(dag, _)| dag)
+    })
+    .await
+    .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
+}
+
+/// Load source without importing it or evaluating dynamic partition expressions.
+/// Cached reads use literal keys, recorded keys or an explicit selection instead.
+pub async fn build_static_dag(files: &[String]) -> Result<Dag, BarcaError> {
+    let files = files.to_vec();
+    tokio::task::spawn_blocking(move || {
+        load_files(
+            &files,
+            &[],
+            std::path::Path::new("python"),
+            false,
+            false,
+            Until::done(),
+        )
+        .map(|(dag, _, _)| dag)
+    })
+    .await
+    .map_err(|e| BarcaError::Other(format!("static DAG analysis failed: {e}")))?
 }
 
 /// A source or definition that could not join the served graph.
@@ -35,11 +77,32 @@ pub async fn build_partial_dag(
     files: &[String],
     python: &std::path::Path,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
+    build_partial_dag_until(files, python, Until::done()).await
+}
+
+/// Serve-only loading for an accepted run, with cancellable resolvers.
+pub async fn build_partial_dag_until(
+    files: &[String],
+    python: &std::path::Path,
+    until: Until<'_>,
+) -> Result<(Dag, Vec<LoadError>), BarcaError> {
     let files = files.to_vec();
     let python = python.to_path_buf();
-    tokio::task::spawn_blocking(move || load_blocking(&files, &python, true))
-        .await
-        .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
+    let cancel = until.cancel.cloned();
+    let deadline = until.deadline;
+    tokio::task::spawn_blocking(move || {
+        load_blocking(
+            &files,
+            &python,
+            true,
+            Until {
+                cancel: cancel.as_ref(),
+                deadline,
+            },
+        )
+    })
+    .await
+    .map_err(|e| BarcaError::Other(format!("DAG analysis task failed: {e}")))?
 }
 
 /// The directory a pipeline file lives in, as a path that can be read: the directory its helper
@@ -151,7 +214,7 @@ pub fn build_dag_blocking(
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<Dag, BarcaError> {
-    load_blocking(file_args, python, false).map(|(dag, _)| dag)
+    load_blocking(file_args, python, false, Until::done()).map(|(dag, _)| dag)
 }
 
 /// [`build_dag_blocking`], with the Python frontend's nodes the graph was built from: what the
@@ -162,15 +225,17 @@ pub fn build_dag_and_extracted_blocking(
     file_args: &[String],
     python: &std::path::Path,
 ) -> Result<(Dag, Vec<crate::extracted::ExtractedNode>), BarcaError> {
-    load_files(file_args, &[], python, false).map(|loaded| (loaded.0, loaded.2))
+    load_files(file_args, &[], python, false, true, Until::done())
+        .map(|loaded| (loaded.0, loaded.2))
 }
 
 fn load_blocking(
     file_args: &[String],
     python: &std::path::Path,
     partial: bool,
+    until: Until<'_>,
 ) -> Result<(Dag, Vec<LoadError>), BarcaError> {
-    load_files(file_args, &[], python, partial).map(|(dag, errors, _)| (dag, errors))
+    load_files(file_args, &[], python, partial, true, until).map(|(dag, errors, _)| (dag, errors))
 }
 
 /// [`load_blocking`] of `file_args`, after `imported`: pipeline files read only because a
@@ -181,6 +246,8 @@ fn load_files(
     imported: &[String],
     python: &std::path::Path,
     partial: bool,
+    evaluate: bool,
+    until: Until<'_>,
 ) -> Result<(Dag, Vec<LoadError>, Vec<crate::extracted::ExtractedNode>), BarcaError> {
     let file_args: Vec<String> = imported.iter().chain(file_args).cloned().collect();
     let file_args = file_args.as_slice();
@@ -304,7 +371,7 @@ fn load_files(
         if !more.is_empty() {
             // Dependencies first, so the given files' nodes stay last.
             let more: Vec<String> = more.into_iter().rev().collect();
-            return load_files(file_args, &more, python, partial);
+            return load_files(file_args, &more, python, partial, evaluate, until);
         }
     }
     if !imported.is_empty() {
@@ -333,7 +400,11 @@ fn load_files(
         crate::link::validate_partition_dimensions(&all_nodes)?;
         // Like a file that does not parse: the command cannot plan with a node whose keys are
         // unknown, so it stops with the node named (exit 2).
-        let unevaluated = resolve_dynamic_partitions(&mut all_nodes, python)?;
+        let unevaluated = if evaluate {
+            resolve_dynamic_partitions(&mut all_nodes, python, until)?
+        } else {
+            Vec::new()
+        };
         if !unevaluated.is_empty() {
             let detail: Vec<String> = unevaluated
                 .iter()
@@ -365,7 +436,7 @@ fn load_files(
         .filter(|node| dag.get_node(&node.continuity_key()).is_some())
         .cloned()
         .collect();
-    let unevaluated = resolve_dynamic_partitions(&mut healthy, python)?;
+    let unevaluated = resolve_dynamic_partitions(&mut healthy, python, until)?;
     let (mut dag, additional) = crate::link::isolate_with(&healthy, &failed_files, unevaluated);
     dag.cannot_run = cannot_run(&dag, &broken_imports);
     dag.files_read = files_read;
@@ -498,6 +569,7 @@ fn user_traceback(stderr: &str) -> (String, String) {
 fn resolve_dynamic_partitions(
     nodes: &mut [crate::extracted::ExtractedNode],
     python: &std::path::Path,
+    until: Until<'_>,
 ) -> Result<Vec<(String, String)>, BarcaError> {
     let mut failures = Vec::new();
     // Each expression is evaluated once per module and load: several nodes of a file that read
@@ -518,7 +590,8 @@ fn resolve_dynamic_partitions(
             let outcome = match evaluated.get(&key) {
                 Some(outcome) => outcome.clone(),
                 None => {
-                    let outcome = evaluate_keys(python, &key.0, source_text).map_err(|e| {
+                    let outcome = evaluate_keys(python, &key.0, source_text, until).map_err(|e| {
+                        if matches!(e, BarcaError::Cancelled) { return e; }
                         // Not the pipeline's fault: barca's own Python is missing (exit 3).
                         BarcaError::Other(format!(
                             "cannot evaluate partitions({source_text}) of {}: cannot run {}: {e}",
@@ -574,6 +647,7 @@ fn resolve_dynamic_partitions(
                     &node.source_file,
                     &source_text,
                     &dims,
+                    until,
                 ) {
                     Ok(groups) => {
                         node.batch = Some(barca_model::model::BatchSpec::Groups { groups, strict });
@@ -582,15 +656,19 @@ fn resolve_dynamic_partitions(
                 }
             }
             Some(barca_model::model::BatchSpec::By { source_text, .. }) => {
-                if let Err(error) =
-                    crate::batch_spec::check_label_function(python, &node.source_file, &source_text)
-                {
+                if let Err(error) = crate::batch_spec::check_label_function(
+                    python,
+                    &node.source_file,
+                    &source_text,
+                    until,
+                ) {
                     failures.push((node.continuity_key(), error));
                 }
             }
             _ => {}
         }
     }
+    until.check()?;
     Ok(failures)
 }
 
@@ -609,7 +687,8 @@ fn evaluate_keys(
     python: &std::path::Path,
     module_path: &std::path::Path,
     source_text: &str,
-) -> std::io::Result<Result<Vec<barca_model::model::PartitionValue>, KeysError>> {
+    until: Until<'_>,
+) -> Result<Result<Vec<barca_model::model::PartitionValue>, KeysError>, BarcaError> {
     // `-c`: the cwd (the project root) is first on sys.path, as for a worker.
     const SCRIPT: &str = "import json, sys\n\
         from barca._source_import import load_pipeline_module\n\
@@ -624,8 +703,7 @@ fn evaluate_keys(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let output =
-        barca_model::spawn_lock::spawn_std(&mut eval).and_then(|child| child.wait_with_output())?;
+    let output = barca_model::spawn_lock::output_until(&mut eval, Vec::new(), until)?;
     if !output.status.success() {
         let (exception, frames) = user_traceback(&String::from_utf8_lossy(&output.stderr));
         return Ok(Err(KeysError::Raised { exception, frames }));

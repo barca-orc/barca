@@ -42,7 +42,7 @@ barca cancel RUN_ID --server --json
 ```
 
 The history projection omits repeated file lists and target strings. Cancel returns
-the run id and `cancelling` when the server accepts the request.
+the run id and `cancelled` when queued cancellation is complete, or `cancelling` while a running run stops.
 
 ## Output format: JSON unless stdout is a terminal
 

@@ -596,6 +596,14 @@ pub fn history_json(run: &crate::db::RunRecord) -> serde_json::Value {
 struct HistoryItem<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     skip_reason: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parent_run_id: &'a Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    run_attempt: &'a Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_reason: &'a Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    previous_attempts: &'a Vec<crate::db::runs::RunAttempt>,
     attempts: &'a Option<i64>,
     cancellation: &'a Option<crate::run_explain::Cancellation>,
     client_run_id: &'a Option<String>,
@@ -664,6 +672,10 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
             cancellation,
             retries,
             plan_reasons,
+            parent_run_id,
+            run_attempt,
+            stop_reason,
+            previous_attempts,
         } = run;
         let failure = failure.as_ref().map(|f| HistoryFailure {
             error: &f.error,
@@ -671,6 +683,10 @@ impl<'a> From<&'a crate::db::RunRecord> for HistoryItem<'a> {
         });
         HistoryItem {
             skip_reason,
+            parent_run_id,
+            run_attempt,
+            stop_reason,
+            previous_attempts,
             attempts,
             cancellation,
             client_run_id,
@@ -1097,6 +1113,7 @@ pub fn render_run_detail(
         crate::time::now_secs_f64(),
     );
     explanation.outputs = detail.outputs.clone();
+    explanation.worker_failures = detail.worker_failures.clone();
     if json {
         let mut out = serde_json::json!({
             "run": detail.run,
@@ -1130,6 +1147,30 @@ pub fn render_run_detail(
         head.push_str(&format!("  {attempts}"));
     }
     line!(rendered, "{head}");
+    if let Some(reason) = &r.stop_reason {
+        line!(
+            rendered,
+            "attempt {} stopped: {reason}",
+            r.run_attempt
+                .unwrap_or(r.previous_attempts.len() as i64 + 1)
+        );
+    }
+    for attempt in &r.previous_attempts {
+        line!(
+            rendered,
+            "attempt {} stopped: {} — barca logs {}",
+            attempt.attempt,
+            attempt.stop_reason,
+            attempt.run_id
+        );
+    }
+    for failure in &explanation.worker_failures {
+        line!(
+            rendered,
+            "{}",
+            crate::run_explanation::worker_failure_line(failure)
+        );
+    }
     let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
     if let Some(finished) = &r.finished_at {
         when.push_str(&format!("  finished {}", crate::report::utc_cell(finished)));
@@ -2157,6 +2198,7 @@ mod run_detail_tests {
             "ZeroDivisionError: division by zero\n  File \"p.py\", line 3, in clean",
         ));
         crate::queries::RunDetail {
+            worker_failures: Vec::new(),
             run,
             steps,
             steps_page: Default::default(),
@@ -2417,6 +2459,10 @@ mod history_json_tests {
     fn history_json_is_the_same_bytes_as_the_record_through_values() {
         let full = RunRecord {
             skip_reason: None,
+            parent_run_id: None,
+            run_attempt: None,
+            stop_reason: None,
+            previous_attempts: Vec::new(),
             run_id: "run-1".into(),
             command: "run".into(),
             files: vec!["a.py".into(), "dir/b \"q\".py".into()],

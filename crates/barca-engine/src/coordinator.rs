@@ -267,6 +267,7 @@ pub struct Coordinator {
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
     explicit_skips: HashMap<ItemId, (String, f64)>,
+    worker_failures: HashMap<ItemId, String>,
     /// Items parked for retry backoff — not ready until requeue() is called.
     waiting_retry: HashSet<ItemId>,
     /// Output artifacts from completed items.
@@ -347,6 +348,7 @@ impl Coordinator {
             failure_phases: HashMap::new(),
             skipped: HashSet::new(),
             explicit_skips: HashMap::new(),
+            worker_failures: HashMap::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
             groups: HashMap::new(),

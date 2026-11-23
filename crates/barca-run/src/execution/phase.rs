@@ -62,6 +62,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     let mut due_costs = Vec::new();
     // The steps that run because they had no cache hit: their history says why (#925).
     let mut missed = barca_decide::plan_reasons::Missed::default();
+    let mut warned_cached = std::collections::HashSet::new();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
         if step.kind == barca_model::NodeKind::Sensor {
@@ -176,8 +177,22 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                 }
             }
             Decision::Partitioned {
-                cached, missing, ..
+                cached,
+                missing,
+                stale_root,
+                ..
             } => {
+                if let Some(root) = stale_root
+                    && warned_cached.insert(step.step_id.base_id().to_string())
+                {
+                    note(
+                        pb,
+                        &format!(
+                            "[barca] warning: {}",
+                            stale_warning(step.step_id.base_id(), &root, false)
+                        ),
+                    );
+                }
                 let any_cached = !cached.is_empty();
                 for (pdisplay, oref) in cached {
                     all_outputs.insert(pdisplay.clone(), oref);
@@ -233,6 +248,25 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
 /// `ProgressBar::println`, which used to make warnings vanish.
 pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
     barca_model::lines::Lines::current().note(pb.as_ref(), msg);
+}
+
+// A server starts new worker pools for successive polls. Deduplicate in the host,
+// not in a worker, so a node warns only once during this CLI/server process.
+fn sensor_warning(node_id: &str, artifact: &serde_json::Value) -> Option<String> {
+    static WARNED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+    if artifact
+        .get("sensor_explicit_value")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+        || !WARNED.lock().unwrap().insert(node_id.to_owned())
+    {
+        return None;
+    }
+    Some(format!(
+        "[barca] warning: sensor {node_id} returned (True, value): this always counts as changed; \
+         return the value alone to compare it, or (True, None) for an explicit change without data"
+    ))
 }
 
 pub(super) struct DispatchPhase<'a> {
@@ -400,6 +434,9 @@ pub(super) async fn dispatch_phase(
                             node_id,
                         )),
                 );
+            }
+            if let Some(warning) = sensor_warning(node_id, artifact) {
+                note(pb, &warning);
             }
             // A sink that failed failed the step (the worker reports it as the step's error).
             // A dataset sink's size warning: a partition column with too many values.

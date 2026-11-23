@@ -26,7 +26,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use barca_python::load::build_dag;
+use barca_python::load::build_dag_until;
 use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
@@ -57,9 +57,9 @@ use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
 use prepare::*;
+pub use progress::cached_step_line;
 use progress::{
-    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, reconcile_total,
+    RunOutcome, batch_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total,
 };
 use select::*;
 pub(crate) use workers::upload_pending;
@@ -1047,6 +1047,30 @@ async fn collect_failures(
         let grace = std::time::Duration::from_millis(250);
         let _ = tokio::time::timeout(grace, session.started.cancel.cancelled()).await;
     }
+    let terminal_failures: std::collections::HashMap<_, _> =
+        coord.failed_items().into_iter().collect();
+    let remaining = barca_model::run_explain::WORKER_FAILURE_LIMIT
+        .saturating_sub(session.state.results.worker_failures.len());
+    for (id, first_error) in coord.worker_failures().iter().take(remaining) {
+        let retry_error = terminal_failures
+            .get(id)
+            .map(|error| barca_model::run_explain::bounded_worker_error(error));
+        session
+            .state
+            .results
+            .worker_failures
+            .push(barca_model::run_explain::WorkerFailure {
+                node_id: coord.item(*id).step_id.display(),
+                first_error: first_error.clone(),
+                retry_error,
+                recovered: coord.outputs().contains_key(id),
+            });
+    }
+    session
+        .state
+        .results
+        .worker_failures
+        .sort_by(|a, b| a.node_id.cmp(&b.node_id));
     let cancelled = session.started.cancel.is_cancelled();
     let mut first_non_group_failure: Option<(String, String)> = None;
     let mut first_failure_phase = None;
@@ -1231,12 +1255,13 @@ struct BatchKeys {
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
 /// raises, `strict=True` with a key in no group) is returned with why, to be failed.
-fn plan_calls(
+async fn plan_calls(
     dag: &Dag,
     over: &barca_engine::batch::BatchOverride,
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
+    cancel: &CancellationToken,
 ) -> PlannedCalls {
     let mut keys_of: Vec<BatchKeys> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1283,12 +1308,15 @@ fn plan_calls(
         };
         let labels = match &grouping {
             barca_engine::batch::Grouping::By { source_text, .. } => {
-                match barca_engine::batch::evaluate_labels(
+                match barca_engine::batch::evaluate_labels_until(
                     python,
                     &node.invoke.python().source_file,
                     source_text,
                     &keys,
-                ) {
+                    barca_model::process::Until::cancelled(cancel),
+                )
+                .await
+                {
                     Ok(labels) => Some(labels),
                     Err(e) => {
                         errors.push((base.clone(), format!("could not group the keys: {e}")));
@@ -1371,7 +1399,13 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             &phase,
             session.request.python,
             &mut session.state.next_call,
-        );
+            &session.started.cancel,
+        )
+        .await;
+        if session.started.cancel.is_cancelled() {
+            session.state.phase_error = Some("run cancelled".into());
+            break;
+        }
         if let Some((base, message)) = ungrouped.first() {
             session.state.usage_error = Some(format!("{base}: {message}"));
             for (base, message) in ungrouped {

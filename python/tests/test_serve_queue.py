@@ -7,6 +7,7 @@ it again on the same port and project, as `systemctl restart` or `docker restart
 
 import json
 import signal
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -352,7 +353,7 @@ def test_cli_cancel_acknowledges_a_queued_run(project, serve):
     run_id = server.submit("one")["run_id"]
     result = barca(project, "cancel", run_id, "--server", server.url, "--json")
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout) == {"run_id": run_id, "status": "cancelling"}
+    assert json.loads(result.stdout) == {"run_id": run_id, "status": "cancelled"}
     assert server.finished(run_id)["status"] == "cancelled"
     again = barca(project, "cancel", run_id, "--server", server.url, "--json")
     assert again.returncode != 0
@@ -534,3 +535,174 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     assert nodes["pipeline.py:b"]["state"] == "cached", nodes
     assert json.loads((project / nodes["pipeline.py:b"]["artifact"]).read_text()) == 200
     assert started(project, "b") == 2, "the stopped attempt and the resumed one"
+
+
+def test_requeued_attempts_remain_readable_and_local_follower_waits(project, serve):
+    """Two drains keep one request, three executions, and one uninterrupted local follower."""
+    pipeline = PIPELINE.replace(
+        '    hold("long")', '    print("attempt started", flush=True)\n    hold("long")'
+    )
+    (project / "pipeline.py").write_text(pipeline)
+    server = serve("--no-schedule", "--drain-timeout", "0")
+    run_id = start_long(server, project)
+    accepted = server.request("GET", "/queue")[1]["running"][0]["queued_at"]
+    follower = client(project, "logs", run_id, "--follow", "--local")
+    wait_until(lambda: "attempt started" in client_output(project, follower)[0], "first log")
+    for number in (1, 2):
+        assert server.request("POST", "/queue/pause")[0] == 200
+        assert server.stop() == 0, server.stderr
+        wait_until(
+            lambda: "requeued; waiting for the server" in client_output(project, follower)[1],
+            "local follower to wait for restart",
+        )
+        assert follower.poll() is None, client_output(project, follower)
+        logs = barca(project, "logs", run_id)
+        assert logs.returncode == 0, logs.stderr
+        assert logs.stdout.count("attempt started") == number
+        assert f"attempt {number} stopped: server restart (requeued)" in logs.stdout
+        detail = barca(project, "history", run_id, "--json")
+        assert detail.returncode == 0, detail.stderr
+        attempts = json.loads(detail.stdout)["run"]["previous_attempts"]
+        assert len(attempts) == number
+        # Terminal diagnostic evidence belongs to the archived execution, never the
+        # synthetic pending view of the same logical request.
+        failures = [
+            {
+                "node_id": "pipeline.py:long",
+                "first_error": "worker failed before drain",
+                "retry_error": None,
+                "recovered": True,
+            }
+        ]
+        with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+            db.execute(
+                "UPDATE runs SET worker_failures = ? WHERE run_id = ?",
+                (json.dumps(failures), attempts[-1]["run_id"]),
+            )
+        server = serve("--no-schedule", "--drain-timeout", "0")
+        queued = server.request("GET", "/queue")[1]["queued"][0]
+        assert queued["queued_at"] == accepted
+        pending = server.request("GET", f"/runs/{run_id}")[1]
+        assert pending["status"] == "pending"
+        assert pending["steps"] == []
+        assert pending["explanation"].get("worker_failures", []) == []
+        assert len(pending["previous_attempts"]) == number
+        status, recorded = server.request("GET", f"/runs/{run_id}/logs")
+        assert status == 200, recorded
+        assert sum(line["line"] == "attempt started" for line in recorded["logs"]) == number
+        assert server.request("POST", "/queue/resume")[0] == 200
+        wait_until(lambda: started(project, "long") == number + 1, "next execution")
+        view = server.request("GET", f"/runs/{run_id}")[1]
+        assert len(view["previous_attempts"]) == number
+        archived = server.request("GET", f"/runs/{attempts[-1]['run_id']}")[1]
+        assert archived["stop_reason"] == "server restart (requeued)"
+        assert archived["explanation"]["worker_failures"] == failures
+        assert any(line["line"] == "attempt started" for line in archived["logs"])
+        listing = server.request("GET", "/runs")[1]
+        assert listing["total"] == 1, listing
+    (project / "release-long").touch()
+    assert server.finished(run_id)["status"] == "success"
+    assert follower.wait(timeout=RUN) == 0, client_output(project, follower)
+    out, err = client_output(project, follower)
+    assert out.count("attempt started") == 3, out
+    assert "attempt 1 stopped" in out and "attempt 2 stopped" in out
+    assert "interrupted" not in err, err
+
+
+@pytest.mark.parametrize("drain", [False, True])
+def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drain):
+    import sqlite3
+
+    (project / "pipeline.py").write_text(
+        PIPELINE.replace(
+            '    hold("long")', '    print("before kill", flush=True)\n    hold("long")'
+        )
+    )
+    server = serve("--no-schedule", "--drain-timeout", "60")
+    run_id = start_long(server, project)
+    if drain:
+        server.send(signal.SIGTERM)
+        wait_until(lambda: draining(server), "server to drain")
+    server.stop(signal.SIGKILL)
+    # Server is stopped: emulate a moved volume whose recorded owner cannot be checked.
+    with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+        db.execute("UPDATE runs SET owner = NULL, pid = NULL, host = 'different-host'")
+    restarted = serve("--no-schedule", "--drain-timeout", "60")
+    if drain:
+        wait_until(lambda: started(project, "long") == 2, "killed drain to requeue once")
+        view = restarted.request("GET", f"/runs/{run_id}")[1]
+        attempt = view["previous_attempts"][0]
+        archived = restarted.request("GET", f"/runs/{attempt['run_id']}")[1]
+        assert archived["status"] == "interrupted"
+        assert any(line["line"] == "before kill" for line in archived["logs"])
+        # The existing one-killed-drain retry rule remains bounded.
+        restarted.send(signal.SIGTERM)
+        wait_until(lambda: draining(restarted), "second drain")
+        restarted.stop(signal.SIGKILL)
+        with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+            db.execute("UPDATE runs SET owner = NULL, pid = NULL, host = 'different-host'")
+        restarted = serve("--no-schedule")
+    view = restarted.request("GET", f"/runs/{run_id}")[1]
+    assert view["status"] == "interrupted", view
+    assert view["finished_at"] is not None
+    assert any(line["line"] == "before kill" for line in view["logs"])
+    assert restarted.request("GET", "/queue")[1]["running"] == []
+
+
+@pytest.mark.parametrize("refresh_all", [False, True])
+def test_requeued_failed_key_records_success_under_the_same_hash(project, serve, refresh_all):
+    """#929: failure evidence from a stopped attempt must not suppress its retry's success."""
+    from .served import snapshot
+
+    (project / "pipeline.py").write_text("""
+import time
+from pathlib import Path
+from barca import asset, partitions
+
+@asset(partitions={"key": partitions(["retry", "held"])})
+def item(key: str) -> int:
+    with open(f"{key}.starts", "a") as f:
+        f.write("start\\n")
+    if key == "retry" and not Path("allow-success").exists():
+        raise ValueError("transient first-attempt failure")
+    if key == "held":
+        while not Path("release-held").exists():
+            time.sleep(0.02)
+    return 42
+""")
+    server = serve("--no-schedule", "--drain-timeout", "1")
+    run_id = server.post(
+        "/runs", {"command": "get", "targets": ["item"], "refresh_all": refresh_all}
+    )["run_id"]
+    wait_until(lambda: started(project, "retry") and started(project, "held"), "both keys to start")
+    assert server.stop() == 0, server.stderr
+    assert "stopped and put back in the queue" in server.stderr
+    with snapshot(project) as db:
+        failed = db.execute(
+            "select node_id, run_hash from materializations "
+            "where run_id in (select run_id from runs where parent_run_id=?) "
+            "and status='failed'",
+            (run_id,),
+        ).fetchall()
+    assert len(failed) == 1, failed
+    node_id, run_hash = failed[0]
+    (project / "allow-success").touch()
+    (project / "release-held").touch()
+    restarted = serve("--no-schedule")
+    run = restarted.finished(run_id)
+    assert run["status"] == "success", run
+    assert len(run["previous_attempts"]) == 1, run
+    attempt_id = run["previous_attempts"][0]["run_id"]
+    archived = restarted.request("GET", f"/runs/{attempt_id}")[1]
+    assert sum(step["status"] == "failed" for step in archived["steps"]) == 1, archived
+    with snapshot(project) as db:
+        successes = db.execute(
+            "select artifact_path from materializations where run_id=? and node_id=? "
+            "and run_hash=? and status='success'",
+            (run_id, node_id, run_hash),
+        ).fetchall()
+    assert len(successes) == 1, run
+    assert started(project, "retry") == 2
+    again = restarted.finished(restarted.submit("item", "get")["run_id"])
+    assert again["status"] == "success", again
+    assert started(project, "retry") == 2, "the successful retry must be cached"

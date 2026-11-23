@@ -10,13 +10,106 @@ use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 pub async fn delete_run(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])
-        .await
+    conn.execute(
+        "DELETE FROM runs WHERE run_id = ?1 OR parent_run_id = ?1",
+        [run_id],
+    )
+    .await
 }
 
 pub async fn delete_logs(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM logs WHERE run_id = ?1", [run_id])
+    conn.execute("DELETE FROM logs WHERE run_id = ?1 OR run_id IN (SELECT run_id FROM runs WHERE parent_run_id = ?1)", [run_id])
         .await
+}
+
+fn attempt_error(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
+    move |e| BarcaError::Db(format!("run attempt: {what}: {e}"))
+}
+
+/// Keep a stopped execution under an inspectable id. Updating the existing row preserves
+/// every diagnostic column (including columns introduced by later additive migrations).
+pub async fn archive_attempt(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    let mut rows = conn
+        .query("SELECT 1 FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(attempt_error("reading stopped execution"))?;
+    if rows
+        .next()
+        .await
+        .map_err(attempt_error("reading stopped execution"))?
+        .is_none()
+    {
+        return Ok(()); // A repeated recovery, or an execution that never recorded itself.
+    }
+    drop(rows);
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(run_attempt), 0) + 1 FROM runs WHERE parent_run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(attempt_error("numbering attempt"))?;
+    let attempt: i64 = rows
+        .next()
+        .await
+        .map_err(attempt_error("numbering attempt"))?
+        .unwrap()
+        .get(0)
+        .unwrap();
+    drop(rows);
+    let archived = format!("{run_id}-attempt-{attempt}");
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET run_id = ?1, parent_run_id = ?2, run_attempt = ?3, stop_reason = 'server restart (requeued)', status = 'interrupted', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?2",
+        libsql::params![archived.clone(), run_id, attempt]).await.map_err(attempt_error("archiving stopped execution"))?;
+    for table in ["logs", "materializations"] {
+        conn.execute(
+            &format!("UPDATE {table} SET run_id = ?1 WHERE run_id = ?2"),
+            [archived.as_str(), run_id],
+        )
+        .await
+        .map_err(attempt_error("archiving attempt evidence"))?;
+    }
+    Ok(())
+}
+
+async fn preserve_spool(conn: &Connection, db_path: &str, run_id: &str) -> Result<(), BarcaError> {
+    // A killed coordinator has only a spool. Commit its complete lines before the next
+    // execution can truncate that spool. Already-persisted logs are authoritative.
+    let mut rows = conn
+        .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
+        .await
+        .map_err(attempt_error("reading attempt logs"))?;
+    let recorded = rows
+        .next()
+        .await
+        .map_err(attempt_error("reading attempt logs"))?
+        .is_some();
+    drop(rows);
+    if !recorded {
+        let (lines, _) =
+            crate::run_logs::read_spool(&crate::run_logs::spool_path(db_path, run_id), 0)?;
+        for (seq, line) in lines.into_iter().enumerate() {
+            conn.execute("INSERT INTO logs (run_id, seq, node_id, line, stream, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                libsql::params![run_id, seq as i64, line.node_id, line.line, line.stream.as_str(), line.ts]).await.map_err(attempt_error("archiving spool"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Finish a queue-owned predecessor, independently of host/PID liveness.
+/// The caller owns the transaction that also removes its queue entry.
+pub async fn interrupt_predecessor(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status = 'running'", [run_id]).await.map_err(attempt_error("interrupting predecessor"))?;
+    Ok(())
 }
 
 /// Clear `outcome_json` of up to `batch` of the oldest runs that have one, except the last
@@ -29,8 +122,8 @@ pub(crate) async fn clear_old_outcomes(
     conn.execute(
         &format!(
             "UPDATE runs SET outcome_json = NULL WHERE id IN (SELECT id FROM runs \
-             WHERE outcome_json IS NOT NULL AND id < (SELECT id FROM runs ORDER BY \
-             id DESC LIMIT 1 OFFSET {}) ORDER BY id LIMIT {batch})",
+             WHERE outcome_json IS NOT NULL AND COALESCE((SELECT p.id FROM runs p WHERE p.run_id = runs.parent_run_id), id) < (SELECT id FROM runs WHERE parent_run_id IS NULL ORDER BY \
+             id DESC LIMIT 1 OFFSET {}) AND COALESCE(parent_run_id, run_id) NOT IN (SELECT run_id FROM run_queue) ORDER BY id LIMIT {batch})",
             kept - 1
         ),
         (),
@@ -58,6 +151,15 @@ pub(crate) fn decode_files(raw: &str) -> Vec<String> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
+    /// Original request id for a stopped execution retained after requeue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<RunAttempt>,
     pub command: String,
     /// The `.py` files the run was given.
     pub files: Vec<String>,
@@ -119,6 +221,40 @@ pub struct RunRecord {
     /// and for a run that executed nothing. Experimental.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_reasons: Option<barca_model::run_explain::PlanReasons>,
+}
+
+/// A stopped execution of the same accepted request. Its id reads its own logs and steps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunAttempt {
+    pub run_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempt: i64,
+    pub stop_reason: String,
+}
+
+/// Stopped executions, oldest first. Legacy databases have none.
+pub async fn previous_attempts(db_path: &str, run_id: &str) -> Result<Vec<RunAttempt>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "parent_run_id").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn.query("SELECT run_id, run_attempt, stop_reason FROM runs WHERE parent_run_id = ?1 ORDER BY run_attempt", [run_id])
+        .await.map_err(|e| BarcaError::Db(e.to_string()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?
+    {
+        out.push(RunAttempt {
+            run_id: row.get(0).unwrap_or_default(),
+            attempt: row.get(1).unwrap_or_default(),
+            stop_reason: row.get(2).unwrap_or_default(),
+        });
+    }
+    Ok(out)
 }
 
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
@@ -361,6 +497,37 @@ pub async fn record_unstarted_run(
     Ok(())
 }
 
+/// Record an ordinary get completed entirely by cache I/O, before acknowledging its id.
+/// It has no execution ledger or attempts, but retains the planned/cache counts and job.
+pub async fn record_cached_run(
+    db_path: &str,
+    run: NewRun<'_>,
+    elapsed_seconds: f64,
+    outcome_json: &str,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, 0, ?6, datetime('now'), ?7, ?8, NULLIF(?9, ''), NULLIF(?10, ''), ?11, NULLIF(?12, ''), NULLIF(?13, ''))",
+        [
+            run.run_id.to_string(),
+            run.command.to_string(),
+            run.files.to_string(),
+            run.target.unwrap_or("").to_string(),
+            run.job.unwrap_or("all").to_string(),
+            run.steps_total.unwrap_or(0).to_string(),
+            elapsed_seconds.to_string(),
+            run.trigger.triggered_by.as_str().to_string(),
+            run.trigger.scheduled_at.clone().unwrap_or_default(),
+            run.trigger.schedule_id.clone().unwrap_or_default(),
+            outcome_json.to_string(),
+            run.trigger.principal.clone().unwrap_or_default(),
+            run.trigger.reason.clone().unwrap_or_default(),
+        ],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to record cached run: {e}")))?;
+    Ok(())
+}
+
 /// Store a finished run's outcome (`barca serve`): `GET /runs/{run_id}` answers from it after
 /// a restart. `status` corrects the row when the run ended before it recorded one.
 pub async fn set_run_outcome(
@@ -596,10 +763,14 @@ pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, Bar
 
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
 pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
-    Ok(read_runs(db_path, Some(run_id), 1, &RunFilter::default())
+    let mut record = read_runs(db_path, Some(run_id), 1, &RunFilter::default())
         .await?
         .into_iter()
-        .next())
+        .next();
+    if let Some(record) = &mut record {
+        record.previous_attempts = previous_attempts(db_path, run_id).await?;
+    }
+    Ok(record)
 }
 
 /// A run's first failed step and its error, read from `idx_mat_failed` ([`read_runs`]).
@@ -688,6 +859,11 @@ async fn read_runs(
     } else {
         "NULL, NULL, NULL, NULL"
     };
+    let attempt_metadata = if has_column(&conn, "runs", "parent_run_id").await? {
+        "parent_run_id, run_attempt, stop_reason"
+    } else {
+        "NULL, NULL, NULL"
+    };
     let retries = if run_id.is_none() || !(names.contains("run_id") && names.contains("attempts")) {
         "NULL"
     } else if has_index(&conn, "idx_mat_attempts").await? {
@@ -722,7 +898,11 @@ async fn read_runs(
     };
     // The runs the filter keeps: their newest ids, from an index ([`RunFilter`]).
     let shape = super::run_filter::RunsShape::of(&conn).await?;
-    let only = match filter.sql(&shape, &interrupted) {
+    let only = match if run_id.is_some() {
+        None
+    } else {
+        filter.sql(&shape, &interrupted)
+    } {
         Some(w) => format!(
             " AND id IN (SELECT id FROM runs{} WHERE {} ORDER BY id DESC LIMIT ?2)",
             w.index, w.condition
@@ -731,7 +911,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {skipped}, {skip_reason} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {skipped}, {skip_reason}, {attempt_metadata} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -790,6 +970,10 @@ async fn read_runs(
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok()),
             retries: row.get::<i64>(23).ok(),
+            parent_run_id: row.get::<String>(26).ok(),
+            run_attempt: row.get::<i64>(27).ok(),
+            stop_reason: row.get::<String>(28).ok(),
+            previous_attempts: Vec::new(),
         });
     }
     Ok(records)
@@ -1028,8 +1212,13 @@ pub async fn run_activity(
 pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
+    let query = if has_column(&conn, "runs", "parent_run_id").await? {
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id IS NULL"
+    } else {
+        "SELECT COUNT(*) FROM runs"
+    };
     let mut rows = conn
-        .query("SELECT COUNT(*) FROM runs", ())
+        .query(query, ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to count runs: {e}")))?;
     let n = rows
@@ -1157,6 +1346,50 @@ pub(crate) async fn insert_posted_run(
         ],
     )
     .await
+}
+
+/// Original worker-fatal causes, retained independently of the final materialization.
+pub async fn set_worker_failures(
+    conn: &libsql::Connection,
+    run_id: &str,
+    failures: &[barca_model::run_explain::WorkerFailure],
+) -> Result<(), BarcaError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE runs SET worker_failures = ?2 WHERE run_id = ?1",
+        [run_id, &serde_json::to_string(failures).unwrap()],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record worker failures: {e}")))?;
+    Ok(())
+}
+
+/// Empty for older databases and runs without a recorded worker-fatal error.
+pub async fn get_worker_failures(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Vec<barca_model::run_explain::WorkerFailure>, BarcaError> {
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "worker_failures").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn
+        .query(
+            "SELECT worker_failures FROM runs WHERE run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    Ok(row
+        .and_then(|r| r.get::<String>(0).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
 }
 
 #[cfg(test)]

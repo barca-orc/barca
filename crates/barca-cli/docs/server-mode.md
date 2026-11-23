@@ -65,7 +65,7 @@ What that means for `get` and `run`:
   `--watch`), not an edit it has not loaded. A command that names no file uses all of them; a
   file the server did not deploy is a usage error listing the deployed files. To run an edit
   the server has not loaded, pass `--local`.
-- The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
+- Work requiring execution waits for a run slot (`barca queue`), and Ctrl-C cancels it on the
   server. Like every requested run it starts ahead of the scheduled runs that wait; `--queue
   last` puts it behind them instead (`barca docs serve-ops`, "Queue a run last").
 - `-o url` is not available on a server yet; pass `--local` for it.
@@ -504,6 +504,27 @@ Redirects must stay within the configured origin and proxy path. Known credentia
 in HTTP errors are redacted. The reserved `BARCA_SERVER_TOKEN` variable is removed from
 Python worker and transfer-helper environments.
 
+### Loopback Host protection
+
+A server bound to a loopback IP accepts HTTP Host names `localhost`, loopback IPs
+(`127.0.0.1`, `[::1]`, with an optional port), and explicitly listed proxy names.
+A foreign Host is refused with HTTP 403 before any route, including the UI and health.
+This prevents a foreign website from using DNS rebinding to reach an unauthenticated
+local server. The check applies with token authentication on or off.
+
+For a reverse proxy that preserves its public Host header, list that exact DNS name:
+
+```toml
+[server]
+allowed_hosts = ["barca.example.com"]
+```
+
+Names are case-insensitive; omit the scheme, port and path. Wildcards are not accepted.
+Alternatively, configure the proxy to send `Host: localhost` to its loopback upstream.
+The owner-only project socket is exempt. A non-loopback bind accepts any Host and keeps
+its startup warning; restrict network access or enable tokens for that deployment.
+HTTP/2 authority is checked too; a header-less HTTP/1.0 request has no Host to check.
+
 ### Opt-in project tokens
 
 Set `[server] auth = "token"` in `barca.toml`, `BARCA_SERVER_AUTH=token`, or
@@ -728,5 +749,26 @@ is late (`barca docs scheduling`, "A schedule that missed its slot"). `late_sinc
 UI shows a schedule as `late by 12m` when `schedule.late` is true and compares no times itself.
 A `--read-only` server reads the same runs and run queue from the shared metadata, so its
 answer is the scheduling server's, with slots in its own `--timezone`.
+
+
+### Cached reads and execution capacity
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Ordinary reads retain the run ID, event, history and output contracts; a cache hit can already
+be complete when its accepted run handle is returned.
 
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.

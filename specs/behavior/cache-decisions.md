@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 7. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 8. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -189,6 +189,10 @@ run hash (`cutoff` does not count in its definition):
   and everything below it, `unknown` (`cutoff_pending`); it never predicts a hit or a miss for it.
 - A `--refresh` cascade does not pass a cutoff asset, and a consumer cached through one carries
   no `--no-cascade` warning: its hash already holds the bytes the refresh wrote.
+- Without cascade, a cached partitioned consumer carries the refreshed upstream's warning
+  just as an unpartitioned consumer does. Report once per node, not per key or worker chunk,
+  and propagate the warning through cached consumers to downstream fan-ins. A dry run
+  preserves the warning in its node report; a cutoff boundary still stops propagation.
 - A dict `partitions_from` source with `cutoff` contributes each key's value hash with the
   constant `cutoff` in place of its run hash.
 - In the dependency cone, a cutoff asset reached by name (a consumer's parameter named after
@@ -208,7 +212,9 @@ cutoff bytes preserve downstream cache hits. Complete fan-ins read every domain 
 validation/recovery computes missing or stale siblings or blocks publication on failure.
 Batching operates on the due keys. `--partition` retains its existing narrowing semantics.
 Conformance: `python/tests/test_keyed_refresh.py` (CLI and server, warm sets, cutoffs, batching,
-complete publication, invalid keys and missing siblings).
+complete publication, invalid keys and missing siblings), and
+`python/tests/test_refresh_clarity.py` (partitioned no-cascade warnings, downstream fan-ins,
+dry-run parity and warning deduplication across worker chunks).
 
 ### Recording progress
 
@@ -338,3 +344,20 @@ The concurrent-version ordering gap remains documented in [freshness](freshness.
 Ordered current selection, shared computation ownership and bounded full-domain retained
 state are approved requirements in [ownership](current-state-and-execution.md), not proved
 by the current cache engine or its warm incremental benchmarks.
+
+### Refresh acceptance boundary (#928)
+
+A refresh-all or selective refresh retains its original acceptance time across queue attempts.
+For each global asset or partition key selected by refresh/cascade, a success for its current
+run hash recorded at or after acceptance satisfies refresh. A result another run produced after
+acceptance qualifies. Failed rows, old hashes and earlier results do not. Cascade roots remain
+remembered even when their refresh is already satisfied; cutoff propagation stays unchanged.
+A fully cached step satisfied by this rule reports `refreshed_by_this_run`.
+
+Success timestamps preserve fractional seconds; legacy whole-second timestamps are accepted
+without rounding acceptance down. Tasks outside ticks and sensors can repeat after restart;
+this is not an exactly-once promise for side effects.
+
+Conformance: `python/tests/test_refresh_restart.py` drives real drain/restart requests and
+new CLI refreshes; `db::cache_reader::observation_tests::refresh_acceptance_is_precise_and_requires_matching_success`
+checks same-second before/equal/after, legacy timestamps, hash mismatch and failure controls.
