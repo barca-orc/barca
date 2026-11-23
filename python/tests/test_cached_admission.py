@@ -52,11 +52,11 @@ def test_cached_get_bypasses_saturated_execution(
 
         def completed():
             _, view = server.request("GET", f"/runs/{read['run_id']}")
-            return view if view["status"] == "success" else None
+            return view if view["run"]["status"] == "success" else None
 
         result = server.wait("cached read while pipeline remains blocked", completed, timeout=3)
-        assert result["outcome"]["final_output"] == 42
-        assert result["outcome"]["steps_executed"] == 0
+        assert result["run"]["outcome"]["final_output"] == 42
+        assert result["run"]["outcome"]["steps_executed"] == 0
         assert not (project / "release").exists()
     finally:
         (project / "release").touch()
@@ -96,7 +96,7 @@ def test_miss_stale_and_refresh_still_wait(project, serve, control):
         assert status == 202 and request["status"] == "pending", request
         time.sleep(0.2)
         _, view = server.request("GET", f"/runs/{request['run_id']}")
-        assert view["status"] == "pending"
+        assert view["run"]["status"] == "pending"
     finally:
         (project / "release").touch()
 
@@ -174,8 +174,8 @@ _cached_value.deserialize = held
             status, read = future.result(timeout=10)
             assert status == 202, read
             _, result = server.request("GET", f"/runs/{read['run_id']}")
-            assert result["outcome"]["final_output"] == 42
-            assert result["outcome"]["steps_executed"] == 0
+            assert result["run"]["outcome"]["final_output"] == 42
+            assert result["run"]["outcome"]["steps_executed"] == 0
         assert fifth.result(timeout=10)[0] == 200
 
 
@@ -211,18 +211,18 @@ def other():
         )
         assert status == 202, read
         _, result = server.request("GET", f"/runs/{read['run_id']}")
-        assert result["outcome"]["targets"]["ready"]["final_output"] == 42
-        assert result["outcome"]["targets"]["other"]["final_output"] == 7
+        assert result["run"]["outcome"]["targets"]["ready"]["final_output"] == 42
+        assert result["run"]["outcome"]["targets"]["other"]["final_output"] == 7
         status, read = server.request(
             "POST", "/runs", {"command": "get", "targets": ["keyed", "ready"], "values": True}
         )
         assert status == 202, read
         _, result = server.request("GET", f"/runs/{read['run_id']}")
-        assert result["outcome"]["targets"]["keyed"]["final_output"] == {
+        assert result["run"]["outcome"]["targets"]["keyed"]["final_output"] == {
             "region=a": "a",
             "region=b": "b",
         }
-        assert result["outcome"]["targets"]["ready"]["final_output"] == 42
+        assert result["run"]["outcome"]["targets"]["ready"]["final_output"] == 42
     finally:
         (project / "release").touch()
 
@@ -298,8 +298,8 @@ def keyed(key):
             )
             assert status == 202, read
             _, result = server.request("GET", f"/runs/{read['run_id']}")
-            assert result["status"] == "success", result
-            output = result["outcome"]["final_output"]
+            assert result["run"]["status"] == "success", result
+            output = result["run"]["outcome"]["final_output"]
             if not targets:
                 assert output == expected_whole
             elif partition is None:
@@ -307,7 +307,7 @@ def keyed(key):
                 assert output["_barca_partitions"]["computed"] == 0
             else:
                 assert output == {f"key={key}": str(key) for key in domain}
-            assert result["outcome"]["steps_executed"] == 0
+            assert result["run"]["outcome"]["steps_executed"] == 0
     finally:
         (project / "release").touch()
 
@@ -327,8 +327,8 @@ def test_historical_matching_result_bypasses_admission(project, serve):
         )
         assert status == 202, read
         _, result = server.request("GET", f"/runs/{read['run_id']}")
-        assert result["status"] == "success", result
-        assert result["outcome"]["final_output"] == 42
+        assert result["run"]["status"] == "success", result
+        assert result["run"]["outcome"]["final_output"] == 42
         status, cached = server.request(
             "POST", "/cached", {"targets": ["ready"], "tier": "local", "values": True}
         )

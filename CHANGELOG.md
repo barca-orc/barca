@@ -36,6 +36,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Older metadata databases migrate newly added tables before extending their columns, so databases predating schedule tick history remain readable.
+
 - Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
 
 - Cache-aware retries after a failed refresh no longer revive pre-refresh downstream results. Invalidation survives restart and repeated failure, respects partition/cutoff/pin scope, and is acknowledged before computation against a remote ledger; remote refresh requires a server with this support (#939).

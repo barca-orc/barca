@@ -77,7 +77,7 @@ What still differs between the prediction and a run, by design:
 | --- | --- | --- | --- |
 | The held node itself | `cached`, detail `Manual and stale: ...` or reason `pinned` | the same; it is never a target | its own state (`stale` when it moved on) |
 | Nodes above a held node | not planned | not planned | decided |
-| A node paused with `barca pause` | recomputed when it is read; refused as a target without `--allow-paused` | read as it is; skipped as a target | as a request: what is below a stale paused node is `stale`, and the tick's outcome is `last_check` ([health](health.md), "Last check") |
+| A node paused with `barca pause` | local requests recompute inputs; server requests hold them even under refresh and refuse paused targets without `--allow-paused` | read as it is; skipped as a target | as a local request: what is below a stale paused node is `stale`, and the tick's outcome is `last_check` ([health](health.md), "Last check") |
 | A task other than the scheduled one | runs | fires only when it is out of date | `always_runs` |
 | A sensor | polled | polled | `always_runs`; what reads it is predicted from its last recorded output |
 | A partitioned `Manual` node | computed | computed | computed (it is not held) |
