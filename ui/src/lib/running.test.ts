@@ -23,6 +23,7 @@ const NOW = Date.parse(STARTED) + 75_000
 
 function run(overrides: Partial<NodeRunning> = {}): NodeRunning {
   return {
+    control: { cancellable: true, owner: 'this server', reason: null },
     run_id: 'r1',
     triggered_by: 'schedule',
     started_at: STARTED,
@@ -87,6 +88,7 @@ describe('running state from /state', () => {
 
   it('gives the assets list a Running badge with the elapsed time and the run link', () => {
     expect(runningBadge(run(), NOW)).toEqual({
+      queued: false,
       tone: 'running',
       glyph: 'running',
       label: 'running · 1m 15s',

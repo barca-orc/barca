@@ -516,7 +516,7 @@ function RunsError({ error, dispatch }: { error: string; dispatch: Dispatch<Runs
 
 function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; selected: string | null; now: number; dispatch: Dispatch<RunsMsg> }) {
   return <table className="barca-table barca-run-table"><thead><tr>
-    <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th><th>Failure</th>
+    <th>Run</th><th>Target</th><th>Trigger</th><th>Status</th><th>Started</th><th className="num">Duration</th><th className="num">Steps</th><th>Failure</th><th>Actions</th>
   </tr></thead><tbody>{runs.map(run => {
     // The row's words are the server's (`line`, as `barca history --json` prints them).
     const failure = run.line.failure
@@ -532,6 +532,7 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
     <td className="num barca-run-steps-cell" title={run.line.steps_detail}>{run.line.steps}</td>
     <td className="barca-run-failure">{failure && <ErrorLine error={run.line.failure_detail ?? failure} text={failure} inline />}</td>
+    <td>{runIsLive(run.status) && <CancelRun id={run.id} queued={runIsWaiting(run.status)} control={run.control} />}</td>
   </tr>
   })}</tbody></table>
 }

@@ -198,3 +198,8 @@ export function runTime(value: string | null, zone: TimeZone): string {
 export function showRunControl(status: string): boolean {
   return runIsLive(status) || parseRunStatus(status) === 'interrupted'
 }
+
+/** A node badge says queued only while its run waits for a slot. */
+export function runningIsQueued(step: string): boolean {
+  return step === 'queued'
+}

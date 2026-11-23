@@ -552,7 +552,7 @@ impl<'de> Deserialize<'de> for OrderedMap {
 
 /// Whether the answering server owns cancellation of this run. Process identity is
 /// descriptive only: the server never signals a PID read from history.
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunControl {
     pub cancellable: bool,
@@ -563,6 +563,17 @@ pub struct RunControl {
 }
 
 impl RunControl {
+    /// A live run owned elsewhere: detailed identity is available on its run page.
+    pub fn elsewhere() -> Self {
+        Self {
+            cancellable: false,
+            owner: "another process".into(),
+            reason: Some(
+                "This server does not own this run. Open run details for its owner.".into(),
+            ),
+        }
+    }
+
     /// Authority while a server holds a run, and its terminal refusal afterwards.
     pub fn server(status: &str) -> Self {
         let cancellable = matches!(status, "pending" | "running");

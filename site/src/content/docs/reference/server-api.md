@@ -254,7 +254,9 @@ Cancelling a run that already finished returns
 `409`, and an unknown id `404`. Run detail's `control` contains `cancellable`, a human-readable
 `owner`, and a nullable refusal `reason`. CLI-owned live runs return 409 explaining where to
 stop them; interrupted runs point to `barca history --reconcile`. A recorded process ID never
-grants the server cancellation authority. Write permissions are checked independently.
+grants the server cancellation authority. Write permissions are checked independently. The same
+`control` is included on run-list rows, queue entries, and node `running` objects, so clients can
+render Cancel without fetching each run's full detail.
 
 The run records why it was cancelled as `cancellation` (experimental): `by` is `request` (this
 route: the web UI's Cancel, or the first Ctrl-C of a `--server` client) or `shutdown`,

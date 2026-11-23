@@ -648,6 +648,7 @@ pub struct RunLogs {
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunSummary {
+    pub control: RunControl,
     pub id: String,
     pub handle: Option<String>,
     pub run_id: Option<String>,
@@ -722,6 +723,13 @@ impl RunSummary {
     /// The row of a recorded run, with what the server holding it (`live`) knows of it.
     fn recorded(record: db::RunRecord, live: Option<&LiveRun>) -> Self {
         RunSummary {
+            control: match live {
+                Some(run) => RunControl::server(run.status.as_str()),
+                None if matches!(record.status.as_str(), "pending" | "running") => {
+                    RunControl::elsewhere()
+                }
+                None => RunControl::server(&record.status),
+            },
             id: record.run_id.clone(),
             handle: live.map(|r| r.handle.clone()),
             run_id: Some(record.run_id),
@@ -761,6 +769,7 @@ impl RunSummary {
     fn unrecorded(run: &LiveRun, files: &[String]) -> Self {
         let steps = run.steps;
         RunSummary {
+            control: RunControl::server(run.status.as_str()),
             id: run.handle.clone(),
             handle: Some(run.handle.clone()),
             run_id: run.db_run_id.clone(),

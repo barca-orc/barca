@@ -4,6 +4,7 @@
  * descriptors to elements and poll intervals.
  */
 
+import { runningIsQueued } from './runs'
 import type { GraphState } from './graphState'
 import { statusMeta } from './status'
 import type { Tone } from './tone'
@@ -82,6 +83,7 @@ export function runningGraphState(running: NodeRunning): GraphState {
 
 /** The Running badge of the assets list: label with elapsed time, and the run's link. */
 export interface RunningBadge {
+  queued: boolean
   tone: Tone
   glyph: Glyph
   label: string
@@ -93,6 +95,7 @@ export function runningBadge(running: NodeRunning, nowMs: number): RunningBadge 
   const state = runningGraphState(running)
   const elapsed = elapsedLabel(running.started_at, nowMs)
   return {
+    queued: runningIsQueued(running.step),
     tone: state.tone,
     glyph: state.glyph,
     label: elapsed ? `${state.label} · ${elapsed}` : state.label,

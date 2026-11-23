@@ -79,7 +79,7 @@ describe('runNotice', () => {
 
   it('a live run reports its progress', () => {
     expect(runNotice({ ...base, started, run: runByStatus.running })).toEqual({
-      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4,
+      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4, control: runByStatus.running.control,
     })
   })
 
