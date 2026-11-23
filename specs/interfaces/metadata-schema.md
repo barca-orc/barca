@@ -373,3 +373,18 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
+
+## Last writer version
+
+`metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)` is an additive format-1 table.
+`last_writer_version` records the barca package version of the last metadata write, including
+schema initialization/migration. Connection-local triggers update it with successful row
+writes, in the same transaction, including when a server keeps its connection open. Reads
+leave it untouched. Preexisting databases gain the table at the next schema initialization.
+Older releases that predate this feature cannot update the marker.
+
+Opening metadata last written by a newer semantic version prints a stderr warning naming
+both versions. This is advisory; schema compatibility still decides admission. The warning
+is deduplicated within a process. Missing or unrecognized writer versions do not block access.
+Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
+`crates/barca-db/src/db/schema/writer.rs`.

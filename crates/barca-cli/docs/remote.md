@@ -294,7 +294,8 @@ whose file is only in the store, the input's annotation decides how many bytes m
 - A parquet input annotated `duckdb.DuckDBPyRelation` or `pl.LazyFrame` is read in place:
   only the byte ranges the step's query touches are fetched, and nothing is downloaded. A query
   over one column of eight fetches about that column's share of the object; a selective filter
-  skips row groups. This applies when every step in the phase that reads the result is lazy.
+  skips row groups. This also applies to batched calls. Every reader of the result in the
+  phase must use one of these two types.
   The ranges fetched are kept in `.barca/range-cache/<run_hash>-<version>/`, so a later run on
   this machine that reads the same ranges fetches nothing, and one that reads more fetches only
   the ranges no earlier read fetched. The directory is keyed by the result's run hash and the
@@ -302,9 +303,10 @@ whose file is only in the store, the input's annotation decides how many bytes m
   object is never served from the old one's ranges. The cache size limit counts these
   directories and evicts them first, least recently used first (`barca docs cache`, "Disk
   use"); a range that is gone is fetched again.
-- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, json,
+- Every other input (no annotation, `pd.DataFrame`, `pl.DataFrame`, `pyarrow.Table`, `pyarrow.dataset.Dataset`, json,
   pickle) is downloaded once into `.barca/artifacts/` and read from there by this run and
-  later ones.
+  later ones. A Dataset remains a Dataset over those local files; it is not converted to a
+  Polars LazyFrame.
 
 For a large upstream that a step filters, projects or aggregates, annotate the input as lazy.
 DuckDB reads barca's artifacts through a `barca<protocol>://` filesystem registered on its

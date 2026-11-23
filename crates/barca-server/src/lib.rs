@@ -24,6 +24,7 @@ mod fallback;
 mod gc;
 mod guards;
 mod health_view;
+mod host_guard;
 mod inspect;
 mod ledger;
 mod pins;

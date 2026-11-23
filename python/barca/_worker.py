@@ -872,6 +872,8 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         extra: dict[str, Any] = {}
         if sensor_changed is not None:
             extra["sensor_changed"] = sensor_changed
+            if sensor_changed and result is not None:
+                extra["sensor_explicit_value"] = True
         if source_observation is not None:
             extra["source_observation"] = source_observation
         try:

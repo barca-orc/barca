@@ -10,15 +10,14 @@ OUT="$REPO/ui/src/lib/generated"
 mkdir -p "$OUT"
 export TS_RS_EXPORT_DIR="$OUT"
 
-# ts-rs emits one export test per annotated type, gated behind the `ts` feature.
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-model --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-python --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-db --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-store --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-analysis --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-run --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-service --features ts export_bindings
-cargo test --manifest-path "$REPO/Cargo.toml" -p barca-server --features ts export_bindings
+# Export tests live in the libraries. Resolve all `ts` features together: separate
+# commands rebuild the dependency graph repeatedly and compile unrelated integration
+# test binaries, exhausting the release runner's disk before generation finishes.
+cargo test --manifest-path "$REPO/Cargo.toml" --lib \
+  -p barca-model -p barca-python -p barca-db -p barca-store \
+  -p barca-analysis -p barca-run -p barca-service -p barca-server \
+  --features barca-model/ts,barca-python/ts,barca-db/ts,barca-store/ts,barca-analysis/ts,barca-run/ts,barca-service/ts,barca-server/ts \
+  export_bindings
 
 # ts-rs leaves trailing whitespace, which the repo's trailing-whitespace hook strips
 # from committed files: strip it here, so the output is what is committed and CI's

@@ -173,6 +173,7 @@ endpoint_url = "https://<account-id>.r2.cloudflarestorage.com"
 | `[remote].transfer_timeout` | 600 | Seconds one transfer attempt may run. |
 | `[remote].backup_interval` | `"1m"` | Routine metadata backups: positive whole seconds or s/m/h/d suffix, or `off`. Final backups remain. Invalid values exit 2. |
 | `[remote.storage_options.<protocol>]` | none | Options for the fsspec filesystem of that protocol. |
+| `[server].allowed_hosts` | `[]` | Additional exact DNS names accepted by a loopback HTTP listener (for a trusted reverse proxy). No scheme, port, path or wildcard. Loopback names are always accepted; foreign Host headers receive 403. See [Server Mode](/reference/server-mode/#loopback-host-protection). |
 | `[server].auth` | `"off"` | Opt-in project bearer authentication: `"off"` or `"token"`; `BARCA_SERVER_AUTH` overrides it, `serve --auth` overrides both. Local `tokens bootstrap` grants initial access; see [Server Mode](/reference/server-mode/). |
 | `[server].url` | none | The `barca serve` that is the team's ledger (`BARCA_SERVER` overrides it): `http://` or `https://`, with any proxy path prefix. `get` and `run` run here and read and post through its ledger (requires `[remote]` pointing at the server's store); `status`, `history` and `stats` answer from it; `sql` resolves its views from it; a bare `--server` runs the command there; `--local` ignores it. See [Server mode](#server-mode) and [Server Mode](/reference/server-mode/). |
 

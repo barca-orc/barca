@@ -213,6 +213,8 @@ pub struct CacheToml {
 pub struct ServerToml {
     /// Opt-in bearer authentication for this project.
     pub auth: Option<AuthMode>,
+    /// Additional DNS host names accepted by a loopback HTTP listener, for trusted proxies.
+    pub allowed_hosts: Option<Vec<String>>,
     /// The server's base URL, `http://` or `https://`, with any proxy prefix.
     pub url: Option<String>,
     /// Seconds a stopping server waits for in-flight runs before it cancels them
@@ -474,6 +476,8 @@ pub struct ResolvedConfig {
     pub server_max_runs: Option<usize>,
     /// Authentication mode; defaults to off.
     pub server_auth: AuthMode,
+    /// Additional DNS host names allowed by a loopback listener.
+    pub server_allowed_hosts: Vec<String>,
     /// `[server] capacity`: the weight budget every run of `barca serve` shares (`None`: each
     /// run has only its own). Only `serve` reads it.
     pub server_capacity: Option<(usize, &'static str)>,
@@ -823,6 +827,31 @@ pub fn resolve_with(
             ));
         }
     };
+    let server_allowed_hosts: Vec<String> = file
+        .server
+        .as_ref()
+        .and_then(|server| server.allowed_hosts.as_ref())
+        .into_iter()
+        .flatten()
+        .map(|host| host.strip_suffix('.').unwrap_or(host).to_ascii_lowercase())
+        .collect();
+    for host in &server_allowed_hosts {
+        if host.len() > 253
+            || host.split('.').any(|label| {
+                label.is_empty()
+                    || label.len() > 63
+                    || label.starts_with('-')
+                    || label.ends_with('-')
+                    || !label
+                        .bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            })
+        {
+            return Err(BarcaError::Usage(
+                "[server] allowed_hosts entries must be DNS host names without a scheme, port, path or wildcard".into(),
+            ));
+        }
+    }
     let server_max_runs = file.server.as_ref().and_then(|server| server.max_runs);
     if server_max_runs == Some(0) {
         return Err(BarcaError::Usage(
@@ -940,6 +969,7 @@ pub fn resolve_with(
                 drain_timeout_secs,
                 server_max_runs,
                 server_auth,
+                server_allowed_hosts,
                 server_capacity,
                 server_admission,
                 server_run_timeout_secs,
@@ -1053,6 +1083,7 @@ pub fn resolve_with(
         drain_timeout_secs,
         server_max_runs,
         server_auth,
+        server_allowed_hosts,
         server_capacity,
         server_admission,
         server_run_timeout_secs,
