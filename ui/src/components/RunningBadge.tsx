@@ -1,6 +1,7 @@
 import { Link } from 'react-router'
 import { runningBadge } from '@/lib/running'
 import type { NodeRunning } from '@/lib/types'
+import { CancelRun } from './RunActions'
 import { StatusBadge } from './StatusBadge'
 
 export interface RunningBadgeProps {
@@ -18,7 +19,7 @@ export interface RunningBadgeProps {
 export function RunningBadge({ running, nowMs, size = 'sm' }: RunningBadgeProps) {
   const badge = runningBadge(running, nowMs)
   return (
-    <Link
+    <span className="barca-running-controls"><Link
       to={badge.href}
       className="barca-running-badge"
       title={badge.hint}
@@ -26,6 +27,6 @@ export function RunningBadge({ running, nowMs, size = 'sm' }: RunningBadgeProps)
       onClick={(event) => event.stopPropagation()}
     >
       <StatusBadge glyph={badge.glyph} label={badge.label} size={size} live={running.step === 'running'} />
-    </Link>
+    </Link><CancelRun id={running.run_id} queued={badge.queued} control={running.control} /></span>
   )
 }

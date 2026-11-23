@@ -170,9 +170,9 @@ export const neverSucceededNode: NodeState = node('fx_rates_live', {
 export const failedTask: NodeState = row('check__invoices')
 
 export const runningByStep = {
-  waiting: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
-  queued: { run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', label: 'in a queued run', partitions: null },
-  running: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', label: 'running', partitions: null },
+  waiting: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
+  queued: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', label: 'in a queued run', partitions: null },
+  running: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', label: 'running', partitions: null },
 } satisfies Record<RunningStep, NodeRunning>
 
 export const runningPartitioned: NodeRunning = {
@@ -368,7 +368,7 @@ function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummar
   const view = runView(name)
   const { run, line } = scenario(name)
   return {
-    id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
+    control: view.control, id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
     status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
     started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
     steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
@@ -432,6 +432,7 @@ export const runDetails: Record<string, Remote<RunView>> = {
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
 const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
+  control: { cancellable: true, owner: 'this server', reason: null },
   run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
   target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',

@@ -678,6 +678,7 @@ mod tests {
     #[test]
     fn queue_columns_are_the_queue_row_keys() {
         let row = crate::served::QueueEntry {
+            control: crate::outcome::RunControl::elsewhere(),
             run_id: "run-1".into(),
             status: "pending".into(),
             position: Some(1),

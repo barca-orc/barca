@@ -5,6 +5,7 @@ import { match } from 'ts-pattern'
 import { shortName } from '@/lib/graph'
 import type { RunNotice as Notice } from '@/lib/runFeedback'
 import { statusFailed, statusMeta } from '@/lib/status'
+import { CancelRun } from './RunActions'
 import { IconButton } from './IconButton'
 import { StatusGlyph } from './StatusGlyph'
 
@@ -41,6 +42,10 @@ export function RunNotice({ notice, onDismiss }: { notice: Notice | null; onDism
       )}
       <span>·</span>
       <span>{text}</span>
+      {match(notice)
+        .with({ kind: 'queued' }, n => <CancelRun id={n.runId} queued control={n.control} />)
+        .with({ kind: 'running' }, n => <CancelRun id={n.runId} queued={false} control={n.control} />)
+        .otherwise(() => null)}
       <IconButton size="sm" label="Dismiss" onClick={onDismiss}>
         <X size={12} />
       </IconButton>

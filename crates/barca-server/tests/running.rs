@@ -170,6 +170,7 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     assert_eq!(after["run_id"], run_id.as_str(), "{after}");
     assert_eq!(running["run_id"], run_id.as_str(), "{running}");
     assert_eq!(running["triggered_by"], "api", "{running}");
+    assert_eq!(running["control"]["cancellable"], true, "{running}");
     assert!(running["partitions"].is_null(), "{running}");
     assert!(
         running["started_at"].as_str().unwrap().ends_with('Z'),

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useWriteControl } from '@/hooks/useWriteControl'
 import { api } from '@/lib/api'
@@ -61,7 +62,7 @@ export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId:
 }
 
 /** Cancel one live run, keeping the request visible until polling reports its terminal state. */
-export function CancelRun({ id, queued, control }: { id: string; queued: boolean; control: RunView['control'] }) {
+export function CancelRun({ id, queued, control }: { id: string; queued: boolean; control: RunView['control'] | undefined }) {
   const client = useQueryClient()
   const writes = useWriteControl()
   const [asking, setAsking] = useState(false)
@@ -72,20 +73,21 @@ export function CancelRun({ id, queued, control }: { id: string; queued: boolean
       void client.invalidateQueries({ queryKey: ['queue'] })
     },
   })
-  if (!control.cancellable) return <span className="barca-note">{control.reason ?? `Run owned by ${control.owner}`}</span>
-  // Hidden until the server is known to take writes: a cancel is never offered to be refused.
-  if (writes !== 'enabled') return null
-  return <>
-    <Button size="sm" disabled={cancel.isPending || cancel.isSuccess} onClick={() => setAsking(true)}>
+  if (control && !control.cancellable) return <span className="barca-note">{control.reason ?? `Run owned by ${control.owner}`}</span>
+  if (writes === 'hidden') return null
+  const checking = !control ? 'Checking run ownership…' : writes === 'disabled' ? 'Checking server write access…' : null
+  return <span className="barca-cancel-run" onClick={(event) => event.stopPropagation()}>
+    <Button size="sm" title={checking ?? undefined} disabled={checking !== null || cancel.isPending || cancel.isSuccess} onClick={() => setAsking(true)}>
       {cancel.isSuccess ? 'Cancellation requested' : cancel.isPending ? 'Cancelling…' : 'Cancel run'}
     </Button>
+    {checking && <span className="barca-note">{checking}</span>}
     {cancel.isError && <span role="alert">Could not cancel: {cancel.error.message}</span>}
-    {asking && <ConfirmDialog
+    {asking && createPortal(<ConfirmDialog
       title={`Cancel run ${id}?`}
       body={queued ? 'Remove this run from the queue so it does not start.' : 'Stop this run and its active work. Results already completed stay recorded.'}
       action="Cancel run"
       onCancel={() => setAsking(false)}
       onConfirm={() => { setAsking(false); cancel.mutate() }}
-    />}
-  </>
+    />, document.body)}
+  </span>
 }

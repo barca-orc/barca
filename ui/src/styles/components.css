@@ -486,3 +486,6 @@ a.barca-btn { text-decoration: none; }
 .barca-signals { display: flex; flex-direction: column; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); color: var(--text-default); }
 .barca-signals li { display: flex; align-items: flex-start; gap: 6px; overflow-wrap: anywhere; }
 .barca-signals .barca-glyph { flex: none; margin-top: 3px; }
+
+/* A live run's link and cancellation action stay separate keyboard targets. */
+.barca-running-controls, .barca-cancel-run { display: inline-flex; align-items: center; gap: 6px; }

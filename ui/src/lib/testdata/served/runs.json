@@ -652,6 +652,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 0.5,
       "error": null,
       "files": [
@@ -686,6 +691,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 0.5,
       "error": null,
       "files": [
@@ -720,6 +730,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 0.5,
       "error": null,
       "files": [
@@ -754,6 +769,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": true,
+        "owner": "this server",
+        "reason": null
+      },
       "elapsed_seconds": null,
       "error": null,
       "files": [
@@ -788,6 +808,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
       "elapsed_seconds": 0.9,
       "error": null,
       "files": [
@@ -825,6 +850,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 9.0,
       "error": null,
       "files": [
@@ -859,6 +889,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 9.0,
       "error": null,
       "files": [
@@ -893,6 +928,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
       "elapsed_seconds": 0.7,
       "error": null,
       "files": [
@@ -930,6 +970,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
       "elapsed_seconds": 0.9,
       "error": null,
       "files": [
@@ -967,6 +1012,11 @@
     {
       "cancellation": null,
       "command": "run",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
       "elapsed_seconds": 1.2,
       "error": null,
       "files": [
@@ -1004,6 +1054,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 5.1,
       "error": null,
       "files": [
@@ -1038,6 +1093,11 @@
     {
       "cancellation": null,
       "command": "run",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 2.0,
       "error": null,
       "files": [
@@ -1072,6 +1132,11 @@
     {
       "cancellation": null,
       "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 42.3,
       "error": null,
       "files": [
@@ -1106,6 +1171,11 @@
     {
       "cancellation": null,
       "command": "run",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
       "elapsed_seconds": 3.0,
       "error": null,
       "files": [

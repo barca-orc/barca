@@ -780,6 +780,9 @@ why cancellation is unavailable. This is independent of authentication and read-
 A CLI run on the same project is visible but must be stopped in its owning process. The server
 never signals a PID read from history. DELETE of an unowned live run returns 409 with that
 owner; an interrupted run points to `barca history --reconcile` instead. The UI displays the
-reason instead of offering Cancel for these runs.
+reason instead of offering Cancel for these runs. The same `control` accompanies run-list rows,
+queue entries, and each node's `running` badge. Cancel is reachable on these surfaces and on the
+notice after starting a run, with the same confirmation dialog. While health or ownership is
+unknown, Cancel stays visible but disabled and explains what is being checked.
 
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.

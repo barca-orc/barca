@@ -106,6 +106,7 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
             lambda: _running_of(port, "slow"), "slow to show as running", timeout=10
         )
         assert running["triggered_by"] == "manual", running
+        assert running["control"]["cancellable"] is False, running
         assert running["step"] == "waiting", running
         assert running["partitions"] is None, running
         assert _running_of(port, "upstream") is None
@@ -114,6 +115,7 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         [run] = _get(port, "/runs?status=running")["runs"]
         assert run["id"] == running["run_id"], run
         assert run["status"] == "running", run
+        assert run["control"]["cancellable"] is False, run
         run_detail = serve.get(f"/runs/{run['id']}")
         control = run_detail["control"]
         assert control["cancellable"] is False, control
@@ -360,6 +362,10 @@ def test_server_owned_pending_run_is_cancellable_until_it_finishes(tmp_path, ser
     detail = server.get(f"/runs/{run_id}")
     assert detail["status"] == "pending", detail
     assert detail["control"] == {"cancellable": True, "owner": "this server", "reason": None}
+    queued = server.get("/queue")["queued"]
+    assert next(r for r in queued if r["run_id"] == run_id)["control"]["cancellable"] is True
+    rows = server.get("/runs")["runs"]
+    assert next(r for r in rows if r["id"] == run_id)["control"]["cancellable"] is True
     code, cancelled = server.request("DELETE", f"/runs/{run_id}")
     assert code == 200, cancelled
     done = server.get(f"/runs/{run_id}")
