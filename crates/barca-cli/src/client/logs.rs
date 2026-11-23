@@ -139,7 +139,10 @@ async fn follow_events(follow: &mut Follow<'_>, args: LogsArgs<'_>) -> Result<St
             Followed::Ended(body) => {
                 // Ended while the stream was down: the lines it printed since are recorded
                 // (on a restarted server, every line is of the attempt that ended there).
-                let status = body["status"].as_str().unwrap_or("failed").to_string();
+                let status = body["run"]["status"]
+                    .as_str()
+                    .unwrap_or("failed")
+                    .to_string();
                 let (_, lines) = recorded_logs(follow.server, &follow.run_id, args).await?;
                 let missed: Vec<_> = lines.into_iter().skip(printed).collect();
                 args.print_all(&missed)

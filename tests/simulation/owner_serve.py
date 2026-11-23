@@ -166,7 +166,7 @@ NEVER = {
     "failed to open DB": "open failed",
     "cache lookup of": "a read lost to a writer",
 }
-TERMINAL = ("success", "failed", "error", "cancelled", "interrupted")
+TERMINAL = ("success", "skipped", "failed", "cancelled", "interrupted")
 
 
 class Failed(Exception):
@@ -442,13 +442,15 @@ class Harness:
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline and not (loop and self.stop.is_set()):
             status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}?all=true")
-            if status == 200 and body and body.get("status") in TERMINAL:
+            if status == 200 and body and body["run"].get("status") in TERMINAL:
                 # A step another run of the server computed meanwhile counts as cached.
-                done = (body.get("steps_executed") or 0) + (body.get("steps_cached") or 0)
+                done = (body["run"].get("steps_executed") or 0) + (
+                    body["run"].get("steps_cached") or 0
+                )
                 with self.lock:
-                    self.accepted[run_id]["ended"] = body["status"]
+                    self.accepted[run_id]["ended"] = body["run"]["status"]
                     self.accepted[run_id]["steps"] = done
-                if body["status"] == "success" and expect is not None and done != expect:
+                if body["run"]["status"] == "success" and expect is not None and done != expect:
                     self.problem(
                         "torn",
                         f"run {run_id} is a success with {done} steps, not {expect}",
@@ -858,7 +860,7 @@ class Harness:
             if (self.dir / "hold.started").exists():
                 return run_id
             status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}")
-            if status == 200 and body and body.get("status") in TERMINAL:
+            if status == 200 and body and body["run"].get("status") in TERMINAL:
                 raise Failed(f"held run ended before its step started: {body}")
             time.sleep(0.05)
         raise Failed(f"held step {run_id} did not start within 60s")
@@ -886,8 +888,8 @@ class Harness:
         self.after_stop("a drain", record)
         self.leave(began, grace=2)
         status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}")
-        record["run status"] = body and body.get("status")
-        if status != 200 or body.get("status") != "success":
+        record["run status"] = body and body["run"].get("status")
+        if status != 200 or body["run"].get("status") != "success":
             raise Failed(f"the run in flight through a drain reads {status} {body}")
         self.accepted[run_id]["ended"] = "success"
 
@@ -906,8 +908,8 @@ class Harness:
         self.after_stop("a forced stop", record)
         self.leave(began, grace=2)
         status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run_id}")
-        record["run status"] = body and body.get("status")
-        if status != 200 or body.get("status") != "cancelled":
+        record["run status"] = body and body["run"].get("status")
+        if status != 200 or body["run"].get("status") != "cancelled":
             raise Failed(f"the run a second SIGTERM stopped reads {status} {body}, not cancelled")
         self.accepted[run_id]["ended"] = "cancelled"
 
@@ -947,13 +949,13 @@ class Harness:
             if "interrupted" in line or "was in flight" in line or "resuming" in line
         ][:6]
         # A run in flight when its server was killed outright is recorded as interrupted
-        # (`barca docs serve-ops`), `error` when it never wrote a row.
+        # (`barca docs serve-ops`).
         deadline = time.monotonic() + 30
         while True:
             left = []
             for run in live:
                 status, body = self.http("http GET /runs/{id}", "GET", f"/runs/{run}")
-                state = body.get("status") if status == 200 and body else f"HTTP {status}"
+                state = body["run"].get("status") if status == 200 and body else f"HTTP {status}"
                 if state not in TERMINAL:
                     left.append((run, state))
                 elif run == run_id:

@@ -168,8 +168,8 @@ def test_a_run_queued_last_starts_with_the_scheduled_runs_in_the_order_accepted(
     assert [e["position"] for e in waiting] == [1, 2, 3, 4, 5], waiting
     assert [e["queue"] for e in waiting] == [None, None, None, "last", None], waiting
     assert [e["triggered_by"] for e in waiting] == ["api", "api", "schedule", "api", "schedule"]
-    assert server.run(last["run_id"])["queue"] == "last"
-    assert server.run(first["run_id"])["queue"] is None
+    assert server.run(last["run_id"])["run"]["queue"] == "last"
+    assert server.run(first["run_id"])["run"]["queue"] is None
 
     # `barca queue`: the same key in --json, and the row says so in the table.
     listed = barca(project, "queue", "--server", server.url, "--json")
@@ -191,7 +191,7 @@ def test_a_run_queued_last_starts_with_the_scheduled_runs_in_the_order_accepted(
     assert order(project)[before : before + 5] == ["one", "two", "tick_a", "three", "tick_b"]
     assert server.finished(last["run_id"])["run"]["status"] == "success"
     # Not recorded with the run: the key is `null` once it has finished.
-    assert server.run(last["run_id"])["queue"] is None
+    assert server.run(last["run_id"])["run"]["queue"] is None
 
 
 def test_a_run_queued_last_takes_no_extra_slot_and_a_request_runs_past_it(project, serve):
@@ -281,12 +281,12 @@ def test_the_place_survives_a_restart_while_the_run_waits(project, serve):
     waiting = queue(restarted)["queued"]
     assert names(waiting) == ["two", "one"], waiting
     assert [e["queue"] for e in waiting] == [None, "last"], waiting
-    assert restarted.run(last["run_id"])["queue"] == "last"
+    assert restarted.run(last["run_id"])["run"]["queue"] == "last"
     assert restarted.request("POST", "/queue/resume")[0] == 200
     assert restarted.finished(last["run_id"])["run"]["status"] == "success"
     assert restarted.finished(asked["run_id"])["run"]["status"] == "success"
     assert order(project) == ["long", "two", "one"], "accepted: long, one (last), two"
-    assert restarted.run(long["run_id"])["status"] == "success"
+    assert restarted.run(long["run_id"])["run"]["status"] == "success"
 
 
 def test_a_read_only_server_lists_the_recorded_queue_in_the_same_order(project, serve):

@@ -138,7 +138,7 @@ def test_a_tick_brings_the_always_nodes_below_a_sensor_up_to_date_in_one_run(tmp
         assert ids == {"inbox", "orders", "summary", "send_report"}, run
         # One run with several targets, recorded as the schedule's tick (#469).
         assert run["run"]["triggered_by"] == "schedule", run
-        assert run["schedule_id"].endswith(":inbox") and run["scheduled_at"], run
+        assert run["run"]["schedule_id"].endswith(":inbox") and run["run"]["scheduled_at"], run
         targets = {t.rsplit(":", 1)[1] for t in run["run"]["outcome"]["targets"]}
         assert targets == {"inbox", "orders", "summary", "send_report"}, run
     # Each value was computed once, not once per consumer (#253).

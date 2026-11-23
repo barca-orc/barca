@@ -129,7 +129,7 @@ def test_every_routed_command_reaches_the_server(project, serve):
     assert got["status"] == "success"
     assert Path(project, got["final_output"]["_barca_artifact"]["path"]).is_file()
     sent("run", "hold", "--dry-run")
-    assert server.get(f"/runs/{got['run_id']}")["status"] == "success"
+    assert server.get(f"/runs/{got['run_id']}")["run"]["status"] == "success"
     assert [r["triggered_by"] for r in history(project, "--local")] == ["api"]
 
     assert json.loads(sent("status", "--json").stdout)["summary"]["cached"] == 2

@@ -113,15 +113,15 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         detail = _get(port, "/assets/slow")
         assert detail["running"]["run_id"] == running["run_id"], detail
         [run] = _get(port, "/runs?status=running")["runs"]
-        assert run["id"] == running["run_id"], run
+        assert run["run_id"] == running["run_id"], run
         assert run["status"] == "running", run
         assert run["control"]["cancellable"] is False, run
-        run_detail = serve.get(f"/runs/{run['id']}")
-        control = run_detail["control"]
+        run_detail = serve.get(f"/runs/{run['run_id']}")
+        control = run_detail["run"]["control"]
         assert control["cancellable"] is False, control
         assert str(cli.pid) in control["owner"], control
         assert "does not own" in control["reason"], control
-        code, refused = serve.request("DELETE", f"/runs/{run['id']}")
+        code, refused = serve.request("DELETE", f"/runs/{run['run_id']}")
         assert code == 409, refused
         assert "already finished (running)" not in str(refused), refused
         assert str(cli.pid) in str(refused), refused
@@ -155,11 +155,11 @@ def test_a_killed_cli_run_is_not_shown_as_running(tmp_path):
         assert _running_of(port, "slow") is None
         assert _get(port, "/runs?status=running")["runs"] == []
         [run] = serve.get("/runs")["runs"]
-        detail = serve.get(f"/runs/{run['id']}")
-        assert detail["status"] == "interrupted", detail
-        assert detail["control"]["cancellable"] is False, detail
-        assert "barca history --reconcile" in detail["control"]["reason"], detail
-        code, refused = serve.request("DELETE", f"/runs/{run['id']}")
+        detail = serve.get(f"/runs/{run['run_id']}")
+        assert detail["run"]["status"] == "interrupted", detail
+        assert detail["run"]["control"]["cancellable"] is False, detail
+        assert "barca history --reconcile" in detail["run"]["control"]["reason"], detail
+        code, refused = serve.request("DELETE", f"/runs/{run['run_id']}")
         assert code == 409, refused
         assert "barca history --reconcile" in str(refused), refused
     finally:
@@ -256,7 +256,8 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         # the run ends, and does not read as executing (#969).
         done = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
         wait_until(
-            lambda: _get(port, f"/runs/{done}")["status"] == "success", "the first run to finish"
+            lambda: _get(port, f"/runs/{done}")["run"]["status"] == "success",
+            "the first run to finish",
         )
         slow = _post(port, "/runs", {"command": "get", "targets": ["slow"]})["run_id"]
         wait_until(lambda: (tmp_path / "cli.started").exists(), "the slow step to start")
@@ -290,7 +291,7 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
             activity["summary"],
         ), activity["summary"]
         # The hour's median is of its one finished run; nothing went wrong in it.
-        assert total["median_seconds"] == _get(port, f"/runs/{done}")["elapsed_seconds"]
+        assert total["median_seconds"] == _get(port, f"/runs/{done}")["run"]["elapsed_seconds"]
         assert total["failure"] is None and activity["excluded"] is None, activity
         # The same database read without the server gives the same counts.
         local = json.loads(_history(tmp_path, "--activity", "--json", "--local").stdout)
@@ -333,18 +334,20 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
         for _ in range(2):
             newer = _post(port, "/runs", {"command": "get", "targets": ["upstream"]})["run_id"]
             wait_until(
-                lambda run=newer: _get(port, f"/runs/{run}")["status"] == "success",
+                lambda run=newer: _get(port, f"/runs/{run}")["run"]["status"] == "success",
                 "a newer run to finish",
             )
         page = _get(port, "/runs?limit=1")
-        assert [r["id"] for r in page["runs"]] == [slow], page["runs"]
+        assert [r["run_id"] for r in page["runs"]] == [slow], page["runs"]
         assert (page["total"], page["truncated"]) == (4, True), page
-        assert [r["id"] for r in _get(port, "/runs?limit=2")["runs"]] == [slow, newer]
+        assert [r["run_id"] for r in _get(port, "/runs?limit=2")["runs"]] == [slow, newer]
         only = _get(port, "/runs?limit=1&status=success")
-        assert [r["id"] for r in only["runs"]] == [newer] and only["total"] == 3, only
+        assert [r["run_id"] for r in only["runs"]] == [newer] and only["total"] == 3, only
 
         (tmp_path / "release").write_text("")
-        wait_until(lambda: _get(port, f"/runs/{slow}")["status"] == "success", "the run to finish")
+        wait_until(
+            lambda: _get(port, f"/runs/{slow}")["run"]["status"] == "success", "the run to finish"
+        )
         assert _in_flight(tmp_path, *server) == []
         after = json.loads(_history(tmp_path, "--activity", "--json", *server).stdout)
         assert after["activity"]["total"]["in_progress"] == 0
@@ -360,17 +363,17 @@ def test_server_owned_pending_run_is_cancellable_until_it_finishes(tmp_path, ser
     server.post("/queue/pause", {})
     run_id = server.post("/runs", {"command": "get", "targets": ["slow"]})["run_id"]
     detail = server.get(f"/runs/{run_id}")
-    assert detail["status"] == "pending", detail
-    assert detail["control"] == {"cancellable": True, "owner": "this server", "reason": None}
+    assert detail["run"]["status"] == "pending", detail
+    assert detail["run"]["control"] == {"cancellable": True, "owner": "this server", "reason": None}
     queued = server.get("/queue")["queued"]
     assert next(r for r in queued if r["run_id"] == run_id)["control"]["cancellable"] is True
     rows = server.get("/runs")["runs"]
-    assert next(r for r in rows if r["id"] == run_id)["control"]["cancellable"] is True
+    assert next(r for r in rows if r["run_id"] == run_id)["control"]["cancellable"] is True
     code, cancelled = server.request("DELETE", f"/runs/{run_id}")
     assert code == 200, cancelled
     done = server.get(f"/runs/{run_id}")
-    assert done["status"] == "cancelled", done
-    assert done["control"]["cancellable"] is False, done
+    assert done["run"]["status"] == "cancelled", done
+    assert done["run"]["control"]["cancellable"] is False, done
     code, refused = server.request("DELETE", f"/runs/{run_id}")
     assert code == 409, refused
     assert "finished" in str(refused), refused

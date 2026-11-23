@@ -677,7 +677,14 @@ def test_partial_loading_isolates_conflicts_and_watch_repairs_qualified_imports(
         assert code == 200
         result = finished(server, handle["run_id"])
         assert result["run"]["status"] == "success"
-        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 12
+        assert (
+            json.loads(
+                (
+                    tmp_path / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 12
+        )
     finally:
         server.stop()
 
@@ -705,7 +712,14 @@ def test_partial_conflict_preserves_actual_external_import_site(tmp_path):
         assert code == 200
         result = finished(server, handle["run_id"])
         assert result["run"]["status"] == "success"
-        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 42
+        assert (
+            json.loads(
+                (
+                    tmp_path / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 42
+        )
     finally:
         server.stop()
 
@@ -729,7 +743,14 @@ def test_partial_loading_keeps_unambiguous_nonpipeline_sibling_helper(tmp_path):
         assert code == 200
         result = finished(server, handle["run_id"])
         assert result["run"]["status"] == "success"
-        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 11
+        assert (
+            json.loads(
+                (
+                    tmp_path / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 11
+        )
     finally:
         server.stop()
 
@@ -765,6 +786,13 @@ def test_partial_identity_conflict_includes_every_prior_import_site(tmp_path):
         assert code == 200
         result = finished(server, handle["run_id"])
         assert result["run"]["status"] == "success"
-        assert json.loads((tmp_path / result["result"]["final_output"]["path"]).read_text()) == 7
+        assert (
+            json.loads(
+                (
+                    tmp_path / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 7
+        )
     finally:
         server.stop()

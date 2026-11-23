@@ -265,7 +265,7 @@ def test_idle_stream_observes_auth_changes_from_another_server_process(project, 
         assert time.monotonic() - started < 1.25
         assert not errors, errors
         assert exchange(first, "GET", "/health", stream_token)[0] == 401
-        assert exchange(first, "GET", f"/runs/{run_id}", admin)[1]["status"] == "running"
+        assert exchange(first, "GET", f"/runs/{run_id}", admin)[1]["run"]["status"] == "running"
     finally:
         (project / "release").touch()
         if run_id and admin:

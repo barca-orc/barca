@@ -77,7 +77,7 @@ def test_retry_after_failed_refresh_uses_current_upstream(tmp_path, cutoff, serv
             if refresh:
                 body["refresh"] = ["raw"]
             answer = serve.post("/runs", body)
-            return serve.finished(answer["run_id"])
+            return serve.finished(answer["run_id"])["run"]["outcome"]
         flags = ["--refresh", "raw"] if refresh else []
         proc = barca(
             tmp_path, "get", "report", "pipeline.py", *flags, env=clean_env(BARCA_POOL_SIZE="2")

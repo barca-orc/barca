@@ -178,7 +178,7 @@ def test_multi_target_counts_match_queue_history_and_run_detail(project, serve):
     assert counts["ok"] + counts["failed"] + counts["cached"] + counts["not_reached"] == 3
     assert len(detail["outputs"]) == 3
     rows = server.request("GET", "/runs")[1]["runs"]
-    row = next(row for row in rows if row["id"] == run_id)["line"]
+    row = next(row for row in rows if row["run_id"] == run_id)["line"]
     assert row["steps"] == counts["outcome"]
     assert row["target"] == detail["target_line"] == "alpha +2 more"
 
@@ -209,7 +209,7 @@ def output(middle: int) -> int:
     assert counts["ok"] == counts["cached"] == counts["retries"] == 0
     assert counts["not_reached"] == counts["not_reached_nodes"] == 2
     assert counts["outcome"] == "0 ok · 1 failed · 0 cached · 2 not reached"
-    row = next(r for r in server.get("/runs")["runs"] if r["id"] == run_id)
+    row = next(r for r in server.get("/runs")["runs"] if r["run_id"] == run_id)
     assert row["line"]["steps"] == counts["outcome"]
     history = barca(project, "history", run_id, "--server", server.url, "--json")
     assert history.returncode == 0, history.stderr
@@ -256,7 +256,7 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     assert restarted.run(long)["run"]["status"] == "success", "the run in flight finished"
     assert started(project, "long") == 1
 
-    assert follower.wait(timeout=RUN) == 0
+    assert follower.wait(timeout=RUN) == 0, client_output(project, follower)
     out, err = client_output(project, follower)
     assert "two ran" in out, (out, err)
     assert "lost the event stream of run" in err, err
@@ -340,7 +340,7 @@ def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
     assert run["run"]["status"] == "success", run
     assert started(project, "long") == 2, "the stopped attempt and the new one"
     assert restarted.finished(behind)["run"]["status"] == "success"
-    assert follower.wait(timeout=RUN) == 0
+    assert follower.wait(timeout=RUN) == 0, client_output(project, follower)
     out, err = client_output(project, follower)
     assert "long done" in out, (out, err)
     # Its history has the attempt that finished, not a cancelled one.
@@ -585,19 +585,19 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         queued = server.request("GET", "/queue")[1]["queued"][0]
         assert queued["queued_at"] == accepted
         pending = server.request("GET", f"/runs/{run_id}")[1]
-        assert pending["status"] == "pending"
+        assert pending["run"]["status"] == "pending"
         assert pending["steps"] == []
         assert pending["explanation"].get("worker_failures", []) == []
-        assert len(pending["previous_attempts"]) == number
+        assert len(pending["run"]["previous_attempts"]) == number
         status, recorded = server.request("GET", f"/runs/{run_id}/logs")
         assert status == 200, recorded
         assert sum(line["line"] == "attempt started" for line in recorded["logs"]) == number
         assert server.request("POST", "/queue/resume")[0] == 200
         wait_until(lambda: started(project, "long") == number + 1, "next execution")
         view = server.request("GET", f"/runs/{run_id}")[1]
-        assert len(view["previous_attempts"]) == number
+        assert len(view["run"]["previous_attempts"]) == number
         archived = server.request("GET", f"/runs/{attempts[-1]['run_id']}")[1]
-        assert archived["stop_reason"] == "server restart (requeued)"
+        assert archived["run"]["stop_reason"] == "server restart (requeued)"
         assert archived["explanation"]["worker_failures"] == failures
         assert any(line["line"] == "attempt started" for line in archived["logs"])
         listing = server.request("GET", "/runs")[1]
@@ -633,9 +633,9 @@ def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drai
     if drain:
         wait_until(lambda: started(project, "long") == 2, "killed drain to requeue once")
         view = restarted.request("GET", f"/runs/{run_id}")[1]
-        attempt = view["previous_attempts"][0]
+        attempt = view["run"]["previous_attempts"][0]
         archived = restarted.request("GET", f"/runs/{attempt['run_id']}")[1]
-        assert archived["status"] == "interrupted"
+        assert archived["run"]["status"] == "interrupted"
         assert any(line["line"] == "before kill" for line in archived["logs"])
         # The existing one-killed-drain retry rule remains bounded.
         restarted.send(signal.SIGTERM)
@@ -645,8 +645,8 @@ def test_killed_predecessor_with_unknown_owner_is_recovered(project, serve, drai
             db.execute("UPDATE runs SET owner = NULL, pid = NULL, host = 'different-host'")
         restarted = serve("--no-schedule")
     view = restarted.request("GET", f"/runs/{run_id}")[1]
-    assert view["status"] == "interrupted", view
-    assert view["finished_at"] is not None
+    assert view["run"]["status"] == "interrupted", view
+    assert view["run"]["finished_at"] is not None
     assert any(line["line"] == "before kill" for line in view["logs"])
     assert restarted.request("GET", "/queue")[1]["running"] == []
 
@@ -693,8 +693,8 @@ def item(key: str) -> int:
     restarted = serve("--no-schedule")
     run = restarted.finished(run_id)
     assert run["run"]["status"] == "success", run
-    assert len(run["previous_attempts"]) == 1, run
-    attempt_id = run["previous_attempts"][0]["run_id"]
+    assert len(run["run"]["previous_attempts"]) == 1, run
+    attempt_id = run["run"]["previous_attempts"][0]["run_id"]
     archived = restarted.request("GET", f"/runs/{attempt_id}")[1]
     assert sum(step["status"] == "failed" for step in archived["steps"]) == 1, archived
     with snapshot(project) as db:

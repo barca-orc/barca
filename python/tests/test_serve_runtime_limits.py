@@ -459,7 +459,7 @@ def test_no_run_timeout_by_default(tmp_path):
         run_id = submit(server, "slow")
         wait_until(lambda: started(project, "slow"), "the step to start")
         time.sleep(3)  # a fixed wait: no timeout may end the run
-        assert server.run(run_id)["status"] == "running"
+        assert server.run(run_id)["run"]["status"] == "running"
         release(project, "slow")
         assert server.finished(run_id)["run"]["status"] == "success"
 
@@ -470,7 +470,7 @@ def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
         run_id = submit(server, "slow")
         assert_timed_out(server, run_id, "run timed out after 2s (--run-timeout)")
     history = barca(project, "history", "--json", "--local", BARCA_REMOTE="off")
-    assert json.loads(history.stdout)["runs"][0]["status"] == "error", history.stdout
+    assert json.loads(history.stdout)["runs"][0]["status"] == "failed", history.stdout
     logs = barca(project, "logs", run_id, "--local", BARCA_REMOTE="off")
     assert "[barca] run cancelled: run timed out after 2s (--run-timeout)" in logs.stdout + (
         logs.stderr
@@ -486,7 +486,7 @@ def test_the_server_setting_stops_a_long_run_and_the_flag_wins(tmp_path):
         run_id = submit(server, "slow")
         wait_until(lambda: started(project, "slow") >= 2, "the step to start")
         time.sleep(3)  # a fixed wait: no timeout may end the run
-        assert server.run(run_id)["status"] == "running", "0 is no limit"
+        assert server.run(run_id)["run"]["status"] == "running", "0 is no limit"
         release(project, "slow")
         assert server.finished(run_id)["run"]["status"] == "success"
 
