@@ -46,11 +46,12 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
 /// names the run on its tick record before the run can start.
 pub async fn admit_as(
     state: &AppState,
-    spec: RunSpec,
+    mut spec: RunSpec,
     run_id: String,
 ) -> Result<Admitted, ApiError> {
     let channel = state.runs.replay.channel()?;
     let accepted_at = now_ts();
+    spec.policy.accepted_at(accepted_at);
     {
         let _admitting = state.runs.queue.admit.lock().await;
         ensure_db(state).await?;
@@ -216,8 +217,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::Ba
                         barca_service::errln!(
                             "[barca] run {} was in flight when the last server was killed during \
                              its drain (SIGKILL after SIGTERM: the stop grace period ran out); \
-                             it is put back in the queue and starts again (steps that finished \
-                             are cached)",
+                             it is put back in the queue and starts again (matching completed assets are reused; tasks may repeat)",
                             row.run_id
                         );
                         track(

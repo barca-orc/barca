@@ -357,7 +357,7 @@ async fn execute(
                 let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
                     "run timed out after {}s ({source})\nThe server stops a run that takes \
-                         longer than its run timeout; steps that finished are cached. Raise it \
+                         longer than its run timeout; matching completed assets can be reused; tasks may repeat. Raise it \
                          with --run-timeout, [server] run_timeout_seconds or \
                          Schedule(..., timeout_seconds=N); 0 means no limit.",
                     limit.as_secs(),

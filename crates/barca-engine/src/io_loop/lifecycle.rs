@@ -422,9 +422,15 @@ pub(super) fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: u
 
     // Ctrl-C means something to a worker only while it runs a step. It starts outside the
     // terminal's job, so that one arriving while the interpreter starts is not a traceback,
-    // and joins the job once it handles the signal itself.
+    // and joins the job once it handles the signal itself. Server workers stay outside:
+    // the server owns Ctrl-C and lets runs drain before stopping their workers (#926).
     #[cfg(unix)]
-    barca_proc::helper_proc::start_outside_the_job(&mut cmd);
+    {
+        barca_proc::helper_proc::start_outside_the_job(&mut cmd);
+        if config.host.server_owned() {
+            cmd.env_remove("BARCA_JOB_PGID");
+        }
+    }
     cmd
 }
 

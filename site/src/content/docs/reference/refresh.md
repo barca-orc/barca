@@ -184,6 +184,16 @@ A dry run makes the same decisions a real run makes (it calls the same code), an
 checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
 `--refresh --no-cascade` and `--refresh-all` runs.
 
+## Restarted and queued requests
+
+A refresh is satisfied by a successful result with the current run hash recorded at or after
+the request was accepted. The original acceptance time survives server retries. This applies
+per asset and per partition key, including results another run computed while this request
+waited. Fully cached steps satisfied this way have reason `refreshed_by_this_run`; earlier
+results and changed hashes still run. Selective cascade and cutoff rules remain unchanged.
+Tasks outside scheduled ticks can repeat after a restart, including completed side effects;
+refresh does not promise exactly-once task execution. See [Operating barca serve](/reference/serve-ops/).
+
 See also: [The Cache](/reference/cache/), [Partitions](/reference/partitions/), [barca status](/reference/cli/status/), [The Run Hash](/reference/hashing/).
 
 ---
