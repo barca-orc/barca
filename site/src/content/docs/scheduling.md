@@ -284,11 +284,18 @@ systemd unit:
 [Service]
 ExecStart=/usr/local/bin/barca serve /srv/pipelines/job.py --timezone utc
 Restart=always
+KillMode=mixed
+TimeoutStopSec=90s
 WorkingDirectory=/srv/pipelines
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+`KillMode=mixed` sends the initial SIGTERM only to the main server process, allowing it to
+drain its workers and transfer helper. The default `control-group` signals those children
+immediately and interrupts their work. systemd still kills remaining processes when the main
+process exits or `TimeoutStopSec` expires.
 
 `systemctl stop` sends SIGTERM. Barca then drains: it starts no queued run (new runs are still
 accepted and wait in its run queue, kept in the metadata DB), stops firing schedules, lets the
