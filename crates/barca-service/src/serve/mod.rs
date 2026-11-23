@@ -16,6 +16,7 @@ pub use host::ServeHost;
 
 /// A run the server accepted and never started, as [`record_unstarted_run`] records it.
 pub struct UnstartedRun<'a> {
+    pub scope: Option<&'a crate::run_scope::RunScope>,
     pub run_id: &'a str,
     pub command: &'a str,
     pub files: &'a [String],
@@ -44,6 +45,7 @@ pub async fn record_unstarted_run(
             job: None,
             trigger: run.trigger,
             traced: false,
+            scope: run.scope,
         },
         status,
         outcome_json,
@@ -71,6 +73,7 @@ pub async fn record_cached_run(
             job: Some(job),
             trigger: run.trigger,
             traced: false,
+            scope: run.scope,
         },
         elapsed_seconds,
         outcome_json,

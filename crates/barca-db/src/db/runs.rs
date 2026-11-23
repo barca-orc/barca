@@ -421,6 +421,7 @@ pub async fn create_run(
             job: None,
             trigger: &barca_model::trigger::Trigger::default(),
             traced: false,
+            scope: None,
         },
     )
     .await
@@ -442,6 +443,7 @@ pub struct NewRun<'a> {
     /// Whether the run's steps send a Datadog trace each (`runs.trace`): the caller asks
     /// `barca_service::telemetry::is_on("datadog")`. An unstarted run sends none.
     pub traced: bool,
+    pub scope: Option<&'a barca_model::run_scope::RunScope>,
 }
 
 /// Create a new run record at the start of execution.
@@ -458,7 +460,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''))",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -481,6 +483,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             },
             run.trigger.principal.clone().unwrap_or_default(),
             run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
         ],
     )
     .await
@@ -500,7 +503,7 @@ pub async fn record_unstarted_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, '')) ON CONFLICT(run_id) DO NOTHING",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, '')) ON CONFLICT(run_id) DO NOTHING",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -513,6 +516,7 @@ pub async fn record_unstarted_run(
             outcome_json.to_string(),
             run.trigger.principal.clone().unwrap_or_default(),
             run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
         ],
     )
     .await
@@ -531,7 +535,7 @@ pub async fn record_cached_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, 0, ?6, datetime('now'), ?7, ?8, NULLIF(?9, ''), NULLIF(?10, ''), ?11, NULLIF(?12, ''), NULLIF(?13, ''))",
+        "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, 0, ?6, datetime('now'), ?7, ?8, NULLIF(?9, ''), NULLIF(?10, ''), ?11, NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''))",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -546,6 +550,7 @@ pub async fn record_cached_run(
             outcome_json.to_string(),
             run.trigger.principal.clone().unwrap_or_default(),
             run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
         ],
     ).await.map_err(|e| BarcaError::Db(format!("failed to record cached run: {e}")))?;
     Ok(())
@@ -640,6 +645,32 @@ pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<Strin
     Ok(row
         .and_then(|row| row.get::<String>(0).ok())
         .filter(|s| !s.is_empty()))
+}
+
+/// The exact request scope, absent for history written before scope recording existed.
+pub async fn get_run_scope(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Option<barca_model::run_scope::RunScope>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "scope_json").await? {
+        return Ok(None);
+    }
+    let mut rows = conn
+        .query("SELECT scope_json FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run scope: {e}")))?;
+    let text = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run scope: {e}")))?
+        .and_then(|row| row.get::<String>(0).ok());
+    text.map(|text| {
+        serde_json::from_str(&text)
+            .map_err(|e| BarcaError::Db(format!("invalid recorded run scope: {e}")))
+    })
+    .transpose()
 }
 
 /// Finalize a run record with status and stats.
@@ -1480,6 +1511,7 @@ mod tests {
                 job: Some("p.py:a"),
                 trigger: &trigger,
                 traced: false,
+                scope: None,
             },
         )
         .await
@@ -1517,6 +1549,7 @@ mod tests {
                 job: None,
                 trigger: &barca_model::trigger::Trigger::api(),
                 traced: false,
+                scope: None,
             },
             "cancelled",
             r#"{"status":"cancelled"}"#,

@@ -174,6 +174,24 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
     Ok(get_run_steps_page(db_path, run_id, None).await?.0)
 }
 
+/// Whether a step belongs to a run, without loading that run's partition history.
+pub async fn run_has_step(db_path: &str, run_id: &str, node_id: &str) -> Result<bool, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM materializations WHERE run_id = ?1 AND node_id = ?2 LIMIT 1",
+            [run_id, node_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to check recorded step: {e}")))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to check recorded step: {e}")))?
+        .is_some())
+}
+
 /// A page of a run's recorded steps: what `barca history RUN_ID` and `GET /runs/{run_id}`
 /// list (#623). A run of many partition keys records one step per key it computed.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

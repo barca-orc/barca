@@ -7,6 +7,7 @@ import type { RunAttempt } from "./RunAttempt";
 import type { RunControl } from "./RunControl";
 import type { RunExplanation } from "./RunExplanation";
 import type { RunFailure } from "./RunFailure";
+import type { RunScope } from "./RunScope";
 import type { RunStep } from "./RunStep";
 import type { StepsPage } from "./StepsPage";
 import type { TriggeredBy } from "./TriggeredBy";
@@ -17,7 +18,11 @@ import type { WaitingFor } from "./WaitingFor";
  * finished, its [`Outcome`]. A finished run is read from the metadata DB, so it is the same
  * after the server restarts.
  */
-export type RunView = { control: RunControl, skip_reason?: string,
+export type RunView = {
+/**
+ * Exact request; null for older history whose scope cannot be replayed safely.
+ */
+scope: RunScope | null, control: RunControl, skip_reason?: string,
 /**
  * Stopped server executions, oldest first, with ids for their own logs and steps.
  */

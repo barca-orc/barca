@@ -216,6 +216,7 @@ async fn execute(
                 cancel: cancel.clone(),
                 event_tx: Some(event_tx),
                 options: RunOptions {
+                    scope: Some(spec.scope(&state.config.files)),
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     host: std::sync::Arc::new(barca_service::serve::ServeHost::new(
@@ -599,6 +600,7 @@ pub(super) async fn persist_outcome(
     barca_service::serve::record_unstarted_run(
         &cfg.db_path,
         barca_service::serve::UnstartedRun {
+            scope: Some(&spec.scope(&state.config.files)),
             run_id,
             command: spec.command.as_str(),
             files: run_files(state, &spec.files),

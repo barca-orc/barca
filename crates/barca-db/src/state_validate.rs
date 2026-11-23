@@ -59,6 +59,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "scheduled_at",
     "schedule_id",
     "outcome_json",
+    "scope_json",
     "client_run_id",
     "trace",
     "principal",
