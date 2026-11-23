@@ -841,6 +841,11 @@ barca or its environment failed (metadata DB, workers, the store, I/O); retrying
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the history is backed up.
+Workers keep private process groups. The coordinator handles terminal Ctrl-C and stops the
+workers and their inherited subprocesses; a step cannot rely on receiving KeyboardInterrupt
+or completing its exception/finally handlers. Stopped callers are resumed before TERM;
+after 200 ms, remaining group members receive KILL. Deliberately daemonized children that
+leave the group need cleanup by their launcher.
 The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
 its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
 line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
@@ -4734,5 +4739,19 @@ Keyed refresh selectors (`--refresh 'source[account=A],source[account=C]'`) sele
 of refresh coordinates independently of the target domain. Each selector has one dimension.
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
+
+### Cancelling a queued run
+
+`barca cancel RUN_ID --server URL --json` reports `status: "cancelled"` after removing a
+queued run durably, including a run just requeued during drain. A running run reports
+`status: "cancelling"` until its workers or partition/batch resolvers stop. Resolver
+shutdown allows one second for SIGTERM, then kills and reaps the subprocess.
+
+<!-- BEGIN GENERATED schema cancel_queued -->
+| Key | Type | Present |
+|---|---|---|
+| `run_id` | string | always |
+| `status` | string | always |
+<!-- END GENERATED schema cancel_queued -->
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

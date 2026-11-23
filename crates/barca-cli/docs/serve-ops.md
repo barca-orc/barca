@@ -144,6 +144,13 @@ lost and done again.
 
 ## Stopping the server
 
+Workers and their ordinary subprocesses have private process groups. Cancelling a run,
+reaching the drain deadline, or forcing a stop resumes stopped `parallel()` callers and
+sends TERM to each group, then KILL after a shared 200 ms grace period. This also removes
+children whose worker has already exited, without stopping the server or another run.
+Children that deliberately daemonize, create a new session, or change process group escape
+this ownership boundary; their launcher must arrange their cleanup.
+
 SIGINT (Ctrl-C) and SIGTERM (`kill`, `docker stop`, systemd) stop the server the same way: the
 first one starts a drain, which loses nothing the server accepted. Server workers remain
 outside the terminal’s process group, so terminal Ctrl-C starts this drain without interrupting

@@ -272,6 +272,7 @@ pub async fn cancel(
 ) -> Result<Json<RunCancelling>, ApiError> {
     refuse_if_read_only(&state.config)?;
     let principal = principal.map(|p| p.0.0);
+    let _transition = state.runs.queue.admit.lock().await;
     if let Some(waiting) = state.runs.queue.take(&run_id) {
         let cancellation = queued_cancellation(&state, &run_id, principal);
         if let Some(mut run) = state.runs.registry.get_mut(&run_id) {
@@ -294,7 +295,7 @@ pub async fn cancel(
             )
             .await;
         }
-        return Ok(Json(RunCancelling::of(run_id)));
+        return Ok(Json(RunCancelling::cancelled(run_id)));
     }
     let finished = match state.runs.registry.get_mut(&run_id) {
         Some(mut run) => match run.status {
