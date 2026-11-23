@@ -771,8 +771,6 @@ results even when stale.
 Ordinary reads retain the run ID, event, history and output contracts; a cache hit can already
 be complete when its accepted run handle is returned.
 
-See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.
-
 
 ### Cancellation ownership
 
@@ -783,3 +781,5 @@ A CLI run on the same project is visible but must be stopped in its owning proce
 never signals a PID read from history. DELETE of an unowned live run returns 409 with that
 owner; an interrupted run points to `barca history --reconcile` instead. The UI displays the
 reason instead of offering Cancel for these runs.
+
+See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.
