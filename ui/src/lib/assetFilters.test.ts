@@ -61,7 +61,7 @@ const rows = buildRows(
     node('p.py:old', { lastAt: '2026-09-20 12:00:00' }),
     node('p.py:never', { state: 'never_run', cause: 'no_refresh_path' }),
     node('p.py:check', { kind: 'task', state: 'always_runs', lastAt: '2026-10-06 11:50:00', failed: true, cause: 'failing' }),
-    node('p.py:watch', { kind: 'sensor', state: 'always_runs', next_run: NOW / 1000 + 60 }),
+    node('p.py:watch', { kind: 'sensor', state: 'always_runs', next_run: new Date(NOW + 60 * 1000).toISOString() }),
     node('p.py:parts', { partitioned: true, state: 'partial', lastAt: '2026-10-06 09:00:00', cause: 'overdue' }),
   ],
   NOW,

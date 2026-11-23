@@ -1023,15 +1023,15 @@ impl Project {
                 );
                 fields.insert(
                     "next_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.next_fire)),
+                    serde_json::json!(slot.and_then(|s| s.next_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "prev_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.prev_fire)),
+                    serde_json::json!(slot.and_then(|s| s.prev_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "late_since".into(),
-                    serde_json::json!(slot.and_then(|s| s.late_since)),
+                    serde_json::json!(slot.and_then(|s| s.late_since).map(crate::time::rfc3339)),
                 );
                 // No run of this server's is in flight: the queued one has not started.
                 fields.insert("running".into(), serde_json::Value::Null);

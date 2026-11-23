@@ -7215,19 +7215,21 @@ components:
           - type: 'null'
         next_run:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         prev_run:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: For a scheduled node, the cron's most recent fire time at or before now (unix
-            seconds, in the server's --timezone); null otherwise.
+          description: For a scheduled node, the cron's most recent fire time at or before now (RFC 3339 UTC); null otherwise.
         late_since:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: For a scheduled node that missed a slot, the first slot (unix seconds) after
+          description: For a scheduled node that missed a slot, the first slot (RFC 3339 UTC) after
             its schedule's newest tick (the slot of the newest run it started or queued), when that
             slot is at or before now; null while on time, while paused, when no tick is recorded, and
             for a node without a schedule. schedule.late says whether the schedule is late.

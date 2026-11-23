@@ -753,7 +753,7 @@ curl -s localhost:8274/nodes | jq '.data_coverage'
 ```
 
 A scheduled node's row also has `prev_run`, the cron's most recent fire time at or before now,
-beside `next_run` (unix seconds, in the server's `--timezone`), `late_since`: the first slot
+beside `next_run` (RFC 3339 UTC, calculated in the server's `--timezone`), `late_since`: the first slot
 after its schedule's newest recorded decision, when that slot has passed, and a
 `schedule` block, the one `barca status --json` prints, whose `late` says whether the schedule
 is late (`barca docs scheduling`, "A schedule that missed its slot"). `late_since` is

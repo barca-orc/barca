@@ -76,7 +76,7 @@ describe('scheduleRows', () => {
   ]
   const states = [
     state('job.py:refresh', {
-      next_run: now / 1000 + 300,
+      next_run: new Date(now + 300 * 1000).toISOString(),
       last_materialization: {
         status: 'failed',
         created_at: '2026-10-06 11:50:00',
@@ -89,7 +89,7 @@ describe('scheduleRows', () => {
         error: 'boom',
       },
     }),
-    state('job.py:heartbeat', { next_run: now / 1000 + 10 }),
+    state('job.py:heartbeat', { next_run: new Date(now + 10 * 1000).toISOString() }),
     state('job.py:manual_thing', { kind: 'asset' }),
   ]
 
@@ -121,7 +121,6 @@ describe('scheduleRows', () => {
 
 describe('lateness', () => {
   const now = Date.parse('2026-11-16T12:21:30Z')
-  const s = (iso: string) => Date.parse(iso) / 1000
   const stands = (over: Partial<ScheduleStatus> = {}): ScheduleStatus => ({
     cron: '* * * * *', next_fire: null, last_fired: null, last_status: null, last_run_id: null,
     state: 'on_time', state_detail: null, late: false, late_since: null, failures: 0, max_failures: 5, failing: false, paused: false,
@@ -132,7 +131,7 @@ describe('lateness', () => {
   it('shows a held schedule without a next-run countdown', () => {
     const id = 'job.py:pulse'
     const [row] = scheduleRows([asset(id, '* * * * *')], [
-      state(id, { next_run: now / 1000 + 10, schedule: stands({ state: 'held', state_detail: 'held after 3 failed ticks' }) }),
+      state(id, { next_run: new Date(now + 10 * 1000).toISOString(), schedule: stands({ state: 'held', state_detail: 'held after 3 failed ticks' }) }),
     ])
     expect(row).toMatchObject({ standing: 'held', nextRunMs: null, detail: 'held after 3 failed ticks' })
   })
@@ -147,16 +146,16 @@ describe('lateness', () => {
     const rows = scheduleRows(
       assets,
       [
-        state('job.py:soon', { next_run: s('2026-11-16T12:25:00Z'), schedule: stands() }),
+        state('job.py:soon', { next_run: '2026-11-16T12:25:00Z', schedule: stands() }),
         // Slots have passed since its last tick, and the server does not call it late: its
         // run waits in the run queue. Nothing here second-guesses that from the times.
         state('job.py:queued', {
-          next_run: s('2026-11-16T12:22:00Z'),
-          late_since: s('2026-11-16T12:01:00Z'),
+          next_run: '2026-11-16T12:22:00Z',
+          late_since: '2026-11-16T12:01:00Z',
           schedule: stands({ late: false, late_since: '2026-11-16T12:01:00Z', last_fired: '2026-11-16T12:00:00Z', last_status: 'pending', last_run_id: 'r7' }),
         }),
         state('job.py:minutely', {
-          next_run: s('2026-11-16T12:22:00Z'),
+          next_run: '2026-11-16T12:22:00Z',
           schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z', last_fired: '2026-11-16T12:08:00Z', last_status: 'success', last_run_id: 'r3' }),
         }),
       ],
@@ -179,10 +178,10 @@ describe('lateness', () => {
     const rows = scheduleRows(
       [asset('job.py:soon', '*/5 * * * *'), asset('job.py:pulse', '*/10 * * * * *'), asset('job.py:minutely', '* * * * *')],
       [
-        state('job.py:soon', { next_run: s('2026-11-16T12:22:00Z'), schedule: stands({ typical_run_seconds: 4 }) }),
+        state('job.py:soon', { next_run: '2026-11-16T12:22:00Z', schedule: stands({ typical_run_seconds: 4 }) }),
         // The server's words: its ticks wait longer than they are apart.
-        state('job.py:pulse', { next_run: s('2026-11-16T12:25:00Z'), schedule: stands({ queue_bound: true, typical_queue_wait_seconds: 12, typical_run_seconds: 1 }) }),
-        state('job.py:minutely', { next_run: s('2026-11-16T12:30:00Z'), schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z' }) }),
+        state('job.py:pulse', { next_run: '2026-11-16T12:25:00Z', schedule: stands({ queue_bound: true, typical_queue_wait_seconds: 12, typical_run_seconds: 1 }) }),
+        state('job.py:minutely', { next_run: '2026-11-16T12:30:00Z', schedule: stands({ late: true, late_since: '2026-11-16T12:09:00Z' }) }),
       ],
       now,
     )

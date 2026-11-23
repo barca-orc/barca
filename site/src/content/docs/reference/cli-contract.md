@@ -3742,9 +3742,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.excluded.at` | string | always |
 | `activity.excluded.by_status` | object | always |
 | `activity.excluded.by_status.cancelled` | integer | always |
-| `activity.excluded.by_status.error` | integer | always |
 | `activity.excluded.by_status.failed` | integer | always |
 | `activity.excluded.by_status.interrupted` | integer | always |
+| `activity.excluded.by_status.pending` | integer | always |
 | `activity.excluded.by_status.running` | integer | always |
 | `activity.excluded.by_status.success` | integer | always |
 | `activity.excluded.by_trigger` | object | always |
@@ -3765,9 +3765,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.hours[].at` | string | always |
 | `activity.hours[].by_status` | object | always |
 | `activity.hours[].by_status.cancelled` | integer | always |
-| `activity.hours[].by_status.error` | integer | always |
 | `activity.hours[].by_status.failed` | integer | always |
 | `activity.hours[].by_status.interrupted` | integer | always |
+| `activity.hours[].by_status.pending` | integer | always |
 | `activity.hours[].by_status.running` | integer | always |
 | `activity.hours[].by_status.success` | integer | always |
 | `activity.hours[].by_trigger` | object | always |
@@ -3795,9 +3795,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.total.at` | string | always |
 | `activity.total.by_status` | object | always |
 | `activity.total.by_status.cancelled` | integer | always |
-| `activity.total.by_status.error` | integer | always |
 | `activity.total.by_status.failed` | integer | always |
 | `activity.total.by_status.interrupted` | integer | always |
+| `activity.total.by_status.pending` | integer | always |
 | `activity.total.by_status.running` | integer | always |
 | `activity.total.by_status.success` | integer | always |
 | `activity.total.by_trigger` | object | always |

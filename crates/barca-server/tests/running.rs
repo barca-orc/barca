@@ -420,7 +420,6 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
             .map(|t| t.timestamp())
     };
-    let rfc = |secs: &Value| Value::from(barca_service::outcome::rfc3339(secs.as_i64().unwrap()));
 
     // The last tick and its run: the queued run, by the same id and status everywhere.
     assert_eq!(entry["last_run_id"], run["run_id"], "{entry} {run}");
@@ -440,7 +439,7 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
             .map(|t| t + 1),
         "{entry}"
     );
-    assert_eq!(rfc(&row["late_since"]), entry["late_since"], "{row}");
+    assert_eq!(row["late_since"], entry["late_since"], "{row}");
     assert_eq!(block["late_since"], entry["late_since"], "{block}");
     for (surface, late) in [
         ("/schedule", &entry["late"]),
@@ -464,7 +463,7 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
         stable_fields(block.clone())
     );
     assert_eq!(block["live"], true, "{block}");
-    assert_eq!(rfc(&row["next_run"]), row["schedule"]["next_fire"], "{row}");
+    assert_eq!(row["next_run"], row["schedule"]["next_fire"], "{row}");
 
     for id in [run["run_id"].as_str().unwrap(), blocker.as_str()] {
         let (status, body) = send(&app, "DELETE", &format!("/runs/{id}"), None).await;

@@ -885,7 +885,11 @@ async fn state_reports_the_next_run_in_the_servers_timezone() {
         config.timezone = zone.to_string();
         let (status, json) = send(&app(config), "GET", "/state").await;
         assert_eq!(status, StatusCode::OK, "{json}");
-        let next_run = json[0]["next_run"].as_i64().expect("a scheduled node");
+        let next_run = chrono::DateTime::parse_from_rfc3339(
+            json[0]["next_run"].as_str().expect("a scheduled node"),
+        )
+        .unwrap()
+        .timestamp();
         assert_eq!(next_run % 86_400, seconds_into_the_utc_day, "{zone}");
     }
 }

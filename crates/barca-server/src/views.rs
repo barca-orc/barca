@@ -14,20 +14,17 @@ pub struct NodeState {
     pub status: barca_service::status::NodeStatus,
     /// Typical wall time over the most recent successful materializations.
     pub durations: Option<Durations>,
-    /// Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub next_run: Option<i64>,
-    /// The most recent cron fire time at or before now (unix epoch seconds) in the server's
+    /// Next cron fire time (RFC 3339 UTC) in the server's `--timezone`, if scheduled.
+    pub next_run: Option<String>,
+    /// The most recent cron fire time at or before now (RFC 3339 UTC) in the server's
     /// `--timezone`, if scheduled: the slot it last had.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub prev_run: Option<i64>,
-    /// For a scheduled node that missed a slot: the first slot (unix epoch seconds) after its
+    pub prev_run: Option<String>,
+    /// For a scheduled node that missed a slot: the first slot (RFC 3339 UTC) after its
     /// schedule's newest fired tick, when that slot is at or before now. `null` while on time,
     /// while paused, and when no tick is recorded. The same value as `late_since` of
     /// `GET /schedule` and of its `schedule` block, which also says whether it is `late`
     /// (`barca_core::schedule_standing::standing`).
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub late_since: Option<i64>,
+    pub late_since: Option<String>,
     /// The run working on this node now, whoever started it (`null` when none is).
     pub running: Option<NodeRunning>,
     /// When its newest successful result was written (UTC `YYYY-MM-DD HH:MM:SS`, like

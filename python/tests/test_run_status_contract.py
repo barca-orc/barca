@@ -130,6 +130,11 @@ def test_schedule_timestamps_use_rfc3339(tmp_path):
     with Serve(tmp_path, env=clean_env(BARCA_POOL_SIZE="2")) as server:
         job = server.schedule()["good"]
         rfc3339(job["next_fire"])
+        node = next(n for n in server.get("/state") if n["id"].endswith(":good"))
+        assert node["next_run"] == job["next_fire"]
+        rfc3339(node["prev_run"])
+        if node["late_since"] is not None:
+            rfc3339(node["late_since"])
         server.post("/schedule/good/pause?until=1h", {})
         [paused] = server.get("/pauses")["schedules"]
         rfc3339(paused["paused_at"])
