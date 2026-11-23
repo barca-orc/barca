@@ -718,7 +718,7 @@ pub async fn output(
     Path(run_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let view = view(&state, &run_id).await?;
-    if matches!(view.status.as_str(), "pending" | "running") {
+    if matches!(view.run.status.as_str(), "pending" | "running") {
         return Err(ApiError::Conflict(format!(
             "run '{run_id}' has not finished\nWait for its `run_finished` event, then ask again."
         )));
@@ -736,12 +736,12 @@ pub async fn output(
     let (path, format) = match live {
         Some(oref) => (oref.path, oref.format),
         None => {
-            if view.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
+            if view.run.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
                 return Err(no_output());
             }
-            let target = view.target.clone().filter(|t| !t.contains(','));
+            let target = view.run.target.clone().filter(|t| !t.contains(','));
             let target = target.ok_or_else(no_output)?;
-            let body: Value = serde_json::from_str(view.outcome.as_ref().unwrap().text())
+            let body: Value = serde_json::from_str(view.run.outcome.as_ref().unwrap().text())
                 .map_err(|_| no_output())?;
             let step = body["steps"]
                 .as_array()

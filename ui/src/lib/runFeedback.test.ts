@@ -72,14 +72,14 @@ describe('runNotice', () => {
     expect(runNotice({ ...base, started })).toEqual({ kind: 'queued', target: 'p.py:demand_forecast', runId: '127', restart: false })
     expect(runNotice({ ...base, started, run: runByStatus.pending })).toMatchObject({ kind: 'queued', runId: '127', restart: false })
     // Accepted by a draining server: it starts on the next one (#1011).
-    expect(runNotice({ ...base, started, run: { ...runByStatus.pending, waiting_for: 'restart' } })).toMatchObject({ kind: 'queued', restart: true })
+    expect(runNotice({ ...base, started, run: { ...runByStatus.pending, run: { ...runByStatus.pending.run, waiting_for: 'restart' } } })).toMatchObject({ kind: 'queued', restart: true })
     // Another run's record (a stale query) is not this run's.
-    expect(runNotice({ ...base, started, run: { ...runByStatus.running, run_id: '9' } })).toMatchObject({ kind: 'queued' })
+    expect(runNotice({ ...base, started, run: { ...runByStatus.running, run: { ...runByStatus.running.run, run_id: '9' } } })).toMatchObject({ kind: 'queued' })
   })
 
   it('a live run reports its progress', () => {
     expect(runNotice({ ...base, started, run: runByStatus.running })).toEqual({
-      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4, control: runByStatus.running.control,
+      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4, control: runByStatus.running.run.control,
     })
   })
 
@@ -119,6 +119,6 @@ describe('runOutcomeSummary', () => {
     const key = (k: string) => ({ ...runByStatus.failed.steps[0]!, node_id: `p.py:a[k=${k}]`, partition_key: `k=${k}` })
     expect(runOutcomeSummary({ ...listed, steps: [key('1'), key('2')] })).toBe('2 keys failed')
     expect(runOutcomeSummary(runByStatus.error)).toBe('failed: could not start a worker: python3 not found')
-    expect(runOutcomeSummary({ ...listed, error: null, failure: null })).toBe('failed')
+    expect(runOutcomeSummary({ ...listed, run: { ...listed.run, error: null, failure: null } })).toBe('failed')
   })
 })

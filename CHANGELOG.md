@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Run details now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
+
 - Run infrastructure and request failures now use `failed` instead of `error`, including restored outcomes and history filters. Error envelopes retain their cause and exit codes; use `--status failed` to include legacy error records. Activity status counts use `pending` and fold former `error` counts into `failed`.
 
 - Schedule API timestamps (`next_fire`, `last_fired`, `last_skipped`, `late_since`, and `paused_until`) now use RFC 3339 UTC strings instead of Unix seconds. Parse them as timestamps rather than multiplying by 1,000.

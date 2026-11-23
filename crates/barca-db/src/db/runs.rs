@@ -206,7 +206,9 @@ pub struct RunRecord {
     /// Total recorded materialization attempts; cached steps contribute zero.
     #[serde(default)]
     pub attempts: Option<i64>,
+    #[serde(serialize_with = "barca_model::time::serialize_datetime")]
     pub started_at: String,
+    #[serde(serialize_with = "barca_model::time::serialize_optional_datetime")]
     pub finished_at: Option<String>,
     pub elapsed_seconds: Option<f64>,
     /// What started the run: `manual` (a command typed on a machine), `api`, `schedule` or

@@ -60,8 +60,9 @@ describe('incident summary', () => {
   const tb = '  File "/x/p.py", line 3, in helper\n  File "/x/p.py", line 9, in load\n    raise ValueError("bad")'
   const step = { node_id: 'p.py:load', status: 'failed', error: 'ValueError: bad\nmore', error_type: 'ValueError', error_message: 'bad', error_traceback: tb } as RunStep
   const view = {
-    run_id: 'r1', status: 'failed', command: 'get', target: 'load,save', explanation: { target_line: 'load +1 more' }, triggered_by: 'schedule',
-    started_at: '2026-11-07T10:00:00Z', elapsed_seconds: 75, error: 'ValueError: bad', failure: null,
+    run: { run_id: 'r1', status: 'failed', command: 'get', target: 'load,save', triggered_by: 'schedule',
+    started_at: '2026-11-07T10:00:00Z', elapsed_seconds: 75, error: 'ValueError: bad', failure: null },
+    explanation: { target_line: 'load +1 more' },
     steps: [step, { node_id: 'p.py:ok', status: 'success' } as RunStep],
   } as unknown as RunView
   it('names the run, its link, target, trigger, timing and each failed step with where it raised', () => {

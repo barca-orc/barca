@@ -272,7 +272,8 @@ pub(crate) async fn run_detail(
         }
     };
     let bad = |e: serde_json::Error| server.unexpected(&format!("GET {path}"), &e.to_string());
-    let run: barca_service::db::RunRecord = serde_json::from_value(body.clone()).map_err(bad)?;
+    let run: barca_service::db::RunRecord =
+        serde_json::from_value(body["run"].clone()).map_err(bad)?;
     let mut steps: Vec<barca_service::db::RunStep> =
         serde_json::from_value(body["steps"].clone()).map_err(bad)?;
     // The steps the run recorded, as on this machine: a finished run the server started also

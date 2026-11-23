@@ -7758,8 +7758,6 @@ components:
       additionalProperties: false
       required:
       - control
-      - id
-      - handle
       - run_id
       - command
       - files
@@ -7772,7 +7770,7 @@ components:
       - steps_executed
       - steps_cached
       - error
-      - first_failure
+      - failure
       - triggered_by
       - scheduled_at
       - schedule_id
@@ -7783,15 +7781,7 @@ components:
       properties:
         control:
           $ref: '#/components/schemas/RunControl'
-        id: *id003
-        handle:
-          anyOf:
-          - *id003
-          - type: 'null'
-        run_id:
-          anyOf:
-          - *id003
-          - type: 'null'
+        run_id: *id003
         command: *id003
         files:
           type: array
@@ -7831,9 +7821,9 @@ components:
           anyOf:
           - *id003
           - type: 'null'
-        first_failure:
+        failure:
           anyOf:
-          - $ref: '#/components/schemas/FirstFailure'
+          - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
         triggered_by: &id057
           anyOf:
@@ -9023,7 +9013,7 @@ components:
         values: {type: boolean}
         timeout: {type: [integer, 'null'], minimum: 0}
         queue: {type: string, enum: [next, last]}
-    RunView:
+    RunInfo:
       type: object
       additionalProperties: false
       description: One run. A finished run is read from the metadata DB, so the answer is the same after
@@ -9055,12 +9045,8 @@ components:
       - plan_reasons
       - cancellation
       - waiting_for
-      - explanation
       - outcome
       - error
-      - steps
-      - steps_page
-      - logs
       properties:
         scope:
           description: Original execution scope; null for older history or an unstarted run.
@@ -9172,14 +9158,22 @@ components:
         cancellation: *id_cancellation
         waiting_for: *id_waiting_for
         queue: *id_queue_place
-        explanation:
-          $ref: '#/components/schemas/RunExplanation'
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'
           - type: 'null'
           description: Null while the run runs, and for runs not started by barca serve.
         error: *id042
+    RunView:
+      type: object
+      additionalProperties: false
+      description: Shared run-detail envelope; execution facts are nested under run.
+      required: [run, steps, steps_page, explanation, logs]
+      properties:
+        run:
+          $ref: '#/components/schemas/RunInfo'
+        explanation:
+          $ref: '#/components/schemas/RunExplanation'
         steps:
           type: array
           description: At most ?limit=N steps (default 1000) from ?offset=M, in the page order (failed

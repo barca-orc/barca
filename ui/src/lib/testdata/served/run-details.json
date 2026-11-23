@@ -1,16 +1,5 @@
 {
   "5c4ed0001445": {
-    "attempts": 1,
-    "cancellation": null,
-    "client_run_id": null,
-    "command": "get",
-    "control": {
-      "cancellable": false,
-      "owner": "not running",
-      "reason": "The run already finished (success)."
-    },
-    "elapsed_seconds": 0.5,
-    "error": null,
     "explanation": {
       "attempts": "1 attempt: one per step, none retried",
       "cancellation": null,
@@ -84,37 +73,57 @@
         "partial": false
       }
     },
-    "failure": null,
-    "files": [
-      "orders.py"
-    ],
-    "finished_at": "2026-11-17T14:45:00.000Z",
-    "job": "orders.py:orders_feed",
     "logs": [],
-    "outcome": null,
-    "plan_reasons": {
-      "nodes": 1,
-      "omitted": 0,
-      "reasons": [
-        {
-          "category": "sensor",
-          "example": "orders.py:orders_feed",
-          "nodes": 1,
-          "steps": 1,
-          "subject": null
-        }
+    "run": {
+      "attempts": 1,
+      "cancellation": null,
+      "client_run_id": null,
+      "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
+      "elapsed_seconds": 0.5,
+      "error": null,
+      "failure": null,
+      "files": [
+        "orders.py"
       ],
-      "steps": 1
+      "finished_at": "2026-11-17T14:45:00.000Z",
+      "job": "orders.py:orders_feed",
+      "outcome": null,
+      "plan_reasons": {
+        "nodes": 1,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "sensor",
+            "example": "orders.py:orders_feed",
+            "nodes": 1,
+            "steps": 1,
+            "subject": null
+          }
+        ],
+        "steps": 1
+      },
+      "principal": null,
+      "queue": null,
+      "retries": 0,
+      "run_id": "5c4ed0001445",
+      "schedule_id": "orders.py:orders_feed",
+      "scheduled_at": "2026-11-17T14:45:00Z",
+      "scope": null,
+      "started_at": "2026-11-17T14:45:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_total": 1,
+      "target": "orders_feed",
+      "trigger_reason": null,
+      "triggered_by": "schedule",
+      "waiting_for": null
     },
-    "principal": null,
-    "queue": null,
-    "retries": 0,
-    "run_id": "5c4ed0001445",
-    "schedule_id": "orders.py:orders_feed",
-    "scheduled_at": "2026-11-17T14:45:00Z",
-    "scope": null,
-    "started_at": "2026-11-17T14:45:00.000Z",
-    "status": "success",
     "steps": [
       {
         "artifact_format": "json",
@@ -140,8 +149,6 @@
         "worker_exit": null
       }
     ],
-    "steps_cached": 0,
-    "steps_executed": 1,
     "steps_page": {
       "nodes": [
         {
@@ -155,25 +162,9 @@
       ],
       "total": 1,
       "truncated": false
-    },
-    "steps_total": 1,
-    "target": "orders_feed",
-    "trigger_reason": null,
-    "triggered_by": "schedule",
-    "waiting_for": null
+    }
   },
   "a1f0c0000001": {
-    "attempts": 9,
-    "cancellation": null,
-    "client_run_id": null,
-    "command": "get",
-    "control": {
-      "cancellable": false,
-      "owner": "not running",
-      "reason": "The run already finished (success)."
-    },
-    "elapsed_seconds": 42.3,
-    "error": null,
     "explanation": {
       "attempts": "9 attempts: one per step, none retried",
       "cancellation": null,
@@ -253,37 +244,57 @@
         "partial": false
       }
     },
-    "failure": null,
-    "files": [
-      "orders.py"
-    ],
-    "finished_at": "2026-11-16T09:00:42.000Z",
-    "job": "all",
     "logs": [],
-    "outcome": null,
-    "plan_reasons": {
-      "nodes": 7,
-      "omitted": 0,
-      "reasons": [
-        {
-          "category": "never_run",
-          "example": "orders.py:customers",
-          "nodes": 7,
-          "steps": 9,
-          "subject": null
-        }
+    "run": {
+      "attempts": 9,
+      "cancellation": null,
+      "client_run_id": null,
+      "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (success)."
+      },
+      "elapsed_seconds": 42.3,
+      "error": null,
+      "failure": null,
+      "files": [
+        "orders.py"
       ],
-      "steps": 9
+      "finished_at": "2026-11-16T09:00:42.000Z",
+      "job": "all",
+      "outcome": null,
+      "plan_reasons": {
+        "nodes": 7,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "never_run",
+            "example": "orders.py:customers",
+            "nodes": 7,
+            "steps": 9,
+            "subject": null
+          }
+        ],
+        "steps": 9
+      },
+      "principal": null,
+      "queue": null,
+      "retries": 0,
+      "run_id": "a1f0c0000001",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "scope": null,
+      "started_at": "2026-11-16T09:00:00.000Z",
+      "status": "success",
+      "steps_cached": 0,
+      "steps_executed": 9,
+      "steps_total": 9,
+      "target": null,
+      "trigger_reason": null,
+      "triggered_by": "manual",
+      "waiting_for": null
     },
-    "principal": null,
-    "queue": null,
-    "retries": 0,
-    "run_id": "a1f0c0000001",
-    "schedule_id": null,
-    "scheduled_at": null,
-    "scope": null,
-    "started_at": "2026-11-16T09:00:00.000Z",
-    "status": "success",
     "steps": [
       {
         "artifact_format": "json",
@@ -493,8 +504,6 @@
         "worker_exit": null
       }
     ],
-    "steps_cached": 0,
-    "steps_executed": 9,
     "steps_page": {
       "nodes": [
         {
@@ -549,25 +558,9 @@
       ],
       "total": 9,
       "truncated": false
-    },
-    "steps_total": 9,
-    "target": null,
-    "trigger_reason": null,
-    "triggered_by": "manual",
-    "waiting_for": null
+    }
   },
   "a1f0c0000005": {
-    "attempts": 1,
-    "cancellation": null,
-    "client_run_id": null,
-    "command": "get",
-    "control": {
-      "cancellable": false,
-      "owner": "not running",
-      "reason": "The run already finished (failed)."
-    },
-    "elapsed_seconds": 0.9,
-    "error": "ValueError: 3 rows with a negative total",
     "explanation": {
       "attempts": "1 attempt: one per step, none retried",
       "cancellation": null,
@@ -631,15 +624,6 @@
         "partial": false
       }
     },
-    "failure": {
-      "error": "ValueError: 3 rows with a negative total",
-      "node": "billing.py:invoices"
-    },
-    "files": [
-      "billing.py"
-    ],
-    "finished_at": "2026-11-17T13:55:00.000Z",
-    "job": "billing.py:invoice_totals",
     "logs": [
       {
         "line": "reading 12,408 invoices",
@@ -656,30 +640,59 @@
         "ts": "2026-11-17T13:55:01Z"
       }
     ],
-    "outcome": null,
-    "plan_reasons": {
-      "nodes": 1,
-      "omitted": 0,
-      "reasons": [
-        {
-          "category": "code_changed",
-          "example": "billing.py:invoices",
-          "nodes": 1,
-          "steps": 1,
-          "subject": null
-        }
+    "run": {
+      "attempts": 1,
+      "cancellation": null,
+      "client_run_id": null,
+      "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
+      "elapsed_seconds": 0.9,
+      "error": "ValueError: 3 rows with a negative total",
+      "failure": {
+        "error": "ValueError: 3 rows with a negative total",
+        "node": "billing.py:invoices"
+      },
+      "files": [
+        "billing.py"
       ],
-      "steps": 1
+      "finished_at": "2026-11-17T13:55:00.000Z",
+      "job": "billing.py:invoice_totals",
+      "outcome": null,
+      "plan_reasons": {
+        "nodes": 1,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "code_changed",
+            "example": "billing.py:invoices",
+            "nodes": 1,
+            "steps": 1,
+            "subject": null
+          }
+        ],
+        "steps": 1
+      },
+      "principal": "token:ci-bot",
+      "queue": null,
+      "retries": 0,
+      "run_id": "a1f0c0000005",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "scope": null,
+      "started_at": "2026-11-17T13:55:00.000Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_total": 2,
+      "target": "invoice_totals",
+      "trigger_reason": null,
+      "triggered_by": "api",
+      "waiting_for": null
     },
-    "principal": "token:ci-bot",
-    "queue": null,
-    "retries": 0,
-    "run_id": "a1f0c0000005",
-    "schedule_id": null,
-    "scheduled_at": null,
-    "scope": null,
-    "started_at": "2026-11-17T13:55:00.000Z",
-    "status": "failed",
     "steps": [
       {
         "artifact_format": null,
@@ -708,8 +721,6 @@
         "worker_exit": null
       }
     ],
-    "steps_cached": 0,
-    "steps_executed": 1,
     "steps_page": {
       "nodes": [
         {
@@ -732,25 +743,9 @@
       ],
       "total": 1,
       "truncated": false
-    },
-    "steps_total": 2,
-    "target": "invoice_totals",
-    "trigger_reason": null,
-    "triggered_by": "api",
-    "waiting_for": null
+    }
   },
   "a1f0c0000006": {
-    "attempts": 1,
-    "cancellation": null,
-    "client_run_id": null,
-    "command": "get",
-    "control": {
-      "cancellable": false,
-      "owner": "not running",
-      "reason": "The run already finished (failed)."
-    },
-    "elapsed_seconds": 0.7,
-    "error": "KeyError: 'units'",
     "explanation": {
       "attempts": "1 attempt: one per step, none retried",
       "cancellation": null,
@@ -812,40 +807,60 @@
         "partial": false
       }
     },
-    "failure": {
-      "error": "KeyError: 'units'",
-      "node": "orders.py:sales_by_day[day=2026-11-16]"
-    },
-    "files": [
-      "orders.py"
-    ],
-    "finished_at": "2026-11-17T02:00:00.000Z",
-    "job": "orders.py:sales_by_day",
     "logs": [],
-    "outcome": null,
-    "plan_reasons": {
-      "nodes": 1,
-      "omitted": 0,
-      "reasons": [
-        {
-          "category": "never_run",
-          "example": "orders.py:sales_by_day",
-          "nodes": 1,
-          "steps": 1,
-          "subject": null
-        }
+    "run": {
+      "attempts": 1,
+      "cancellation": null,
+      "client_run_id": null,
+      "command": "get",
+      "control": {
+        "cancellable": false,
+        "owner": "not running",
+        "reason": "The run already finished (failed)."
+      },
+      "elapsed_seconds": 0.7,
+      "error": "KeyError: 'units'",
+      "failure": {
+        "error": "KeyError: 'units'",
+        "node": "orders.py:sales_by_day[day=2026-11-16]"
+      },
+      "files": [
+        "orders.py"
       ],
-      "steps": 1
+      "finished_at": "2026-11-17T02:00:00.000Z",
+      "job": "orders.py:sales_by_day",
+      "outcome": null,
+      "plan_reasons": {
+        "nodes": 1,
+        "omitted": 0,
+        "reasons": [
+          {
+            "category": "never_run",
+            "example": "orders.py:sales_by_day",
+            "nodes": 1,
+            "steps": 1,
+            "subject": null
+          }
+        ],
+        "steps": 1
+      },
+      "principal": null,
+      "queue": null,
+      "retries": 0,
+      "run_id": "a1f0c0000006",
+      "schedule_id": null,
+      "scheduled_at": null,
+      "scope": null,
+      "started_at": "2026-11-17T02:00:00.000Z",
+      "status": "failed",
+      "steps_cached": 0,
+      "steps_executed": 1,
+      "steps_total": 1,
+      "target": "sales_by_day",
+      "trigger_reason": null,
+      "triggered_by": "manual",
+      "waiting_for": null
     },
-    "principal": null,
-    "queue": null,
-    "retries": 0,
-    "run_id": "a1f0c0000006",
-    "schedule_id": null,
-    "scheduled_at": null,
-    "scope": null,
-    "started_at": "2026-11-17T02:00:00.000Z",
-    "status": "failed",
     "steps": [
       {
         "artifact_format": null,
@@ -871,16 +886,9 @@
         "worker_exit": null
       }
     ],
-    "steps_cached": 0,
-    "steps_executed": 1,
     "steps_page": {
       "total": 1,
       "truncated": false
-    },
-    "steps_total": 1,
-    "target": "sales_by_day",
-    "trigger_reason": null,
-    "triggered_by": "manual",
-    "waiting_for": null
+    }
   }
 }

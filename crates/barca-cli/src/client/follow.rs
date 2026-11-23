@@ -31,7 +31,7 @@ pub(super) fn dropped(server: &Server, run_id: &str, why: &str) -> CliError {
 
 /// The outcome in a `GET /runs/{run_id}` body.
 pub(super) fn outcome_of(server: &Server, path: &str, body: &Value) -> Result<Outcome, CliError> {
-    match &body["outcome"] {
+    match &body["run"]["outcome"] {
         Value::Null => {
             Err(server.unexpected(&format!("GET {path}"), "the run ended without an outcome"))
         }
@@ -126,7 +126,9 @@ impl<'a> Follow<'a> {
                 .json_attempt(&format!("/runs/{}", encode(&self.run_id)))
                 .await
             {
-                Ok(body) if matches!(body["status"].as_str(), Some("pending" | "running")) => {
+                Ok(body)
+                    if matches!(body["run"]["status"].as_str(), Some("pending" | "running")) =>
+                {
                     self.lose("the run has no live stream yet".into())?;
                     Ok(true)
                 }
@@ -269,7 +271,7 @@ impl<'a> Follow<'a> {
                     // A healthy pending/running answer resets only transport-outage state;
                     // the run itself can remain healthy longer than the reconnect window.
                     self.lost = None;
-                    if !matches!(body["status"].as_str(), Some("pending" | "running")) {
+                    if !matches!(body["run"]["status"].as_str(), Some("pending" | "running")) {
                         return Ok(Followed::Ended(body));
                     }
                 }
@@ -443,7 +445,8 @@ impl<'a> Follow<'a> {
                         ));
                     }
                     let body = self.recorded().await?;
-                    let ended = !matches!(body["status"].as_str(), Some("pending" | "running"));
+                    let ended =
+                        !matches!(body["run"]["status"].as_str(), Some("pending" | "running"));
                     self.last_cursor = None;
                     self.pending_cursor = None;
                     self.seen = 0;
@@ -465,7 +468,7 @@ impl<'a> Follow<'a> {
                 }
                 Ok(None) => {
                     let body = self.recorded().await?;
-                    if matches!(body["status"].as_str(), Some("pending" | "running")) {
+                    if matches!(body["run"]["status"].as_str(), Some("pending" | "running")) {
                         // Live in the history but not streamed yet: ask again.
                         continue;
                     }
@@ -476,7 +479,7 @@ impl<'a> Follow<'a> {
                     barca_service::errln!(
                         "[barca] the server is back; run {} ended meanwhile ({})",
                         self.run_id,
-                        body["status"].as_str().unwrap_or("unknown")
+                        body["run"]["status"].as_str().unwrap_or("unknown")
                     );
                     return Ok(Some(Followed::Ended(body)));
                 }

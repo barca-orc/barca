@@ -101,7 +101,7 @@ const groupFile = (id: string) => id.split(':')[1] ?? ''
 export function paletteIndex(
   assets: readonly Pick<ListNode, 'id' | 'kind'>[],
   groups: readonly Pick<NodeGroup, 'id' | 'name'>[],
-  runs: readonly Pick<RunSummary, 'id' | 'target' | 'status'>[],
+  runs: readonly Pick<RunSummary, 'run_id' | 'target' | 'status'>[],
   states: PaletteStates = NO_STATES,
 ): PaletteItem[] {
   const byFile = new Map<string, string[]>()
@@ -116,7 +116,7 @@ export function paletteIndex(
     ...files.map((file): PaletteItem => ({ key: `file:${file}`, section: 'Files', label: pipelineName(file), detail: file, target: { type: 'go', to: link('/assets', { pipeline: file }) }, state: groups.some((g) => groupFile(g.id) === file) ? null : scopeState(`file:${file}`, states) })),
     ...groups.map((g): PaletteItem => ({ key: g.id, section: 'Groups', label: g.name, detail: [states.placeOf?.get(g.id), pipelineName(groupFile(g.id))].filter(Boolean).join(' · '), target: { type: 'go', to: link('/assets', { pipeline: groupFile(g.id), group: g.id }) }, state: scopeState(g.id, states) })),
     ...assets.map((a) => nodeItem(a, states)),
-    ...runs.map((r): PaletteItem => ({ key: `run:${r.id}`, section: 'Runs', label: r.id, detail: `${r.target ?? 'all assets'} · ${runWord(r.status)}`, target: { type: 'go', to: link('/runs', { run: r.id }) }, state: runState(r.status) })),
+    ...runs.map((r): PaletteItem => ({ key: `run:${r.run_id}`, section: 'Runs', label: r.run_id, detail: `${r.target ?? 'all assets'} · ${runWord(r.status)}`, target: { type: 'go', to: link('/runs', { run: r.run_id }) }, state: runState(r.status) })),
   ]
 }
 

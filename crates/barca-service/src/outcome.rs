@@ -642,7 +642,7 @@ pub struct ReplayRequest {
 /// after the server restarts.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct RunView {
+pub struct RunInfo {
     /// Exact request; null for older history whose scope cannot be replayed safely.
     pub scope: Option<crate::run_scope::RunScope>,
     pub control: RunControl,
@@ -662,7 +662,7 @@ pub struct RunView {
     pub stop_reason: Option<String>,
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
-    /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
+    /// `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
     pub status: String,
     /// `get` or `run`.
     pub command: String,
@@ -717,17 +717,25 @@ pub struct RunView {
     /// finished (it is not recorded with the run). Experimental.
     #[serde(default)]
     pub queue: Option<QueuePlace>,
-    /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
-    /// from its attempts, its targets as a list and what became of them, and how far a run in
-    /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
-    /// Experimental.
-    pub explanation: crate::run_explanation::RunExplanation,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]
     pub outcome: Option<Outcome>,
     /// The first error of the run, in one line, for a list or a page title.
     pub error: Option<String>,
+}
+
+/// The shared run-detail envelope. Facts about the execution live under `run`; step
+/// pagination and the explanation remain siblings, as in `barca history RUN_ID --json`.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunView {
+    pub run: RunInfo,
+    /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
+    /// from its attempts, its targets as a list and what became of them, and how far a run in
+    /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
+    /// Experimental.
+    pub explanation: crate::run_explanation::RunExplanation,
     /// Each step the run recorded, then each step it streamed and has not recorded yet: at
     /// most `?limit=N` of them (default 1000, failed recorded steps first), every one with
     /// `?all=true`.
@@ -741,21 +749,21 @@ pub struct RunView {
 impl<'a> From<&'a RunView> for crate::run_explanation::RunFacts<'a> {
     fn from(r: &'a RunView) -> Self {
         crate::run_explanation::RunFacts {
-            status: &r.status,
-            target: r.target.as_deref(),
-            job: r.job.as_deref(),
-            triggered_by: r.triggered_by,
-            principal: r.principal.as_deref(),
-            attempts: r.attempts,
-            retries: r.retries,
-            steps_total: r.steps_total,
-            steps_executed: r.steps_executed,
-            steps_cached: r.steps_cached,
+            status: &r.run.status,
+            target: r.run.target.as_deref(),
+            job: r.run.job.as_deref(),
+            triggered_by: r.run.triggered_by,
+            principal: r.run.principal.as_deref(),
+            attempts: r.run.attempts,
+            retries: r.run.retries,
+            steps_total: r.run.steps_total,
+            steps_executed: r.run.steps_executed,
+            steps_cached: r.run.steps_cached,
             steps_failed: None,
             steps_skipped: None,
-            started_at: &r.started_at,
-            plan_reasons: r.plan_reasons.as_ref(),
-            cancellation: r.cancellation.as_ref(),
+            started_at: &r.run.started_at,
+            plan_reasons: r.run.plan_reasons.as_ref(),
+            cancellation: r.run.cancellation.as_ref(),
         }
     }
 }

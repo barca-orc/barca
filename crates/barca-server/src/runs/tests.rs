@@ -57,7 +57,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .await
         .unwrap();
     assert_eq!(queued.runs.len(), 1);
-    assert_eq!(queued.runs[0].id, "durable");
+    assert_eq!(queued.runs[0].run_id, "durable");
     assert_eq!(queued.runs[0].status, "pending");
     let path = &state.config.resolved.db_path;
     db::init_db(path).await.unwrap();
@@ -72,7 +72,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     state.runs.registry.insert(run.handle.clone(), run.clone());
     let wrapping_up = view(&state, "durable").await.unwrap();
     assert_eq!(
-        wrapping_up.status, "running",
+        wrapping_up.run.status, "running",
         "a persisted terminal row must not stop live polling before wrap-up"
     );
     run.status = RunStatus::Failed;
@@ -83,7 +83,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .unwrap();
     assert_eq!(history.total, 1);
     assert_eq!(history.runs.len(), 1);
-    assert_eq!(history.runs[0].id, "durable");
+    assert_eq!(history.runs[0].run_id, "durable");
     assert_eq!(history.runs[0].error.as_deref(), Some("boom"));
 }
 
@@ -119,7 +119,12 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
         status: status.map(str::to_string),
         ..Default::default()
     };
-    let ids = |list: &RunList| list.runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+    let ids = |list: &RunList| {
+        list.runs
+            .iter()
+            .map(|r| r.run_id.clone())
+            .collect::<Vec<_>>()
+    };
     let Json(page) = list(State(state.clone()), Query(query(2, None, None)))
         .await
         .unwrap();

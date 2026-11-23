@@ -61,7 +61,7 @@ function StepButtons({ stepId, failed, step }: { stepId: string; failed: boolean
     {step && <TraceLink step={step} datadogUrl={tools.datadogUrl} />}
     <Button size="sm" variant="ghost" aria-pressed={on} title={on ? 'Show every step\'s logs' : `Show only ${stepId}'s logs`}
       onClick={(e) => { e.preventDefault(); e.stopPropagation(); tools.setLogStep(on ? null : stepId) }}>{on ? 'All logs' : 'Logs'}</Button>
-    {failed && !runIsLive(tools.run.status) && <RetryStep run={tools.run} stepId={stepId} onStarted={tools.onStarted} />}
+    {failed && !runIsLive(tools.run.run.status) && <RetryStep run={tools.run.run} stepId={stepId} onStarted={tools.onStarted} />}
   </span>
 }
 
@@ -202,9 +202,9 @@ function stepRowKey(row: RunStepRow, index: number): string {
 export function RunPanelView({ id, run, eventGap = false, root, datadogUrl = null, dispatch }: { id: string; run: Remote<RunView>; eventGap?: boolean; root?: string | null; datadogUrl?: string | null; dispatch: Dispatch<RunsMsg> }) {
   const retry = <Button size="sm" onClick={() => dispatch({ type: 'retry_detail' })}>Retry</Button>
   return (
-    <SidePanel label="Run details" title="Run details" subtitleMono subtitle={run.kind === 'ready' ? run.data.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run_id : id}
+    <SidePanel label="Run details" title="Run details" subtitleMono subtitle={run.kind === 'ready' ? run.data.run.run_id : id} subtitleText={run.kind === 'ready' ? run.data.run.run_id : id}
       actions={<>
-        {run.kind === 'ready' && showRunControl(run.data.status) && <CancelRun key={run.data.run_id} id={run.data.run_id} queued={runIsWaiting(run.data.status)} control={run.data.control} />}
+        {run.kind === 'ready' && showRunControl(run.data.run.status) && <CancelRun key={run.data.run.run_id} id={run.data.run.run_id} queued={runIsWaiting(run.data.run.status)} control={run.data.run.control} />}
         <IconButton label="Close run details" size="sm" onClick={() => dispatch({ type: 'panel_closed' })}><X size={14} /></IconButton>
       </>}>
       {match(run)
@@ -237,8 +237,8 @@ const SUMMARY_STEPS = 5
 /** A run that failed before any step did (it could not plan, say): its own error; null otherwise. */
 function runSummaryError(data: RunView): string | null {
   if (failedSteps(data).length > 0) return null
-  const outcome = parseOutcome(data.outcome)
-  return data.error ?? outcomeEnvelope(outcome)?.error ?? null
+  const outcome = parseOutcome(data.run.outcome)
+  return data.run.error ?? outcomeEnvelope(outcome)?.error ?? null
 }
 
 /** One fact of a run: a muted label over its value; `wide` takes the whole line. */
@@ -247,7 +247,7 @@ function Fact({ label, wide = false, children }: { label: string; wide?: boolean
 }
 
 function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: RunView; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void; onFilter: (step: string) => void }) {
-  const live = runIsLive(data.status)
+  const live = runIsLive(data.run.status)
   const failed = failedSteps(data)
   // The keys of a node that failed the same way are one entry: 83 keys, one error.
   const groups = failureGroups(failed)
@@ -288,7 +288,7 @@ function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: Run
     </>}
     {runError && <div className="barca-run-error" role="alert"><ErrorLine error={runError} large root={root} /></div>}
     <div className="barca-run-actions">
-      {!live && <RunActions run={data} retryLabel={rerunLabel(data.status)} onStarted={onStarted} />}
+      {!live && <RunActions run={data.run} retryLabel={rerunLabel(data.run.status)} onStarted={onStarted} />}
       <IncidentSummaryButton run={data} datadogUrl={datadogUrl} />
     </div>
   </div>
@@ -296,7 +296,7 @@ function RunSummary({ data, root, datadogUrl, onStarted, onFilter }: { data: Run
 
 function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: RunView; eventGap: boolean; root?: string | null; datadogUrl: string | null; onStarted: (runId: string) => void }) {
   const [logStep, setLogStep] = useState<string | null>(null)
-  const outcome = parseOutcome(data.outcome)
+  const outcome = parseOutcome(data.run.outcome)
   const envelope = outcomeEnvelope(outcome)
   const result = outcomeResult(outcome)
   const nodes = data.steps_page?.nodes ?? []
@@ -311,13 +311,13 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
       {/* The run's facts, two to a line. Its state is said once: by the summary above when a
           step failed or the run did, else here. */}
       <dl className="barca-facts">
-        {!summarized.size && !runSummaryError(data) && <Fact label="Status"><StatusBadge size="sm" glyph={runGlyph(data.status)} label={runLabel(data.status)} live={runIsLive(data.status)} /></Fact>}
-        <Fact label="Command"><code>{data.command}</code></Fact>
+        {!summarized.size && !runSummaryError(data) && <Fact label="Status"><StatusBadge size="sm" glyph={runGlyph(data.run.status)} label={runLabel(data.run.status)} live={runIsLive(data.run.status)} /></Fact>}
+        <Fact label="Command"><code>{data.run.command}</code></Fact>
         <Fact label="Targets" wide>{data.explanation.target_line}</Fact>
         {counts?.not_reached_line && <Fact label="Not reached">{counts.not_reached_line}</Fact>}
-        <Fact label="Started"><Age at={data.started_at} /></Fact>
-        <Fact label="Finished"><Age at={data.finished_at} /></Fact>
-        <Fact label="Duration">{data.elapsed_seconds === null ? '–' : formatSeconds(data.elapsed_seconds)}</Fact>
+        <Fact label="Started"><Age at={data.run.started_at} /></Fact>
+        <Fact label="Finished"><Age at={data.run.finished_at} /></Fact>
+        <Fact label="Duration">{data.run.elapsed_seconds === null ? '–' : formatSeconds(data.run.elapsed_seconds)}</Fact>
         <Fact label="Steps">{stepsLine}{counts && <span className="barca-cell-sub" title={counts.units}> · {counts.planned}</span>}</Fact>
       </dl>
       {/* What became of the target: unless the one line would repeat the summary's failure. */}
@@ -326,7 +326,7 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
       {envelope?.remediation && <p className="barca-note">{envelope.remediation}</p>}
     </Section>
     {/* What took longest, once the run has ended (a live run's is in its overview). */}
-    {!runIsLive(data.status) && slowest.length > 0 && <Section title="Slowest steps">
+    {!runIsLive(data.run.status) && slowest.length > 0 && <Section title="Slowest steps">
       <ul className="barca-run-groups">
         {slowest.map((s) => (
           <li key={s.node_id}>
@@ -338,14 +338,14 @@ function RunDetails({ data, eventGap, root, datadogUrl, onStarted }: { data: Run
     </Section>}
     <Section title="Steps">
       {nodes.length === 0 && data.steps.length === 0
-        ? <p className="barca-note">{runIsLive(data.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
+        ? <p className="barca-note">{runIsLive(data.run.status) ? 'Waiting for steps…' : 'No step results recorded.'}</p>
         : <RunSteps steps={data.steps} nodes={nodes} root={root} summarized={summarized} />}
-      {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length.toLocaleString()} of {data.steps_page.total.toLocaleString()} steps; failed steps are always listed. barca history {data.run_id} --all lists every one.</p>}
+      {data.steps_page?.truncated && <p className="barca-note">Showing {data.steps.length.toLocaleString()} of {data.steps_page.total.toLocaleString()} steps; failed steps are always listed. barca history {data.run.run_id} --all lists every one.</p>}
     </Section>
     <Section title="Logs">
-      {eventGap && runIsLive(data.status) && <p role="status" className="barca-note">Live event replay was incomplete. These logs may show only a retained tail until the run finishes.</p>}
-      <LogViewer lines={logLines} live={runIsLive(data.status)} height={280}
-        tools step={logStep} onStepChange={setLogStep} downloadName={`barca-${data.run_id}.log`} />
+      {eventGap && runIsLive(data.run.status) && <p role="status" className="barca-note">Live event replay was incomplete. These logs may show only a retained tail until the run finishes.</p>}
+      <LogViewer lines={logLines} live={runIsLive(data.run.status)} height={280}
+        tools step={logStep} onStepChange={setLogStep} downloadName={`barca-${data.run.run_id}.log`} />
     </Section>
     {outputs?.length ? <Section title="Result"><ul>{outputs.map(row => <li key={row.node_id}>{row.line}</li>)}</ul></Section> : result !== null && result !== undefined && (
       <Section title="Result"><pre className="barca-run-result">{JSON.stringify(result, null, 2)}</pre></Section>
@@ -521,10 +521,10 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     // The row's words are the server's (`line`, as `barca history --json` prints them).
     const failure = run.line.failure
     // The whole row opens the run's panel (its error in full there): the row's height never changes.
-    return <tr key={run.id} aria-selected={selected !== null && (selected === run.id || selected === run.handle)}
+    return <tr key={run.run_id} aria-selected={selected !== null && (selected === run.run_id)}
       data-failing={failure ? true : undefined}
-      onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.id }) }}>
-    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.id })}>{run.id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
+      onClick={(event) => { if (!(event.target instanceof Element && event.target.closest('button'))) dispatch({ type: 'run_selected', id: run.run_id }) }}>
+    <td><button className="barca-run-link" onClick={() => dispatch({ type: 'run_selected', id: run.run_id })}>{run.run_id}</button>{run.command !== 'get' && <span className="barca-cell-sub"> {run.command}</span>}</td>
     <td><span className="barca-run-target">{run.line.target}</span></td>
     <td>{triggeredByLabel(run.triggered_by)}</td>
     <td><StatusBadge size="sm" glyph={runGlyph(run.status)} label={runLabel(run.status)} live={runIsLive(run.status)} /></td>
@@ -532,7 +532,7 @@ function RunTable({ runs, selected, now, dispatch }: { runs: RunList['runs']; se
     <td className="num">{run.elapsed_seconds === null ? '–' : formatSeconds(run.elapsed_seconds)}</td>
     <td className="num barca-run-steps-cell" title={run.line.steps_detail}>{run.line.steps}</td>
     <td className="barca-run-failure">{failure && <ErrorLine error={run.line.failure_detail ?? failure} text={failure} inline />}</td>
-    <td>{runIsLive(run.status) && <CancelRun id={run.id} queued={runIsWaiting(run.status)} control={run.control} />}</td>
+    <td>{runIsLive(run.status) && <CancelRun id={run.run_id} queued={runIsWaiting(run.status)} control={run.control} />}</td>
   </tr>
   })}</tbody></table>
 }

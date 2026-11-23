@@ -9,7 +9,7 @@ import type { RunView } from '@/lib/types'
 import { ConfirmDialog } from './ConfirmDialog'
 import { Button } from './Button'
 
-type Rerunnable = Pick<RunView, 'run_id' | 'scope'>
+type Rerunnable = Pick<RunView['run'], 'run_id' | 'scope'>
 
 /** Start `request`, then show the new run: `onStarted` gets its id. One request at a time. */
 function useStart(onStarted: (runId: string) => void) {
@@ -64,7 +64,7 @@ export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId:
 }
 
 /** Cancel one live run, keeping the request visible until polling reports its terminal state. */
-export function CancelRun({ id, queued, control }: { id: string; queued: boolean; control: RunView['control'] | undefined }) {
+export function CancelRun({ id, queued, control }: { id: string; queued: boolean; control: RunView['run']['control'] | undefined }) {
   const client = useQueryClient()
   const writes = useWriteControl()
   const [asking, setAsking] = useState(false)

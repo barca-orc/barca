@@ -613,6 +613,7 @@ struct HistoryItem<'a> {
     failed_node: Option<&'a str>,
     failure: Option<HistoryFailure<'a>>,
     files: &'a [String],
+    #[serde(serialize_with = "crate::time::serialize_optional_datetime")]
     finished_at: &'a Option<String>,
     job: &'a Option<String>,
     line: crate::run_list::RunLine,
@@ -627,6 +628,7 @@ struct HistoryItem<'a> {
     run_id: &'a str,
     schedule_id: &'a Option<String>,
     scheduled_at: &'a Option<String>,
+    #[serde(serialize_with = "crate::time::serialize_datetime")]
     started_at: &'a str,
     status: &'a str,
     steps_cached: i64,

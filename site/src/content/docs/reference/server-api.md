@@ -185,26 +185,31 @@ GET /runs/{run_id}
 
 ```json
 {
-  "run_id": "1b942bb33182",
-  "status": "success",
-  "command": "get",
-  "target": "daily_report",
-  "files": ["pipeline.py"],
-  "triggered_by": "api",
-  "scheduled_at": null,
-  "schedule_id": null,
-  "started_at": "2026-10-20T05:00:00.000Z",
-  "finished_at": "2026-10-20T05:00:01.000Z",
-  "elapsed_seconds": 1.2,
-  "steps_total": 2, "steps_executed": 1, "steps_cached": 1,
-  "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
-  "error": null,
+  "run": {
+    "run_id": "1b942bb33182",
+    "status": "success",
+    "command": "get",
+    "target": "daily_report",
+    "files": ["pipeline.py"],
+    "triggered_by": "api",
+    "scheduled_at": null,
+    "schedule_id": null,
+    "started_at": "2026-10-20T05:00:00.000Z",
+    "finished_at": "2026-10-20T05:00:01.000Z",
+    "elapsed_seconds": 1.2,
+    "steps_total": 2, "steps_executed": 1, "steps_cached": 1,
+    "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
+    "error": null
+  },
+  "steps_page": {"total": 1, "truncated": false},
+  "explanation": {},
   "steps": [{ "node_id": "pipeline.py:daily_report", "status": "success", "elapsed_seconds": 0.4, "error": null }],
   "logs": [{ "node_id": "pipeline.py:daily_report", "seq": 0, "line": "wrote 3 rows", "stream": "stdout", "ts": "2026-10-20T05:00:00.512Z" }]
 }
 ```
 
-`status` is `pending` or `running` while the run is live, then the outcome's status; a row the
+Execution fields are under `run`; `steps`, `steps_page`, `explanation`, and `logs` are siblings.
+`run.status` is `pending` or `running` while the run is live, then the outcome's status; a row the
 server did not start reads as the database has it (`success`, `failed`, `cancelled`,
 `interrupted`). `triggered_by` is `api` for a run started over HTTP, `schedule` for a cron
 tick (with the tick in `scheduled_at`, RFC 3339 in UTC, and the scheduled node in
@@ -310,7 +315,7 @@ and `slowest`. The `counts` object gives planned steps and nodes, attempts, retr
 newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes runs from the CLI,
 HTTP and the scheduler in this environment's local metadata DB, plus queued server runs. There
 is no source filter: a historical run remains visible even when its pipeline is no longer served.
-Each row has `first_failure`: `{ node_id, error }`, the run's first failed step (with its partition
+Each row has `failure`: `{ node, error }`, the run's first failed step (with its partition
 key) and the first line of its error, or `null` when no step failed. `error` is only a run-level
 error, so a run whose steps failed usually has `first_failure` and `error: null`. Each row
 also has `line` (experimental), the run in the words of a list row, computed by the server and
