@@ -624,4 +624,10 @@ blocked sibling node. Startup logs and the UI report unloaded sources and affect
 node IDs; `GET /health` exposes the same `load_errors`. With `--watch`, repaired
 configured sources and schedules rejoin automatically. One-shot commands stay strict.
 
+
+A task may raise `barca.Skip("reason")` when external work makes this tick unnecessary.
+It records a skipped attempt without retry, output or freshness advancement. Skips preserve
+consecutive failure counts: they neither increment nor reset them. The next scheduled tick
+runs normally, unless the schedule was already held. See `barca docs tasks`.
+
 See also: `barca docs serve-ops`, `barca docs server-mode`, `barca docs telemetry`, `barca docs assets`.

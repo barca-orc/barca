@@ -169,6 +169,8 @@ pub struct RunRecord {
     #[serde(default)]
     pub job: Option<String>,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<String>,
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
@@ -176,6 +178,8 @@ pub struct RunRecord {
     /// `GET /runs` shows it (#758); `barca history --json` does not yet, so it is not written.
     #[serde(default, skip_serializing)]
     pub steps_failed: Option<i64>,
+    #[serde(default, skip_serializing)]
+    pub steps_skipped: Option<i64>,
     /// Total recorded materialization attempts; cached steps contribute zero.
     #[serde(default)]
     pub attempts: Option<i64>,
@@ -882,6 +886,16 @@ async fn read_runs(
             "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'failed')",
         )
     };
+    let skipped = if names.contains("run_id") {
+        "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'skipped')"
+    } else {
+        "NULL"
+    };
+    let skip_reason = if names.contains("skip_reason") {
+        "(SELECT CASE WHEN runs.status = 'skipped' AND COUNT(DISTINCT skip_reason) = 1 THEN MIN(skip_reason) END FROM materializations WHERE run_id = runs.run_id AND status = 'skipped')"
+    } else {
+        "NULL"
+    };
     // The runs the filter keeps: their newest ids, from an index ([`RunFilter`]).
     let shape = super::run_filter::RunsShape::of(&conn).await?;
     let only = match if run_id.is_some() {
@@ -897,7 +911,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {attempt_metadata} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {skipped}, {skip_reason}, {attempt_metadata} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -923,10 +937,12 @@ async fn read_runs(
                 if t.is_empty() { None } else { Some(t) }
             },
             status,
+            skip_reason: row.get::<String>(25).ok(),
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
             steps_failed: row.get::<i64>(18).ok(),
+            steps_skipped: row.get::<i64>(24).ok(),
             attempts: row.get::<i64>(11).ok(),
             started_at: row.get::<String>(8).unwrap_or_default(),
             finished_at: {
@@ -954,9 +970,9 @@ async fn read_runs(
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok()),
             retries: row.get::<i64>(23).ok(),
-            parent_run_id: row.get::<String>(24).ok(),
-            run_attempt: row.get::<i64>(25).ok(),
-            stop_reason: row.get::<String>(26).ok(),
+            parent_run_id: row.get::<String>(26).ok(),
+            run_attempt: row.get::<i64>(27).ok(),
+            stop_reason: row.get::<String>(28).ok(),
             previous_attempts: Vec::new(),
         });
     }

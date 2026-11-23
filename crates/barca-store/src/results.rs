@@ -62,6 +62,24 @@ pub struct GetResult {
     pub partition_selection: Option<PartitionSelectionReport>,
 }
 
+/// Explicit task skips with no successful work make a skipped run. Failures dominate.
+pub fn all_work_skipped(steps: &[StepReport]) -> bool {
+    steps.iter().any(|s| s.skip_reason.is_some())
+        && !steps.iter().any(|s| {
+            matches!(
+                s.status
+                    .as_deref()
+                    .and_then(barca_model::step_status::StepStatus::parse),
+                Some(
+                    barca_model::step_status::StepStatus::Ran
+                        | barca_model::step_status::StepStatus::Success
+                        | barca_model::step_status::StepStatus::Partial
+                        | barca_model::step_status::StepStatus::Failed
+                )
+            )
+        })
+}
+
 /// The result of `barca get|run a,b` (several targets): one run over the union of the targets'
 /// cones, with each target's outcome. A failed target does not stop the others.
 #[derive(Debug, Clone, Serialize, Deserialize)]

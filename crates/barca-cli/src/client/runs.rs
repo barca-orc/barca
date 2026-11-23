@@ -259,7 +259,9 @@ async fn stream(
                 return Outcome::from_text(outcome.get().to_string())
                     .map_err(|e| server.unexpected(&format!("GET {path}"), &e));
             }
-            RunEvent::RunStarted { .. } | RunEvent::StepFinished { .. } => {}
+            RunEvent::RunStarted { .. }
+            | RunEvent::StepFinished { .. }
+            | RunEvent::StepSkipped { .. } => {}
         }
     }
 }

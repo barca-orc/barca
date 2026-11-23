@@ -11,6 +11,7 @@ use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 /// `interrupted` for a run whose process died before recording an outcome.
 pub(crate) const STATUSES: &[&str] = &[
     "success",
+    "skipped",
     "failed",
     "cancelled",
     "error",

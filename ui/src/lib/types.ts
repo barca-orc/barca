@@ -129,7 +129,7 @@ export interface ErrorEnvelope {
  * The generated type is an untyped object; `parseOutcome` (lib/runs.ts) narrows it.
  */
 export type RunOutcome =
-  | { status: 'success'; run_id: string; final_output?: unknown; targets?: Record<string, unknown> }
+  | { status: 'success' | 'skipped'; run_id: string; final_output?: unknown; targets?: Record<string, unknown> }
   | { status: 'failed' | 'cancelled' | 'error'; envelope: ErrorEnvelope }
 
 /** `barca stats --json`: the generated `AssetStats` with `id` in place of `node_id`. */

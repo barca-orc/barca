@@ -1,7 +1,7 @@
 # Metadata schema compatibility
 
 Scope: metadata format compatibility, not the full table/DDL contract.
-Status: implemented. Specification version: 1 (database versions are described below).
+Status: implemented. Specification version: 2 (database versions are described below).
 Conformance: `crates/barca-db/src/db/schema/ddl.rs`, `state_validate.rs`, and the tests in
 `db/schema.rs` and `db/snapshots.rs`. See [boundary inventory](../README.md).
 
@@ -374,6 +374,14 @@ transaction, rolled back on error, with every row preserved and the version left
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
 
+## Task skip history (#811)
+
+Format 1 adds nullable `materializations.skip_reason` and `schedule_ticks.skipped` columns.
+Read-only readers accept older databases without them; the writer adds them idempotently.
+A `materializations` row with `status = skipped` records an executed task attempt, with
+no run hash, output, artifact or observation. Cache/current-success queries must continue
+requiring `status = success`. Such history is not a produced materialization. Tick counts
+retain skipped outcomes after the bounded per-target list is trimmed.
 ## Requeued execution evidence
 
 Format 1 adds nullable `runs.parent_run_id`, `runs.run_attempt` and `runs.stop_reason`,

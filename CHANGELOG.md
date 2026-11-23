@@ -10,11 +10,15 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).
+
 - `barca logs` and server logs now keep each multiline stderr write and failed-attempt traceback in one entry, with newlines in `line`, instead of one entry per physical line (#671). Stdout and old recorded logs keep their boundaries. Use `--pretty` when piping to a pager.
 
 - Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
 
 ### Features
+
+- Tasks can raise `barca.Skip(reason)` to record skipped work without retrying or producing a result. Scheduled skips preserve the failure streak; history, run outcomes and schedule inspection distinguish them from success and failure (#811).
 
 - Read latest completed results without execution using `barca get --cached-only` and `barca.get(cached_only=True)`, locally or on a server. Disk then store lookup, strict `--cached-only=local`, typed `CacheMiss` (exit 1), and per-key outcomes preserve explicit selection.
 

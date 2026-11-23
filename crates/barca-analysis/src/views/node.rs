@@ -286,6 +286,9 @@ pub struct PartitionState {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct LastMaterialization {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub skip_reason: Option<String>,
     /// SHA-256 of the serialized artifact, absent for legacy materializations.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_hash: Option<String>,

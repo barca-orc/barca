@@ -3,7 +3,7 @@
 /**
  * A run's numbers (#1042), each counted once here so no surface counts them again. The unit
  * is the step: one node, or one key of a partitioned node. They add up:
- * `steps = ok + failed + cached + not_reached` and `ran = ok + failed`; with retries recorded,
+ * `steps = ok + failed + skipped + cached + not_reached` and `ran = ok + failed + skipped`; with retries recorded,
  * `attempts = ran + retries`. Experimental.
  */
 export type RunCounts = {
@@ -20,7 +20,7 @@ nodes: number | null,
 /**
  * Steps the run executed, failed ones included.
  */
-ran: number, ok: number, failed: number,
+ran: number, ok: number, failed: number, skipped?: number,
 /**
  * Steps served from cache. A run counts them when it ends: 0 while it is in progress.
  */

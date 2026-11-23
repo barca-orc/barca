@@ -179,3 +179,16 @@ describe('isNewFrame', () => {
     expect(isNewFrame(3, 'x')).toBe(true)
   })
 })
+
+
+it('settles an explicit skipped task without marking independent work skipped', () => {
+  const state = play([
+    { type: 'run_started', run_id: 'r' },
+    { type: 'log', node_id: NODE, line: 'checking lock', stream: 'stdout' },
+    { type: 'step_skipped', node_id: NODE, skip_reason: 'held elsewhere', elapsed_seconds: 0.1 },
+    { type: 'step_finished', node_id: 'p.py:other', ok: true },
+  ])
+  expect(state.statuses[NODE]).toBe('skipped')
+  expect(state.statuses['p.py:other']).toBe('success')
+  expect(state.errors[NODE]).toBeUndefined()
+})

@@ -61,6 +61,7 @@ pub(crate) const SCHEDULE_STATE_COLUMNS: &[&str] = &["paused_at INTEGER", "pause
 pub(crate) const LOG_COLUMNS: &[&str] = &["stream TEXT", "ts TEXT"];
 
 pub(crate) const MATERIALIZATION_COLUMNS: &[&str] = &[
+    "skip_reason TEXT",
     "artifact_path TEXT",
     "artifact_format TEXT",
     "artifact_size_bytes INTEGER",
@@ -123,6 +124,7 @@ pub(crate) const ADDED_COLUMNS: &[(&str, &[&str])] = &[
     ("runs", RUN_COLUMNS),
     ("schedule_state", SCHEDULE_STATE_COLUMNS),
     ("logs", LOG_COLUMNS),
+    ("schedule_ticks", &["skipped INTEGER"]),
 ];
 
 /// The columns of `table` added within format 1 (none for a table not in [`ADDED_COLUMNS`]).

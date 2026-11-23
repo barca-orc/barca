@@ -705,6 +705,7 @@ mod persist_tests {
                 cached_node_ids: &self.cached,
                 touched: &[],
                 plan_reasons: None,
+                task_skips: &[],
                 worker_failures: &[],
                 run_hashes: &self.run_hashes,
                 components: &self.empty,

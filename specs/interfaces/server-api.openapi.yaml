@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '30'
-  description: 'Normative current wire contract; specification version 30 is independent of package versions.
+  version: '31'
+  description: 'Normative current wire contract; specification version 31 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -5232,6 +5232,7 @@ components:
       - pending
       - running
       - complete
+      - skipped
       - failed
       - cancelled
     NodeRoot:
@@ -5907,6 +5908,9 @@ components:
       - id
       - kind
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task Skip reason; absent on ordinary blocked downstream steps.
         batch:
           $ref: '#/components/schemas/BatchPlan'
         batch_execution:
@@ -6709,6 +6713,9 @@ components:
       - size_bytes
       - rows
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task reason for a skipped attempt, with no result or artifact.
         status: *id003
         created_at: *id003
         elapsed_seconds:
@@ -6915,7 +6922,7 @@ components:
             for a fresh node and one that has an estimate. Experimental.
         last_attempt: &id_last_attempt
           type: string
-          enum: [never_run, success, failed]
+          enum: [never_run, success, failed, skipped]
           description: How its newest attempt went, in one word. failed when its last
             materialization failed or any of its keys last failed (partitions.failed); never_run
             when no execution is recorded; else success. A fact beside cache.state and health,
@@ -7545,6 +7552,9 @@ components:
           - *id003
           - type: 'null'
           description: last_run_id under its older name.
+        last_task_skip_reason:
+          type: string
+          description: Explicit task skip reason from the newest fired run when its status is skipped; omitted after a success, failure or newer scheduler-only decision. Separate from scheduler skip_reason.
         last_status:
           anyOf:
           - type: string
@@ -7552,6 +7562,7 @@ components:
             - pending
             - running
             - success
+            - skipped
             - failed
             - cancelled
             - error
@@ -7742,6 +7753,9 @@ components:
           - type: 'null'
         steps_executed: *id054
         steps_cached: *id054
+        steps_skipped:
+          type: [integer, 'null']
+          description: Executed task attempts that explicitly skipped, counted across every page.
         steps_failed:
           anyOf:
           - *id054
@@ -7971,6 +7985,7 @@ components:
           additionalProperties: false
           required: [success, failed, error, cancelled, interrupted, running]
           properties:
+            skipped: {type: integer, minimum: 0}
             success: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
             error: {type: integer, minimum: 0}
@@ -8038,6 +8053,9 @@ components:
       - sink_seconds
       - output_tail
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task Skip reason; absent on ordinary blocked downstream steps.
         batch:
           type: [string, "null"]
           description: Run-local call id linking this key to the other keys of its batched call; null for unbatched steps.
@@ -8171,6 +8189,14 @@ components:
           description: 'ErrorType: message, the first line of the message only.'
     RunEvent:
       oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type, node_id, skip_reason, elapsed_seconds]
+        properties:
+          type: {const: step_skipped}
+          node_id: {type: string}
+          skip_reason: {type: string}
+          elapsed_seconds: {type: number}
       - type: object
         additionalProperties: false
         required:
@@ -8611,7 +8637,7 @@ components:
         - warnings
         properties:
           status:
-            const: success
+            enum: [success, skipped]
           run_id: *id005
           elapsed_seconds:
             type: number
@@ -8702,6 +8728,7 @@ components:
             ran: {type: integer}
             ok: {type: integer}
             failed: {type: integer}
+            skipped: {type: integer}
             cached: {type: integer}
             not_reached: {type: integer}
             nodes: {type: [integer, 'null']}
@@ -8919,6 +8946,9 @@ components:
       - steps_page
       - logs
       properties:
+        skip_reason:
+          type: string
+          description: The common explicit reason of an all-skipped run; absent when reasons differ.
         previous_attempts:
           type: array
           description: Stopped executions of this accepted request, oldest first; absent when none.
@@ -8949,6 +8979,7 @@ components:
           - pending
           - running
           - success
+          - skipped
           - failed
           - cancelled
           - error
@@ -9064,6 +9095,7 @@ components:
                   node_id: *id003
                   keys: *id056
                   failed: *id056
+                  skipped: *id056
                   elapsed_seconds:
                     type: number
                   calls: *id056
@@ -9444,6 +9476,9 @@ components:
       - trigger_reason
       - cancellation
       properties:
+        skip_reason:
+          type: string
+          description: Common explicit reason of an all-skipped run; absent when reasons differ.
         previous_attempts:
           type: array
           description: Stopped executions of this accepted request, oldest first; absent when none.
@@ -9760,6 +9795,7 @@ components:
         status:
           enum:
           - success
+          - skipped
           - failed
         created_at:
           type: string

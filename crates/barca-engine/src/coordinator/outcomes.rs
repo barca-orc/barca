@@ -4,6 +4,18 @@
 use super::*;
 
 impl Coordinator {
+    pub(crate) fn on_item_skipped(&mut self, id: ItemId, reason: String, elapsed: f64) {
+        self.executing.remove(&id);
+        self.skipped.insert(id);
+        self.explicit_skips.insert(id, (reason, elapsed));
+        self.call_reported(id);
+        self.cascade_failure(id);
+    }
+
+    pub fn explicit_skips(&self) -> &HashMap<ItemId, (String, f64)> {
+        &self.explicit_skips
+    }
+
     /// Retain the original cause even if a later attempt succeeds or fails differently.
     pub(crate) fn record_worker_failure(&mut self, item: ItemId, error: &str) {
         if self.worker_failures.len() < barca_model::run_explain::WORKER_FAILURE_LIMIT {

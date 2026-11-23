@@ -173,7 +173,10 @@ async fn follow_events(follow: &mut Follow<'_>, args: LogsArgs<'_>) -> Result<St
                 return Ok(status);
             }
             Followed::Event(
-                RunEvent::RunStarted { .. } | RunEvent::Line { .. } | RunEvent::StepFinished { .. },
+                RunEvent::RunStarted { .. }
+                | RunEvent::Line { .. }
+                | RunEvent::StepFinished { .. }
+                | RunEvent::StepSkipped { .. },
             ) => {}
         }
     }

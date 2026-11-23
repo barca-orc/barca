@@ -3,4 +3,4 @@
 /**
  * How a run ended, the `status` of its [`Outcome`].
  */
-export type OutcomeStatus = "success" | "failed" | "cancelled" | "error";
+export type OutcomeStatus = "success" | "skipped" | "failed" | "cancelled" | "error";

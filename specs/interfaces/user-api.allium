@@ -192,6 +192,9 @@ surface PythonDecorators {
         -- This overview does not enumerate every argument or define CLI wire messages.
 }
 
+-- Public Python exception: barca.Skip(reason: str), raised from task user code only.
+-- No retry or produced/cacheable artifact; explicit skip reason belongs to the attempt.
+-- Runtime transitions and mixed-run aggregation: ../behavior/execution.md, Explicit task skips.
 -- Cached-only reads (experimental, 0.47): get(cached_only=True) reads disk then store;
 -- get(cached_only="local") makes no store calls. Neither imports pipeline source or
 -- executes/enqueues/publishes work. CacheMiss extends BarcaError and exposes outcomes

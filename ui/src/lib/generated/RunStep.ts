@@ -5,7 +5,7 @@
  * steps have no new materialization row, so they are not listed (a live run on a server also
  * lists the `cached` steps it has reported); nor are steps a failure skipped.
  */
-export type RunStep = { node_id: string, status: string, elapsed_seconds: number | null,
+export type RunStep = { node_id: string, status: string, skip_reason?: string, elapsed_seconds: number | null,
 /**
  * A failed step's error as recorded: for a Python exception, `Type: message` and the
  * traceback's frames.
