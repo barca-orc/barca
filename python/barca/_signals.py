@@ -1,24 +1,14 @@
 """What a worker does with the signals it gets: Ctrl-C (SIGINT) and the coordinator's SIGTERM.
 
-The terminal sends Ctrl-C to every process of the job, and the coordinator, which gets it too,
-decides what it means for the run and stops the workers. A worker acts on it only while a
-step's function runs:
+The coordinator owns terminal Ctrl-C and cancellation. Workers and their inherited
+subprocesses stay in private process groups, which it stops with SIGCONT, SIGTERM and,
+after a grace period, SIGKILL. Server workers can therefore drain after the first signal.
+Local commands cancel promptly, but a step cannot rely on receiving KeyboardInterrupt or
+running its except/finally code before shutdown.
 
-- While the interpreter starts and barca is imported: it does not get the signal at all.
-  The coordinator starts a worker in a process group of its own
-  (`helper_proc::start_outside_the_job`), since nothing written here can keep an interrupt
-  that arrives that early from ending the process with a traceback. `join_the_job` moves
-  the worker into the coordinator's group once the handler below is installed. Server
-  workers stay in their own group: the server owns Ctrl-C and drains their runs first.
-- While a step's module is imported, between steps, and while a result or an error is
-  reported: nothing happens (`ctrl_c_does_nothing`). An interrupt there used to end the
-  worker with a `KeyboardInterrupt` traceback of barca's own frames or of the module's
-  import, which tells the user nothing.
-- While a step runs, from loading its inputs to writing its result: `KeyboardInterrupt` is
-  raised in the step (`ctrl_c_interrupts_the_step`), as before. The worker reports the step
-  as interrupted and the coordinator leaves it out of the cancelled run. The coordinator's
-  SIGTERM follows the interrupt and ends the worker at once (`exit_on_sigterm`), so a step
-  cannot count on its `except` or `finally` code running.
+A SIGINT delivered directly to a worker is ignored during imports and between steps;
+while the step body runs it raises KeyboardInterrupt. The coordinator's SIGTERM handler
+flushes progress output and exits immediately.
 
 One exception to all of it: a barca that was itself started with SIGINT ignored (`nohup`, a
 background job of a non-interactive shell, cron, some supervisors). Its workers inherit that,
@@ -79,9 +69,10 @@ def ctrl_c_interrupts_the_step() -> None:
 
 
 def join_the_job() -> None:
-    """Move this worker into the coordinator's process group, where the terminal's Ctrl-C is
-    delivered. Called once `ctrl_c_does_nothing` is in place; until then the worker is in a
-    group of its own, out of the terminal's reach."""
+    """Compatibility with older coordinators that asked workers to join their job.
+
+    Current coordinators omit BARCA_JOB_PGID so workers keep their private groups.
+    """
     job = os.environ.get("BARCA_JOB_PGID")
     if not job:
         return  # server worker (keeps its own group), or a worker started by hand

@@ -14,6 +14,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Cancel, drain timeout, forced stop and local SIGTERM now stop worker process groups, including inherited subprocesses and suspended `parallel()` callers. Children that ignore TERM are killed after the grace period even when their worker has exited (#935).
+
 - Cancelling a run just requeued by server drain durably removes it so a restart cannot run it. Hanging partition-key and `batches_by` resolvers stop on cancellation, with a bounded subprocess shutdown (#936).
 
 - Record a successful retry after a server requeue even when the same run id and run hash already have a failed step. Earlier failure evidence remains in history, and the successful result is cached (#929).

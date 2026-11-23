@@ -534,8 +534,9 @@ fn the_sweep_removes_the_branch_results_of_dead_runs_only() {
 }
 
 fn sh(script: &str) -> Command {
+    use std::os::unix::process::CommandExt;
     let mut cmd = Command::new("sh");
-    cmd.args(["-c", script]);
+    cmd.args(["-c", script]).process_group(0);
     cmd
 }
 
@@ -821,6 +822,8 @@ fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
                 "barca-shutdown",
             ])
             .arg(&ready);
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
             readiness.push(ready);
             let child = barca_proc::helper_proc::spawn_std(&mut cmd).unwrap();
             pids.push(child.id());
@@ -1224,4 +1227,36 @@ fn a_batched_nodes_step_says_it_takes_keys_with_or_without_a_call() {
             .get("batched")
             .is_none()
     );
+}
+
+/// SIGCONT must let a stopped leader handle TERM rather than only dying at KILL.
+#[cfg(unix)]
+#[test]
+fn shutdown_resumes_a_stopped_worker_before_term() {
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new("python3");
+    cmd.args([
+        "-c",
+        "import signal,time; signal.signal(signal.SIGTERM, lambda *_: exit(0)); print('ready', flush=True); time.sleep(60)",
+    ])
+    .process_group(0)
+    .stdout(Stdio::piped());
+    let mut child = barca_proc::helper_proc::spawn_std(&mut cmd).unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "ready");
+    unsafe {
+        assert_eq!(libc::kill(child.id() as i32, libc::SIGSTOP), 0);
+        let mut status = 0;
+        assert_eq!(
+            libc::waitpid(child.id() as i32, &mut status, libc::WUNTRACED),
+            child.id() as i32
+        );
+        assert!(libc::WIFSTOPPED(status));
+    }
+    graceful_kill(&mut child);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
 }

@@ -97,6 +97,18 @@ retained, and replay of that success does not append another row (#929). Conform
 [terminal persistence tests](../../crates/barca-run/src/persist.rs). This is not an exactly-once promise for
 user side effects or external sinks.
 
+Workers retain private process groups from spawn to shutdown. Cancellation, drain timeout,
+forced stop and normal pool teardown resume each group (including stopped `parallel()`
+callers), send TERM, allow one shared 200 ms grace window, then KILL remaining group members.
+Leader exit does not end descendant ownership. Retirement and replacement cleanup is awaited
+before pool shutdown completes. Local terminal SIGINT and coordinator SIGTERM still cancel
+with exit 130; workers do not receive terminal SIGINT directly. Deliberately daemonized,
+re-sessioned or re-grouped children are outside this boundary and require launcher cleanup.
+Conformance: [worker descendants](../../python/tests/test_worker_descendants.py)
+(`test_shutdown_leaves_no_worker_descendants`) exercises real PIDs, TERM-ignoring children,
+stopped parallel callers, unrelated processes and a subsequent server run; the existing
+[Ctrl-C tests](../../python/tests/test_ctrl_c_worker.py) cover startup and idle workers.
+
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that
 finished before the cancellation stays recorded even when its upload to a store was abandoned;
 the upload is kept pending ([upload receipts](../interfaces/artifact-upload-receipts.md), #1002). A server records
