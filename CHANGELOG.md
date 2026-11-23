@@ -30,6 +30,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Preserve the original partition, refresh, batch, pause and tick scope when replaying a run; retry task followers using their task kind (#938).
+
 - The UI’s Run button for tasks now brings upstream assets up to date using the cache, like `barca run`, instead of implicitly forcing `--refresh-all` and recomputing Manual upstreams (#937).
 
 - Cancel live server-owned runs directly from run-list rows, running and queued entries, run notices, and running badges. Unknown write access keeps Cancel visible but disabled with an explanation (#933).

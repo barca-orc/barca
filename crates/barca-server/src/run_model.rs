@@ -116,6 +116,37 @@ pub(crate) struct RunSpec {
 }
 
 impl RunSpec {
+    pub fn scope(&self, default_files: &[String]) -> barca_service::run_scope::RunScope {
+        let (refresh, refresh_all, cascade) = match &self.policy {
+            CachePolicy::CacheAware => (Vec::new(), false, false),
+            CachePolicy::RefreshAll { .. } => (Vec::new(), true, false),
+            CachePolicy::RefreshSelective { names, cascade, .. } => {
+                (names.clone(), false, *cascade)
+            }
+        };
+        barca_service::run_scope::RunScope {
+            command: self.command.as_str().to_owned(),
+            targets: self.targets.clone(),
+            files: if self.files.is_empty() {
+                default_files.to_vec()
+            } else {
+                self.files.clone()
+            },
+            refresh,
+            refresh_all,
+            cascade,
+            partition: self.partition.as_ref().map(|p| p.to_json().to_string()),
+            batch: self.batch.clone(),
+            pin_manual: self.rules.pin_manual,
+            hold_paused: self.rules.hold_paused,
+            allow_paused_targets: self.rules.allow_paused_targets,
+            tick: self.rules.tick.clone(),
+            values: self.values,
+            timeout: self.timeout,
+            queue: self.queue.as_str().to_owned(),
+        }
+    }
+
     /// A run started over HTTP.
     pub fn api(command: RunCommand, targets: Vec<String>, nodes: Vec<String>) -> Self {
         Self {

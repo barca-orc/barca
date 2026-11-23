@@ -73,6 +73,7 @@ pub async fn admit_as(
         barca_service::serve::record_cached_run(
             &state.config.resolved.db_path,
             barca_service::serve::UnstartedRun {
+                scope: Some(&spec.scope(&state.config.files)),
                 run_id: &run_id,
                 command: spec.command.as_str(),
                 files: super::run_files(state, &spec.files),
@@ -368,6 +369,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         let _ = barca_service::serve::record_unstarted_run(
             &cfg.db_path,
             barca_service::serve::UnstartedRun {
+                scope: Some(&spec.scope(&state.config.files)),
                 run_id,
                 command: spec.command.as_str(),
                 files,

@@ -686,6 +686,7 @@ mod tests {
                 job: Some("p.py:a"),
                 trigger: &barca_model::trigger::Trigger::default(),
                 traced: false,
+                scope: None,
             },
         )
         .await

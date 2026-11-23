@@ -41,18 +41,18 @@ describe('log filters', () => {
   })
 })
 
-const run = { command: 'get', target: 'a,b', files: [] } as Pick<RunView, 'command' | 'target' | 'files'>
+const run = { run_id: 'original' }
 
 describe('re-run requests', () => {
-  it('re-runs the same target cache-aware, or refreshed', () => {
-    expect(rerunFailedRequest(run)).toEqual({ command: 'get', targets: ['a', 'b'], files: [] })
-    expect(rerunAllRequest({ ...run, target: null })).toEqual({ command: 'get', targets: [], files: [], refresh_all: true })
+  it('references the recorded request instead of inferring scope from its display target', () => {
+    expect(rerunFailedRequest(run)).toEqual({ runId: 'original', body: { cache: 'cached', step: null } })
+    expect(rerunAllRequest(run)).toEqual({ runId: 'original', body: { cache: 'refresh_all', step: null } })
   })
-  it('retries one step, one key of a partitioned node by its key', () => {
-    expect(splitStepId('p.py:r[region=amer]')).toEqual({ node: 'p.py:r', key: 'region=amer' })
-    expect(retryStepRequest(run, 'p.py:r[region=amer]')).toEqual({ command: 'get', targets: ['p.py:r'], files: [], partition: 'region=amer' })
+  it('passes the exact step identity to the server, including compound partition keys', () => {
+    const step = 'p.py:r[region=amer,day=1]'
+    expect(retryStepRequest(run, step)).toEqual({ runId: 'original', body: { cache: 'cached', step } })
+    expect(splitStepId(step)).toEqual({ node: 'p.py:r', key: 'region=amer,day=1' })
     expect(partitionArg('region=amer,day=1')).toBe('{"region":"amer","day":"1"}')
-    expect(retryStepRequest({ ...run, command: 'run', target: 'publish' }, 'p.py:publish').command).toBe('run')
   })
 })
 

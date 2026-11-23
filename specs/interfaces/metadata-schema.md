@@ -128,6 +128,10 @@ hash; legacy rows default to 0. See [materialization-digests.md](materialization
 
 ### Additions within format 1
 
+- `runs.scope_json` (TEXT, nullable, 0.47.0): the execution request's scope, recorded with
+  its initial history row and retained after queue deletion. Older rows remain null; replay
+  must refuse to infer their missing options. This is additive within format 1.
+
 Format 1 is additive: a release may add a nullable column or a table to it without a new
 version number. A format-1 database written by an earlier release that lacks one gets the
 same additive migration as a legacy database, in one transaction, keeping every row; an older

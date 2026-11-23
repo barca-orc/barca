@@ -49,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         // The run contract's reads; the middleware leaves the other methods alone.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
+        .route("/runs/{run_id}/replay", post(runs::replay_run))
         .route("/runs/{run_id}/logs", get(runs::logs))
         .route("/logs/{run_id}", get(inspect::logs))
         // The run queue: what waits to start, and pausing it.

@@ -421,3 +421,13 @@ still hard-refreshes the cone including Manual nodes. Paused inputs stay held un
 options; no readable result means failure instead of computing a paused input. `allow_paused`
 permits named paused targets only. Whole-file/project runs skip paused targets. Dry runs and
 queue recovery preserve the same rules.
+
+### Replay a run
+
+`POST /runs/{run_id}/replay` accepts `cache` (`original`, the default; `cached`; or
+`refresh_all`) and optional `step` (an exact recorded step id). It preserves the recorded
+partition scope, batch overrides, Manual/pause rules and tick semantics, with a new run id,
+caller identity and refresh cutoff. Selecting one step makes it the replay root, so an
+explicitly retried task executes while upstream tasks retain tick freshness. Run detail
+exposes `scope`; older history without it returns 409 instead of guessing missing options.
+The response is the same 202 run handle as `POST /runs`.

@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 14. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 15. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -22,6 +22,16 @@ interface contracts.
 ## Rules and transitions
 
 ### Requests and computations
+
+A recorded run retains its execution scope: command, targets, files, partition selection,
+refresh selection/cascade, batch overrides, Manual/pause rules and tick context. Replay uses
+that scope with a new identity and acceptance time. Cache policy can remain original, become
+cache-aware, or refresh the whole selected cone. A single-step retry narrows to that recorded
+node/key and resolves its current kind, including task followers of scheduled sensors. It
+must not expand a partition-scoped request to all keys. Narrowing a tick selects the retried
+step as its root: an explicitly retried task executes, while other upstream tasks retain
+tick freshness. Older history without scope cannot
+be replayed by guessing from display labels. Conformance: `test_server_replay.py`.
 
 Cancellation authority belongs to the server's live registry, never to a PID read from
 history. Run detail exposes `control.cancellable`, a descriptive owner, and a reason when

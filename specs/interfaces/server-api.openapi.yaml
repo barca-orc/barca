@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '35'
+  version: '36'
   description: 'Normative current wire contract; specification version 35 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
@@ -3708,6 +3708,59 @@ paths:
         required: true
         schema:
           type: string
+  /runs/{run_id}/replay:
+    post:
+      parameters:
+      - name: run_id
+        in: path
+        required: true
+        schema: {type: string}
+      summary: Replay a recorded request with its original scope
+      operationId: post_runs_run_id_replay
+      description: Preserves partition selection, batching, Manual/pause and tick rules. A new
+        API identity and refresh cutoff are allocated. Older runs without scope return 409.
+        A step must belong to the original run; its current node kind determines get or run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/ReplayRequest'}
+      responses:
+        '202':
+          description: Replay accepted
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RunHandle'}
+        '400':
+          description: Invalid replay or unavailable target
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '401':
+          description: Unauthorized
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '403':
+          description: Read-only server
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '404':
+          description: Run not found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '409':
+          description: Original request scope unavailable
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500':
+          description: Infrastructure failure
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /runs/{run_id}/events:
     get:
       summary: Stream a run's events
@@ -8939,12 +8992,40 @@ components:
         reason:
           type: [string, 'null']
           description: Why cancellation is unavailable, including where to stop or reconcile an unowned run; null when cancellable.
+    ReplayRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        cache: {type: string, enum: [original, cached, refresh_all], default: original}
+        step: {type: [string, 'null'], default: null}
+    RunScope:
+      type: object
+      additionalProperties: false
+      required: [command, targets, files, refresh, refresh_all, cascade, partition, batch,
+        pin_manual, hold_paused, allow_paused_targets, tick, values, timeout, queue]
+      properties:
+        command: {type: string, enum: [get, run]}
+        targets: {type: array, items: {type: string}}
+        files: {type: array, items: {type: string}}
+        refresh: {type: array, items: {type: string}}
+        refresh_all: {type: boolean}
+        cascade: {type: boolean}
+        partition: {type: [string, 'null'], description: Canonical JSON partition selection}
+        batch: {type: array, items: {type: string}}
+        pin_manual: {type: boolean}
+        hold_paused: {type: boolean}
+        allow_paused_targets: {type: boolean}
+        tick: {type: [string, 'null']}
+        values: {type: boolean}
+        timeout: {type: [integer, 'null'], minimum: 0}
+        queue: {type: string, enum: [next, last]}
     RunView:
       type: object
       additionalProperties: false
       description: One run. A finished run is read from the metadata DB, so the answer is the same after
         a restart.
       required:
+      - scope
       - control
       - run_id
       - status
@@ -8977,6 +9058,11 @@ components:
       - steps_page
       - logs
       properties:
+        scope:
+          description: Original execution scope; null for older history or an unstarted run.
+          anyOf:
+          - {$ref: '#/components/schemas/RunScope'}
+          - {type: 'null'}
         control:
           $ref: '#/components/schemas/RunControl'
         skip_reason:

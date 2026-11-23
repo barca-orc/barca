@@ -605,12 +605,36 @@ impl RunControl {
     }
 }
 
+/// How a replay changes the original request's cache policy.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayCache {
+    #[default]
+    Original,
+    Cached,
+    RefreshAll,
+}
+
+/// Replay a recorded request, optionally narrowed to one recorded step.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRequest {
+    #[serde(default)]
+    pub cache: ReplayCache,
+    #[serde(default)]
+    pub step: Option<String>,
+}
+
 /// One run as `GET /runs/{run_id}` shows it: what started it, where it is, and, once it has
 /// finished, its [`Outcome`]. A finished run is read from the metadata DB, so it is the same
 /// after the server restarts.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunView {
+    /// Exact request; null for older history whose scope cannot be replayed safely.
+    pub scope: Option<crate::run_scope::RunScope>,
     pub control: RunControl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]

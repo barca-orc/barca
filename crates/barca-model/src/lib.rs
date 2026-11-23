@@ -40,6 +40,7 @@ pub mod node_estimate;
 pub mod process;
 pub mod reports;
 pub mod run_explain;
+pub mod run_scope;
 #[doc(hidden)]
 pub mod source_observation;
 // The lexer the source-scanning guards of every crate share (layering, write boundary, status
