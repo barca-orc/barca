@@ -536,7 +536,8 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     assert started(project, "b") == 2, "the stopped attempt and the resumed one"
 
 
-def test_requeued_failed_key_records_success_under_the_same_hash(project, serve):
+@pytest.mark.parametrize("refresh_all", [False, True])
+def test_requeued_failed_key_records_success_under_the_same_hash(project, serve, refresh_all):
     """#929: failure evidence from a stopped attempt must not suppress its retry's success."""
     from .served import snapshot
 
@@ -557,7 +558,9 @@ def item(key: str) -> int:
     return 42
 """)
     server = serve("--no-schedule", "--drain-timeout", "1")
-    run_id = server.submit("item", "get")["run_id"]
+    run_id = server.post(
+        "/runs", {"command": "get", "targets": ["item"], "refresh_all": refresh_all}
+    )["run_id"]
     wait_until(lambda: started(project, "retry") and started(project, "held"), "both keys to start")
     assert server.stop() == 0, server.stderr
     assert "stopped and put back in the queue" in server.stderr
