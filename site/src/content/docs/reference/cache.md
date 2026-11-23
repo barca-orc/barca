@@ -296,6 +296,15 @@ reconstruction hooks are refused before unpickling, with infra reason
 use an artifact path or a data format such as parquet. Path access still returns the verified
 artifact. No fallback imports project source or runs a normal get. Ordinary get's pickle
 reader is unchanged.
+### Refreshes across a server restart
+
+`--refresh-all` and `--refresh` require a matching successful materialization recorded at or
+after the request was accepted. The acceptance time survives a drain/restart: completed
+assets and partition keys are reused, including results another run computed after acceptance.
+A new request gets a new acceptance time. Older results or changed run hashes still compute;
+selective cascade and cutoff rules are unchanged. A fully cached step satisfied by that
+boundary has reason `refreshed_by_this_run`. Tasks outside ticks can repeat, including side
+effects; this is not an exactly-once guarantee. See [Operating barca serve](/reference/serve-ops/).
 
 See also: [Disk Use](/reference/disk/), [Where Things Live](/reference/layout/), [Remote Storage](/reference/remote-storage/), [Output Formats and Types](/reference/types/),
 [Partitions](/reference/partitions/), [barca status](/reference/cli/status/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [CLI Contract](/reference/cli-contract/).

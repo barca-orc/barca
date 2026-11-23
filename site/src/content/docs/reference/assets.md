@@ -595,6 +595,11 @@ A source defining dynamic partition keys must supply a list or dictionary when i
 `(True, etag)` to request comparison should now return `etag` alone. A boolean payload can
 be wrapped in a dictionary for content-based comparison.
 
+A sensor returning `(True, value)` with a non-`None` value prints a warning once per node
+per CLI or server process: it always counts as changed. Return the value alone to compare
+its content, or `(True, None)` to signal a change without data and silence this warning.
+Successive server polls and replacement workers do not repeat it.
+
 `barca get <sensor> pipeline.py` observes one sensor. `barca get pipeline.py` (no target) observes
 every sensor, including one nothing depends on: a sensor is something `get` can target, and
 observing is read-only. Tasks are the only nodes a bare `get` skips.

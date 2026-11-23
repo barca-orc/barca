@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 7. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 8. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -338,3 +338,20 @@ The concurrent-version ordering gap remains documented in [freshness](freshness.
 Ordered current selection, shared computation ownership and bounded full-domain retained
 state are approved requirements in [ownership](current-state-and-execution.md), not proved
 by the current cache engine or its warm incremental benchmarks.
+
+### Refresh acceptance boundary (#928)
+
+A refresh-all or selective refresh retains its original acceptance time across queue attempts.
+For each global asset or partition key selected by refresh/cascade, a success for its current
+run hash recorded at or after acceptance satisfies refresh. A result another run produced after
+acceptance qualifies. Failed rows, old hashes and earlier results do not. Cascade roots remain
+remembered even when their refresh is already satisfied; cutoff propagation stays unchanged.
+A fully cached step satisfied by this rule reports `refreshed_by_this_run`.
+
+Success timestamps preserve fractional seconds; legacy whole-second timestamps are accepted
+without rounding acceptance down. Tasks outside ticks and sensors can repeat after restart;
+this is not an exactly-once promise for side effects.
+
+Conformance: `python/tests/test_refresh_restart.py` drives real drain/restart requests and
+new CLI refreshes; `db::cache_reader::observation_tests::refresh_acceptance_is_precise_and_requires_matching_success`
+checks same-second before/equal/after, legacy timestamps, hash mismatch and failure controls.

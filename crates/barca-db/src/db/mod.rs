@@ -1234,6 +1234,7 @@ async fn connect_write(path: &str) -> Result<(libsql::Database, libsql::Connecti
     crate::db::schema::ddl::check(&conn)
         .await
         .map_err(|e| unusable_at(e, path))?;
+    schema::writer::install(&conn).await?;
     Ok((db, conn))
 }
 

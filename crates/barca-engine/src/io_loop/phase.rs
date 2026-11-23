@@ -261,13 +261,11 @@ impl WorkerPool {
                             // The attempt's traceback is part of the step's stderr, as Python
                             // would have printed it. Recorded, not echoed: the failure line
                             // says it already.
-                            for line in traceback_lines(&error_type, &message, &traceback) {
-                                ev(RunEvent::log(
-                                    node_id.clone(),
-                                    line,
-                                    barca_model::LogStream::Stderr,
-                                ));
-                            }
+                            ev(RunEvent::log(
+                                node_id.clone(),
+                                traceback_lines(&error_type, &message, &traceback).join("\n"),
+                                barca_model::LogStream::Stderr,
+                            ));
                             ev(RunEvent::StepFinished {
                                 node_id: node_id.clone(),
                                 ok: false,
@@ -276,6 +274,9 @@ impl WorkerPool {
                                 error: Some(error.clone()),
                                 import_seconds,
                             });
+                        }
+                        if retry_fresh {
+                            coord.record_worker_failure(item_id, &error);
                         }
                         if retry_fresh && coord.grant_fresh_retry(item_id) {
                             barca_model::errln!(
@@ -307,9 +308,7 @@ impl WorkerPool {
                             self.failures_survived += 1;
                         } else if let Some(mut handle) = self.workers.remove(&worker_id) {
                             Self::return_leases(&mut handle, coord);
-                            tokio::task::spawn_blocking(move || {
-                                graceful_kill(&mut handle.child);
-                            });
+                            self.reap(handle.child, Some(handle.cmd_tx));
                         }
 
                         self.resume_frozen(coord).await;
@@ -518,10 +517,7 @@ impl WorkerPool {
                             self.drop_branch_results(in_flight);
                         }
                         Self::return_leases(&mut handle, coord);
-                        tokio::task::spawn_blocking(move || {
-                            let _ = handle.child.kill();
-                            let _ = handle.child.wait();
-                        });
+                        self.reap(handle.child, Some(handle.cmd_tx));
                     } else if let Some(at) = self
                         .frozen
                         .iter()
@@ -560,10 +556,7 @@ impl WorkerPool {
                         while let Some(item_id) = fw.rest.pop_back() {
                             coord.return_leased(item_id);
                         }
-                        tokio::task::spawn_blocking(move || {
-                            let _ = fw.child.kill();
-                            let _ = fw.child.wait();
-                        });
+                        self.reap(fw.child, Some(fw.cmd_tx));
                     }
                     self.resume_frozen(coord).await;
                     self.assign_ready(coord, cost, cancel).await;

@@ -189,6 +189,14 @@ pub async fn mark_running(db_path: &str, run_id: &str) -> Result<(), BarcaError>
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
+    // No writer has started yet. A killed attempt's spool was committed by requeue;
+    // remove it here as well so a crash immediately after that commit is recoverable.
+    let spool = barca_db::run_logs::spool_path(db_path, run_id);
+    match std::fs::remove_file(spool) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
+    }
     db::run_queue::mark_running(&conn, run_id)
         .await
         .map_err(failed("marking a run"))?;
@@ -229,9 +237,9 @@ pub async fn remove(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
 }
 
 /// Put a started run back in the queue, in its place, to start again from the beginning under
-/// the same run id: the stopping server stopped it. Its `runs` row and recorded lines are
-/// removed, so the next attempt records them afresh; the steps it finished keep their
-/// `materializations` rows (the cache the next attempt reads them from).
+/// the same run id: the stopping server stopped it. The stopped execution and its logs and
+/// materializations become a linked attempt record, preserving all diagnostics and cache
+/// timestamps. The queue and archive change in one transaction.
 ///
 /// `spec`, when given, replaces the row's description (the server counts there how often a
 /// run was put back after a drain was killed).
@@ -248,12 +256,22 @@ pub async fn requeue(db_path: &str, run_id: &str, spec: Option<&str>) -> Result<
                 .await
                 .map_err(failed("requeueing a run"))?;
         }
-        db::runs::delete_run(&conn, run_id)
+        db::runs::archive_attempt(&conn, db_path, run_id).await?;
+        Ok(())
+    })
+    .await
+}
+
+/// The predecessor's queue ownership is authoritative even when its host/PID cannot be
+/// checked here. Never overwrite a completed outcome. Remove the queue row atomically.
+pub async fn interrupt_predecessor(db_path: &str, run_id: &str) -> Result<(), BarcaError> {
+    let _g = db::db_guard().await;
+    let (_db, conn) = db::open_conn(db_path).await?;
+    db::with_tx(&conn, "BEGIN IMMEDIATE", "interrupt predecessor", async {
+        db::runs::interrupt_predecessor(&conn, db_path, run_id).await?;
+        db::run_queue::delete(&conn, run_id)
             .await
-            .map_err(failed("forgetting the stopped attempt"))?;
-        db::runs::delete_logs(&conn, run_id)
-            .await
-            .map_err(failed("forgetting the stopped attempt's lines"))?;
+            .map_err(failed("removing predecessor"))?;
         Ok(())
     })
     .await
@@ -417,7 +435,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_requeued_run_keeps_its_place_and_forgets_its_stopped_attempt() {
+    async fn a_requeued_run_keeps_its_place_and_preserves_its_stopped_attempt() {
         let (_dir, path) = fresh().await;
         push(&path, "first", "{}", "t").await.unwrap();
         push(&path, "second", "{}", "t").await.unwrap();
@@ -437,6 +455,17 @@ mod tests {
         )
         .await
         .unwrap();
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            conn.execute(
+                "ALTER TABLE runs ADD COLUMN future_attempt_diagnostics TEXT",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute(r#"UPDATE runs SET future_attempt_diagnostics = '[{"node":"bad"}]', plan_reasons = '{"test":1}', cancellation = '{"started":true}' WHERE run_id = 'first'"#, ()).await.unwrap();
+            conn.execute("INSERT INTO materializations (node_id, run_id, run_hash, status, created_at) VALUES ('p.py:done', 'first', 'hash', 'success', '2026-11-22T12:00:00.123Z')", ()).await.unwrap();
+        }
         requeue(&path, "first", Some("{\"again\":1}"))
             .await
             .unwrap();
@@ -445,7 +474,102 @@ mod tests {
         assert_eq!(rows[0].state, QueueState::Queued);
         assert_eq!(rows[0].spec, "{\"again\":1}");
         assert!(db::get_run(&path, "first").await.unwrap().is_none());
-        assert!(db::get_logs(&path, "first").await.unwrap().is_empty());
+        assert!(
+            !db::get_logs(&path, "first-attempt-1")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        // Retry after a crash between archive commit and startup is idempotent.
+        requeue(&path, "first", None).await.unwrap();
+        assert_eq!(
+            db::runs::previous_attempts(&path, "first")
+                .await
+                .unwrap()
+                .len(),
+            1
+        );
+        let archived = db::get_run(&path, "first-attempt-1")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(archived.parent_run_id.as_deref(), Some("first"));
+        assert_eq!(
+            archived.stop_reason.as_deref(),
+            Some("server restart (requeued)")
+        );
+        assert_eq!(archived.status, "interrupted");
+        assert_eq!(db::count_runs(&path).await.unwrap(), 0);
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            let mut rows = conn.query("SELECT future_attempt_diagnostics, plan_reasons, cancellation FROM runs WHERE run_id = 'first-attempt-1'", ()).await.unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), r#"[{"node":"bad"}]"#);
+            assert_eq!(row.get::<String>(1).unwrap(), r#"{"test":1}"#);
+            assert_eq!(row.get::<String>(2).unwrap(), r#"{"started":true}"#);
+            drop(rows);
+            let mut rows = conn
+                .query(
+                    "SELECT run_id, run_hash, created_at FROM materializations",
+                    (),
+                )
+                .await
+                .unwrap();
+            let row = rows.next().await.unwrap().unwrap();
+            assert_eq!(row.get::<String>(0).unwrap(), "first-attempt-1");
+            assert_eq!(row.get::<String>(1).unwrap(), "hash");
+            assert_eq!(row.get::<String>(2).unwrap(), "2026-11-22T12:00:00.123Z");
+        }
+        db::create_run(&path, "first", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        requeue(&path, "first", None).await.unwrap();
+        assert_eq!(
+            db::runs::previous_attempts(&path, "first")
+                .await
+                .unwrap()
+                .len(),
+            2
+        );
+        db::create_run(&path, "first", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        assert_eq!(db::count_runs(&path).await.unwrap(), 1);
+        assert_eq!(db::get_recent_runs(&path, 10).await.unwrap().len(), 1);
+        assert!(db::get_run_steps(&path, "first").await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_failed_archive_rolls_back_the_queue_and_all_evidence() {
+        let (_dir, path) = fresh().await;
+        push(&path, "r", "{}", "accepted").await.unwrap();
+        mark_running(&path, "r").await.unwrap();
+        db::create_run(&path, "r", "get", "[]", None, Some(1))
+            .await
+            .unwrap();
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            conn.execute(
+                "INSERT INTO logs (run_id, node_id, seq, line) VALUES ('r', 'n', 0, 'evidence')",
+                (),
+            )
+            .await
+            .unwrap();
+            conn.execute("CREATE TRIGGER reject_archive BEFORE UPDATE OF run_id ON logs BEGIN SELECT RAISE(ABORT, 'injected archive failure'); END", ()).await.unwrap();
+        }
+        assert!(requeue(&path, "r", Some("changed")).await.is_err());
+        let queue = list(&path).await.unwrap();
+        assert_eq!(queue[0].state, QueueState::Running);
+        assert_eq!(queue[0].spec, "{}");
+        assert_eq!(queue[0].queued_at, "accepted");
+        assert!(db::get_run(&path, "r").await.unwrap().is_some());
+        assert!(
+            db::runs::previous_attempts(&path, "r")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(db::get_logs(&path, "r").await.unwrap()[0].line, "evidence");
     }
 
     #[tokio::test]

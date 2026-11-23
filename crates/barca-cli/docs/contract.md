@@ -134,7 +134,7 @@ stability; the row adds the keys and routes that go with it.
 
 | Item | Why |
 |---|---|
-| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
+| `barca doctor` and its JSON | prerequisite check names and provider-specific identity data may evolve; `project_version` checks the running CLI against the active `pyproject.toml` barca dependency; failed checks exit 3 with the report on stdout and the standard error envelope on stderr. With a server (`--server [<URL>]`, or a configured one without `--local`) it adds the `server`, `server_version`, `server_store`, `server_health`, `server_sources`, `server_scheduler` and `server_posts` checks (new in 0.29.3) |
 | `barca plan` and its JSON | prints the planner's internal phase/stream layout, which changes with scheduling work (`reason` is an object, `{"type": "initial"}` or `{"type": "fan_in", "node_id": ...}`) |
 | `barca serve` and all its flags | the HTTP API and scheduler are young: opt-in project tokens, routes may change. Its run outcomes (`GET /runs/{run_id}`, `run_finished`) and inspection routes (`/list`, `/nodes`, `/history`, `/stats/{name}`, `/assets`) are the CLI's `--json` bodies, built by the same functions, and its errors are this envelope. The older trigger routes (`POST /run`, `/run/{target}`, `/get/{target}`, `DELETE /run/{run_id}`, `GET /status/{run_id}`, `/events/{run_id}`) are deprecated aliases with no scheduled removal; a removal migrates the Python `Client` first and lands as a breaking change in a minor release |
 | `get -o url`, `get --expires`, and `url` / `url_expires_at` in a `_barca_artifact` pointer | new (RFC-0011): signed HTTPS links to results in a cloud store. The URL's form is the cloud's own (SigV4, GCS V4, Azure SAS); `url_expires_at` is RFC 3339 UTC. `get -o url` with no cloud store, or an `--expires` over `7d`, is exit 2; a result missing from the store or credentials that cannot sign is exit 3 |
@@ -844,6 +844,11 @@ barca or its environment failed (metadata DB, workers, the store, I/O); retrying
 `cancelled`: stopped by Ctrl-C (SIGINT) or by SIGTERM (what a supervisor, a CI timeout or
 `docker stop` sends), at any point of a `get` or `run`: while steps run, and
 with an artifact store also while artifacts upload or download or the history is backed up.
+Workers keep private process groups. The coordinator handles terminal Ctrl-C and stops the
+workers and their inherited subprocesses; a step cannot rely on receiving KeyboardInterrupt
+or completing its exception/finally handlers. Stopped callers are resumed before TERM;
+after 200 ms, remaining group members receive KILL. Deliberately daemonized children that
+leave the group need cleanup by their launcher.
 The exit code is 130 whatever the store does: a cancelled run spends at most 10 seconds backing
 its record up, a second Ctrl-C or SIGTERM ends that at once, and a backup that fails then is a
 line on stderr, not exit 3 (`barca docs remote`, "Ctrl-C").
@@ -1054,7 +1059,8 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step served from a pin (`barca docs pins`) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin (`barca docs pins`) has `reason` `pinned`. A cached refresh satisfied by a current-hash success recorded at or after
+  original acceptance has `reason` `refreshed_by_this_run`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`
@@ -4612,6 +4618,11 @@ See `barca docs types` and `specs/interfaces/artifact-formats.md`.
 
 ### Task stdout and logs
 
+From 0.47.0, a multiline stderr write and each failed attempt's traceback occupy one
+entry with embedded newlines in `line`; stdout remains line-oriented. Old records retain
+their original boundaries. `--timestamps` prefixes each entry once. Use
+`barca logs --pretty | less` for a readable pager. JSON keys and types are unchanged.
+
 `logs RUN_ID` is stable. JSON returns an array of `{node_id: string, stream: "stdout" |
 "stderr", ts: string | null, line: string}` objects in recorded order; text returns only the
 lines (`--timestamps` puts each line's `ts` before it). `stream` (additive, 0.29.2) is
@@ -4822,5 +4833,240 @@ normal admission; the read path never imports project code. Static selections, i
 presentation: a larger unselected cache hit returns its usual partition counts, while an
 explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
 results even when stale.
+
+### Retained execution attempts (experimental)
+
+Requeue keeps the original request ID and acceptance time. `history RUN_ID --json` adds
+`run.previous_attempts` when earlier executions exist: entries contain `run_id`, a one-based
+`attempt`, and `stop_reason`. Reading an archived execution adds `parent_run_id`,
+`run_attempt` and `stop_reason`. Run-list counts exclude archived executions.
+`logs RUN_ID` concatenates executions with stderr boundary notes; `logs -f --local` waits
+while queue ownership shows the request will resume. Step/stream filters also apply to notes.
+
+<!-- BEGIN GENERATED schema history_requeued -->
+| Key | Type | Present |
+|---|---|---|
+| `explanation` | object | always |
+| `explanation.attempts` | string | always |
+| `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | integer | always |
+| `explanation.counts.attempts_line` | string | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | integer | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | integer | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | integer | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
+| `explanation.progress` | null | always |
+| `explanation.requested_by` | string | always |
+| `explanation.slowest` | array | always |
+| `explanation.slowest[]` | object | always |
+| `explanation.slowest[].keys` | integer | always |
+| `explanation.slowest[].node_id` | string | always |
+| `explanation.slowest[].seconds` | number | always |
+| `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
+| `explanation.target_outcomes` | array | always |
+| `explanation.target_outcomes[]` | string | always |
+| `explanation.targets` | array | always |
+| `explanation.targets[]` | string | always |
+| `explanation.why` | object | always |
+| `explanation.why.groups` | array | always |
+| `explanation.why.groups[]` | object | always |
+| `explanation.why.groups[].category` | string | always |
+| `explanation.why.groups[].label` | string | always |
+| `explanation.why.groups[].rows` | array | always |
+| `explanation.why.groups[].rows[]` | object | always |
+| `explanation.why.groups[].rows[].counts` | string | always |
+| `explanation.why.groups[].rows[].example` | string | always |
+| `explanation.why.groups[].rows[].example_text` | string | always |
+| `explanation.why.groups[].rows[].line` | string | always |
+| `explanation.why.groups[].rows[].nodes` | integer | always |
+| `explanation.why.groups[].rows[].share` | number | always |
+| `explanation.why.groups[].rows[].steps` | integer | always |
+| `explanation.why.groups[].rows[].subject` | null | always |
+| `explanation.why.groups[].steps` | integer | always |
+| `explanation.why.headline` | string | always |
+| `explanation.why.omitted` | integer | always |
+| `explanation.why.partial` | boolean | always |
+| `hint` | string | always |
+| `run` | object | always |
+| `run.attempts` | integer | always |
+| `run.cancellation` | null | always |
+| `run.client_run_id` | null | always |
+| `run.command` | string | always |
+| `run.elapsed_seconds` | number | always |
+| `run.failure` | object | always |
+| `run.failure.error` | string | always |
+| `run.failure.node` | string | always |
+| `run.files` | array | always |
+| `run.files[]` | string | always |
+| `run.finished_at` | string | always |
+| `run.job` | string | always |
+| `run.plan_reasons` | object | always |
+| `run.plan_reasons.nodes` | integer | always |
+| `run.plan_reasons.omitted` | integer | always |
+| `run.plan_reasons.reasons` | array | always |
+| `run.plan_reasons.reasons[]` | object | always |
+| `run.plan_reasons.reasons[].category` | string | always |
+| `run.plan_reasons.reasons[].example` | string | always |
+| `run.plan_reasons.reasons[].nodes` | integer | always |
+| `run.plan_reasons.reasons[].steps` | integer | always |
+| `run.plan_reasons.reasons[].subject` | null | always |
+| `run.plan_reasons.steps` | integer | always |
+| `run.previous_attempts` | array | always |
+| `run.previous_attempts[]` | object | always |
+| `run.previous_attempts[].attempt` | integer | always |
+| `run.previous_attempts[].run_id` | string | always |
+| `run.previous_attempts[].stop_reason` | string | always |
+| `run.principal` | null | always |
+| `run.retries` | integer | always |
+| `run.run_id` | string | always |
+| `run.schedule_id` | null | always |
+| `run.scheduled_at` | null | always |
+| `run.started_at` | string | always |
+| `run.status` | string | always |
+| `run.steps_cached` | integer | always |
+| `run.steps_executed` | integer | always |
+| `run.steps_total` | integer | always |
+| `run.target` | string | always |
+| `run.trigger_reason` | null | always |
+| `run.triggered_by` | string | always |
+| `steps` | array | always |
+| `steps[]` | object | always |
+| `steps[].artifact_format` | null \| string | always |
+| `steps[].artifact_path` | null \| string | always |
+| `steps[].artifact_size_bytes` | integer \| null | always |
+| `steps[].attempts` | integer | always |
+| `steps[].batch` | null | always |
+| `steps[].cpu_seconds` | null \| number | always |
+| `steps[].elapsed_seconds` | null \| number | always |
+| `steps[].error` | null \| string | always |
+| `steps[].error_message` | null \| string | always |
+| `steps[].error_phase` | null \| string | always |
+| `steps[].error_traceback` | null \| string | always |
+| `steps[].error_type` | null \| string | always |
+| `steps[].max_rss_bytes` | integer \| null | always |
+| `steps[].node_id` | string | always |
+| `steps[].output_tail` | array \| null | always |
+| `steps[].partition_key` | null | always |
+| `steps[].rows` | null | always |
+| `steps[].run_hash` | string | always |
+| `steps[].sink_seconds` | null | always |
+| `steps[].status` | string | always |
+| `steps[].worker_exit` | null | always |
+| `steps_page` | object | always |
+| `steps_page.nodes` | array | always |
+| `steps_page.nodes[]` | object | always |
+| `steps_page.nodes[].calls` | integer | always |
+| `steps_page.nodes[].elapsed_seconds` | number | always |
+| `steps_page.nodes[].failed` | integer | always |
+| `steps_page.nodes[].keys` | integer | always |
+| `steps_page.nodes[].node_id` | string | always |
+| `steps_page.nodes[].status` | string | always |
+| `steps_page.total` | integer | always |
+| `steps_page.truncated` | boolean | always |
+<!-- END GENERATED schema history_requeued -->
+
+<!-- BEGIN GENERATED schema history_attempt -->
+| Key | Type | Present |
+|---|---|---|
+| `explanation` | object | always |
+| `explanation.attempts` | null | always |
+| `explanation.cancellation` | null | always |
+| `explanation.counts` | object | always |
+| `explanation.counts.attempts` | null | always |
+| `explanation.counts.attempts_line` | null | always |
+| `explanation.counts.cached` | integer | always |
+| `explanation.counts.failed` | integer | always |
+| `explanation.counts.nodes` | null | always |
+| `explanation.counts.not_reached` | integer | always |
+| `explanation.counts.not_reached_line` | null | always |
+| `explanation.counts.not_reached_nodes` | null | always |
+| `explanation.counts.ok` | integer | always |
+| `explanation.counts.outcome` | string | always |
+| `explanation.counts.planned` | string | always |
+| `explanation.counts.ran` | integer | always |
+| `explanation.counts.retries` | null | always |
+| `explanation.counts.steps` | integer | always |
+| `explanation.counts.units` | string | always |
+| `explanation.outputs` | array | always |
+| `explanation.progress` | null | always |
+| `explanation.requested_by` | string | always |
+| `explanation.slowest` | array | always |
+| `explanation.steps` | string | always |
+| `explanation.target_line` | string | always |
+| `explanation.target_outcomes` | array | always |
+| `explanation.targets` | array | always |
+| `explanation.why` | object | always |
+| `explanation.why.groups` | array | always |
+| `explanation.why.headline` | string | always |
+| `explanation.why.omitted` | integer | always |
+| `explanation.why.partial` | boolean | always |
+| `run` | object | always |
+| `run.attempts` | integer | always |
+| `run.cancellation` | null | always |
+| `run.client_run_id` | null | always |
+| `run.command` | string | always |
+| `run.elapsed_seconds` | null | always |
+| `run.failure` | null | always |
+| `run.files` | array | always |
+| `run.finished_at` | null | always |
+| `run.job` | null | always |
+| `run.parent_run_id` | string | always |
+| `run.principal` | null | always |
+| `run.retries` | integer | always |
+| `run.run_attempt` | integer | always |
+| `run.run_id` | string | always |
+| `run.schedule_id` | null | always |
+| `run.scheduled_at` | null | always |
+| `run.started_at` | string | always |
+| `run.status` | string | always |
+| `run.steps_cached` | integer | always |
+| `run.steps_executed` | integer | always |
+| `run.steps_total` | null | always |
+| `run.stop_reason` | string | always |
+| `run.target` | null | always |
+| `run.trigger_reason` | null | always |
+| `run.triggered_by` | null | always |
+| `steps` | array | always |
+| `steps_page` | object | always |
+| `steps_page.total` | integer | always |
+| `steps_page.truncated` | boolean | always |
+<!-- END GENERATED schema history_attempt -->
+
+### Cancelling a queued run
+
+`barca cancel RUN_ID --server URL --json` reports `status: "cancelled"` after removing a
+queued run durably, including a run just requeued during drain. A running run reports
+`status: "cancelling"` until its workers or partition/batch resolvers stop. Resolver
+shutdown allows one second for SIGTERM, then kills and reaps the subprocess.
+
+<!-- BEGIN GENERATED schema cancel_queued -->
+| Key | Type | Present |
+|---|---|---|
+| `run_id` | string | always |
+| `status` | string | always |
+<!-- END GENERATED schema cancel_queued -->
+### Worker-fatal run diagnostics
+
+Experimental in 0.47.0: history detail may include `explanation.worker_failures`, an array
+of `{node_id: string, first_error: string, retry_error: string | null, recovered: boolean}`.
+Absent when no evidence was recorded. Original causes survive successful retries; a terminal
+retry error belongs to the same step, and independent failures remain separate. CLI history
+and the server run page use this recorded evidence, not an inference from retry counts.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

@@ -46,7 +46,7 @@ pub async fn admit(state: &AppState, spec: RunSpec) -> Result<Admitted, ApiError
 /// names the run on its tick record before the run can start.
 pub async fn admit_as(
     state: &AppState,
-    spec: RunSpec,
+    mut spec: RunSpec,
     run_id: String,
 ) -> Result<Admitted, ApiError> {
     let channel = state.runs.replay.channel()?;
@@ -114,6 +114,7 @@ pub async fn admit_as(
             waiting_for: None,
         });
     }
+    spec.policy.accepted_at(accepted_at);
     {
         let _admitting = state.runs.queue.admit.lock().await;
         ensure_db(state).await?;
@@ -279,8 +280,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::Ba
                         barca_service::errln!(
                             "[barca] run {} was in flight when the last server was killed during \
                              its drain (SIGKILL after SIGTERM: the stop grace period ran out); \
-                             it is put back in the queue and starts again (steps that finished \
-                             are cached)",
+                             it is put back in the queue and starts again (matching completed assets are reused; tasks may repeat)",
                             row.run_id
                         );
                         track(
@@ -335,7 +335,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::Ba
 
 /// A run the last server started and never finished recording: it was killed (SIGKILL, a
 /// crash, a supervisor's grace period that ran out). It is not started again; its row, when it
-/// wrote one, is recorded `interrupted` by the usual recovery, and one that never wrote a row
+/// wrote one, is recorded `interrupted` by queue ownership, and one that never wrote a row
 /// gets one with an `error` outcome, so its id is not lost.
 async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     let cfg = &state.config.resolved;
@@ -379,7 +379,7 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
         )
         .await;
     }
-    if let Err(e) = run_queue::remove(&cfg.db_path, run_id).await {
+    if let Err(e) = run_queue::interrupt_predecessor(&cfg.db_path, run_id).await {
         barca_service::errln!("[barca] warning: {e}");
     }
 }

@@ -4,6 +4,7 @@
 //! [`BatchOverride`]) is [`barca_model::batch_override`]'s and re-exported here; grouping the keys of
 //! a run into calls is `barca_engine::batch`'s.
 
+use barca_model::process::Until;
 use ruff_python_ast::{self as ast, Expr};
 use ruff_text_size::Ranged;
 
@@ -340,8 +341,8 @@ fn run_python(
     python: &std::path::Path,
     source_file: &str,
     request: &serde_json::Value,
+    until: Until<'_>,
 ) -> Result<serde_json::Value, String> {
-    use std::io::Write;
     let module_path = std::path::Path::new(source_file)
         .canonicalize()
         .unwrap_or_else(|_| std::path::PathBuf::from(source_file));
@@ -352,16 +353,12 @@ fn run_python(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-    let mut child = barca_model::spawn_lock::spawn_std(&mut cmd)
-        .map_err(|e| format!("cannot run {}: {e}", python.display()))?;
-    let body = serde_json::to_vec(request).unwrap_or_default();
-    if let Some(mut stdin) = child.stdin.take() {
-        // A write error is reported by the exit status below.
-        let _ = stdin.write_all(&body);
-    }
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("cannot run {}: {e}", python.display()))?;
+    let output = barca_model::spawn_lock::output_until(
+        &mut cmd,
+        serde_json::to_vec(request).unwrap_or_default(),
+        until,
+    )
+    .map_err(|e| format!("cannot run {}: {e}", python.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let last = stderr
@@ -383,11 +380,13 @@ pub(crate) fn evaluate_groups(
     source_file: &str,
     expr: &str,
     dims: &[String],
+    until: Until<'_>,
 ) -> Result<Vec<Vec<String>>, String> {
     let value = run_python(
         python,
         source_file,
         &serde_json::json!({"mode": "groups", "expr": expr, "dims": dims}),
+        until,
     )
     .map_err(|e| format!("batches({expr}) raised {e}"))?;
     let groups: Vec<Vec<String>> =
@@ -411,11 +410,13 @@ pub(crate) fn check_label_function(
     python: &std::path::Path,
     source_file: &str,
     expr: &str,
+    until: Until<'_>,
 ) -> Result<(), String> {
     run_python(
         python,
         source_file,
         &serde_json::json!({"mode": "check", "expr": expr}),
+        until,
     )
     .map(|_| ())
     .map_err(|e| format!("batches_by({expr}) raised {e}"))
@@ -427,6 +428,48 @@ pub fn evaluate_labels(
     source_file: &str,
     expr: &str,
     keys: &[String],
+) -> Result<Vec<String>, String> {
+    evaluate_labels_blocking(python, source_file, expr, keys, Until::done())
+}
+
+/// Runtime grouping: keep the blocking resolver off the async executor and reap it on cancel.
+pub async fn evaluate_labels_until(
+    python: &std::path::Path,
+    source_file: &str,
+    expr: &str,
+    keys: &[String],
+    until: Until<'_>,
+) -> Result<Vec<String>, String> {
+    let (python, source_file, expr, keys) = (
+        python.to_path_buf(),
+        source_file.to_owned(),
+        expr.to_owned(),
+        keys.to_vec(),
+    );
+    let cancel = until.cancel.cloned();
+    let deadline = until.deadline;
+    tokio::task::spawn_blocking(move || {
+        evaluate_labels_blocking(
+            &python,
+            &source_file,
+            &expr,
+            &keys,
+            Until {
+                cancel: cancel.as_ref(),
+                deadline,
+            },
+        )
+    })
+    .await
+    .map_err(|e| format!("batch resolver task failed: {e}"))?
+}
+
+fn evaluate_labels_blocking(
+    python: &std::path::Path,
+    source_file: &str,
+    expr: &str,
+    keys: &[String],
+    until: Until<'_>,
 ) -> Result<Vec<String>, String> {
     let parsed: Vec<serde_json::Map<String, serde_json::Value>> = keys
         .iter()
@@ -448,6 +491,7 @@ pub fn evaluate_labels(
         python,
         source_file,
         &serde_json::json!({"mode": "labels", "expr": expr, "dims": dims, "keys": parsed}),
+        until,
     )
     .map_err(|e| format!("batches_by({expr}) raised {e}"))?;
     let labels: Vec<String> =

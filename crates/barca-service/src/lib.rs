@@ -66,6 +66,7 @@ pub use barca_model::jsonlog;
 pub use barca_model::lines;
 pub use barca_model::model;
 pub use barca_model::model::{CronExpr, Freshness, NodeKind, StepId};
+pub use barca_model::process;
 pub use barca_model::run_explain;
 #[cfg(test)]
 use barca_model::source_scan;

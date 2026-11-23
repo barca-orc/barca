@@ -295,6 +295,12 @@ SINK_CASES: list[tuple[str, list[str], str, int]] = [
     ("get_sink", ["get", "exported", "pipeline.py", "--json"], "stdout", 0),
     ("history_sink", ["history", "RUN_ID", "--json"], "stdout", 0),
 ]
+ATTEMPT_CASES = [
+    ("history_requeued", ["history", "RUN_ID", "--json"], "stdout", 0),
+    ("history_attempt", ["history", "ATTEMPT_ID", "--json"], "stdout", 0),
+]
+
+CANCEL_CASE = ("cancel_queued", ["cancel", "RUN_ID", "--server", "SERVER", "--json"], "stdout", 0)
 ALL_CASES = (
     CASES
     + SETUP_CASES
@@ -303,6 +309,8 @@ ALL_CASES = (
     + CHANGED_CASES
     + [PARTITION_RUN_CASE]
     + SINK_CASES
+    + ATTEMPT_CASES
+    + [CANCEL_CASE]
 )
 
 # Values that are user data, not barca's schema: recorded as `<user value>`.
@@ -544,6 +552,21 @@ def runs(tmp_path_factory) -> dict:
     s = command_schema(json.loads(proc.stdout))
     out["history_run"] = (s, render_snapshot(SETUP_CASES[2][1], "stdout", 0, s), proc)
 
+    # Nullable linked-attempt fields are exercised by real CLI reads of recorded evidence.
+    with closing(sqlite3.connect(cwd / ".barca/metadata.db")) as conn:
+        conn.execute(
+            "INSERT INTO runs(run_id,command,files,status,parent_run_id,run_attempt,stop_reason) "
+            "VALUES ('archived-execution','get','[]','interrupted',?,1,'server restart (requeued)')",
+            (run_id,),
+        )
+        conn.commit()
+    for case, selected in (("history_requeued", run_id), ("history_attempt", "archived-execution")):
+        proc = barca(["history", selected, "--json"])
+        assert proc.returncode == 0, proc.stderr
+        s = command_schema(json.loads(proc.stdout))
+        argv = next(argv for name, argv, _, _ in ATTEMPT_CASES if name == case)
+        out[case] = (s, render_snapshot(argv, "stdout", 0, s), proc)
+
     digest_case = tmp_path_factory.mktemp("contract_digest")
     (digest_case / "pipeline.py").write_text(
         "from pathlib import Path\nfrom barca import asset\n@asset()\ndef value(): return Path('external.txt').read_text()\n"
@@ -665,6 +688,28 @@ def runs(tmp_path_factory) -> dict:
         s = command_schema(doc)
         shown = next(c[1] for c in SINK_CASES if c[0] == case)
         out[case] = (s, render_snapshot(shown, stream, code, s), proc)
+    from .served import Serve
+
+    cancel_root = cwd / "cancel-project"
+    cancel_root.mkdir()
+    (cancel_root / "pipeline.py").write_text("from barca import task\n@task()\ndef one(): pass\n")
+    with Serve(cancel_root, "--no-schedule", env=env) as server:
+        server.post("/queue/pause", {})
+        run_id = server.submit("one")["run_id"]
+        case, argv, stream, code = CANCEL_CASE
+        proc = subprocess.run(
+            [binary, "cancel", run_id, "--server", server.url, "--json"],
+            cwd=cancel_root,
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=RUN,
+        )
+        assert proc.returncode == code, proc.stderr
+        doc = json.loads(proc.stdout)
+        assert doc == {"run_id": run_id, "status": "cancelled"}
+        s = command_schema(doc)
+        out[case] = (s, render_snapshot(argv, stream, code, s), proc)
     return out
 
 

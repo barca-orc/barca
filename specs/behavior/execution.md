@@ -88,8 +88,26 @@ writes preserve successful work across interruption according to [cache
 decisions](cache-decisions.md)
 and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion recording is at
 least once;
-replay must not duplicate the same run/key result. This is not an exactly-once promise for
+replay must not duplicate the same run/key result. A failed outcome from an earlier requeued
+attempt does not suppress a later success under the same run hash; each distinct outcome is
+retained, and replay of that success does not append another row (#929). Conformance:
+`test_requeued_failed_key_records_success_under_the_same_hash` in
+[server queue tests](../../python/tests/test_serve_queue.py) and
+`terminal_retry_records_success_after_failure_and_remains_idempotent` in
+[terminal persistence tests](../../crates/barca-run/src/persist.rs). This is not an exactly-once promise for
 user side effects or external sinks.
+
+Workers retain private process groups from spawn to shutdown. Cancellation, drain timeout,
+forced stop and normal pool teardown resume each group (including stopped `parallel()`
+callers), send TERM, allow one shared 200 ms grace window, then KILL remaining group members.
+Leader exit does not end descendant ownership. Retirement and replacement cleanup is awaited
+before pool shutdown completes. Local terminal SIGINT and coordinator SIGTERM still cancel
+with exit 130; workers do not receive terminal SIGINT directly. Deliberately daemonized,
+re-sessioned or re-grouped children are outside this boundary and require launcher cleanup.
+Conformance: [worker descendants](../../python/tests/test_worker_descendants.py)
+(`test_shutdown_leaves_no_worker_descendants`) exercises real PIDs, TERM-ignoring children,
+stopped parallel callers, unrelated processes and a subsequent server run; the existing
+[Ctrl-C tests](../../python/tests/test_ctrl_c_worker.py) cover startup and idle workers.
 
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that
 finished before the cancellation stays recorded even when its upload to a store was abandoned;
@@ -100,6 +118,14 @@ nothing and names the runs it waited behind, among them one doing the same work.
 not deduplicate identical requests: each is a run, and the later one waits in the queue or
 shares the earlier one's in-flight asset steps. A server drain
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
+A terminal SIGINT reaches the server but not its workers: server-owned workers remain outside
+the terminal process group so the first Ctrl-C drains, and the second cancels through the
+server. Local `get`/`run` workers retain their terminal interruption behavior (#926).
+Conformance: `test_a_stop_signal_drains_the_runs_in_flight_and_exits_0`,
+`test_the_drain_timeout_requeues_the_runs_left_and_exits_0`, and
+`test_a_second_signal_stops_the_drain_at_once` in
+[server robustness](../../python/tests/test_serve_robustness.py), plus
+[local Ctrl-C](../../python/tests/test_ctrl_c_worker.py).
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
 These are physical step retries under the declared budget, not new invocation attempts.
@@ -234,6 +260,14 @@ controls, independent I/O admission and concurrent GC.
 
 ## Failures and recovery
 
+A completed run retains each step's first worker-fatal error independently of its final
+materialization. The run summary identifies whether that step recovered after worker
+replacement and, if it ultimately failed, its later error. Independent failing steps remain
+separate; skipped dependents remain not reached, not additional root causes. This diagnostic
+is recorded at run completion, not guaranteed after an abruptly killed coordinator. Old runs
+without the evidence do not infer it from a retry count. The wire owner is `RunExplanation`
+in the [HTTP contract](../interfaces/server-api.openapi.yaml).
+
 A failed key preserves successful peers and blocks applicable data dependents: the same key of a
 dependent on exactly the same dimensions that reads it as a plain input, down the chain, and the
 whole of a dependent that reads every key (a `collect()` fan-in, an unpartitioned node, other
@@ -248,6 +282,10 @@ and lifecycle rules below define the precise existing behavior.
 Exercise explicit tasks, cached assets, per-key partial batch failure, worker death/retry,
 cancellation, durable queue acknowledgement and drain/restart. Assert actual executions
 separately from cache hits and preserve completed peers.
+
+Conformance (worker-fatal summaries, recovery and terminal retry):
+[worker-fatal tests](../../python/tests/test_duckdb_invalidated.py). These raise DuckDB's
+exception to exercise Barca's reporting path; they do not reproduce a native invalidation.
 
 Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [scheduler](../../python/tests/test_serve_schedule.py),
@@ -334,3 +372,6 @@ in OpenAPI. Deferred: exposed content digest, bounded remote binary access and o
 results absent from this environment's metadata. Cached value reads reject executable pickle
 reconstruction with typed infra reason `cached_value_unsupported`; verified artifact path
 access remains available, without importing project source or invoking pickle reducers.
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.

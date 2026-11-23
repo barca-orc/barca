@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "barca"
-version = "0.46.3"
+version = "0.46.4"
 description = "Invisible asset orchestrator"
 requires-python = ">=3.12"
 license = "MIT"
@@ -93,10 +93,13 @@ module-name = "barca"
 manifest-path = "crates/barca-cli/Cargo.toml"
 # ui/dist is the prebuilt web UI (the release workflow builds it first); the sdist
 # carries it so a source build embeds the UI without Node.
-include = ["LICENSE", { path = "ui/dist/**/*", format = "sdist" }]
+include = ["LICENSE", "python/barca/_vendor/README.md", "python/barca/_vendor/packaging/LICENSE*", { path = "ui/dist/**/*", format = "sdist" }]
 
 [tool.ruff]
 line-length = 100
+# Preserve the exact released upstream sources.
+force-exclude = true
+extend-exclude = ["python/barca/_vendor/packaging"]
 
 [tool.ruff.lint]
 # pycodestyle, pyflakes, import order, pyupgrade (the package targets 3.12) and bugbear.
@@ -111,6 +114,9 @@ known-first-party = ["barca"]
 # pycodestyle minus line length: import order, pyupgrade and bugbear there would rewrite most
 # of those files for no behavior.
 "!python/barca/**" = ["E501", "I", "UP", "B"]
+
+[tool.ty.src]
+exclude = ["python/barca/_vendor/packaging"]
 
 [tool.ty.environment]
 extra-paths = ["python"]

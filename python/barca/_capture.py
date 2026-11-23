@@ -1,4 +1,4 @@
-"""A step's stdout and stderr, recorded line by line and sent to the coordinator as `log` frames.
+"""A step's stdout and stderr, recorded as entries and sent to the coordinator as `log` frames.
 
 The coordinator owns display policy: user stdout never reaches the worker's own descriptors,
 stderr is written through as it comes and recorded as well (`_StderrTee`). One stream of each
@@ -48,8 +48,9 @@ class _LineEmitter(io.TextIOBase):
 
 class _StderrTee(_LineEmitter):
     """Python-level stderr of a step: written through to the worker's own stderr as it comes
-    (what the terminal, or `barca serve`'s stderr, showed before), and recorded line by line
-    as the step's `stderr` stream. That covers `logging`'s default handler, `warnings` and
+    (what the terminal, or `barca serve`'s stderr, showed before). Each write's complete lines
+    are recorded together as the step's `stderr` stream. That covers `logging`'s default
+    handler, `warnings` and
     anything printed to `sys.stderr`; writes to file descriptor 2 (native code, subprocesses)
     do not pass through here. barca's own `[barca]` lines are written but not recorded."""
 
@@ -83,7 +84,11 @@ class _StderrTee(_LineEmitter):
             self._out.write(s)
         except (AttributeError, ValueError, OSError):
             pass
-        return super().write(s)
+        self._buf += s
+        if "\n" in self._buf:
+            complete, self._buf = self._buf.rsplit("\n", 1)
+            self._record(complete)
+        return len(s)
 
     def flush(self) -> None:
         super().flush()
@@ -93,12 +98,15 @@ class _StderrTee(_LineEmitter):
             pass
 
     def _record(self, line: str) -> None:
-        # A progress bar redraws its line with \r: record what the terminal ended up showing.
-        if "\r" in line:
-            line = line.rstrip("\r").rsplit("\r", 1)[-1]
-        if line.startswith(("[barca]", "BARCA:")):
-            return
-        super()._record(line)
+        # Normalize each physical line without losing the write's entry boundary.
+        lines = []
+        for part in line.split("\n"):
+            if "\r" in part:
+                part = part.rstrip("\r").rsplit("\r", 1)[-1]
+            if not part.startswith(("[barca]", "BARCA:")):
+                lines.append(part)
+        if lines:
+            super()._record("\n".join(lines))
 
 
 _step_stdout: _LineEmitter | None = None
