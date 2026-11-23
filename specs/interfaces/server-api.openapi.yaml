@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '29'
-  description: 'Normative current wire contract; specification version 29 is independent of package versions.
+  version: '30'
+  description: 'Normative current wire contract; specification version 30 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -32,6 +32,36 @@ x-project-socket: 'A server that holds its environment (serve.lock) also listens
   killed server left refuses connections. barca commands run in the project use it (barca docs
   server-mode). Conformance: crates/barca-server/src/project_socket.rs, python/tests/test_project_socket.py.'
 paths:
+  /cached:
+    post:
+      summary: Read latest completed results without executing or enqueueing work
+      operationId: cachedGet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CachedRequest'}
+      responses:
+        '200':
+          description: Every selected key was found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CachedAnswer'}
+        '404':
+          description: At least one selected key missed; all outcomes and typed cache_miss error
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CachedAnswer'}
+        '400':
+          description: Invalid target, partition or incompatible options
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500':
+          description: Metadata, authorization to storage, corruption or other read failure
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /auth/status:
     get:
       summary: Public authentication mode
@@ -3464,7 +3494,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '202':
-          description: Accepted and recorded in the run queue; stream GET /runs/{run_id}/events
+          description: Accepted and durably recorded; stream GET /runs/{run_id}/events. A provably
+            fresh get can finish using bounded artifact I/O before its handle is returned, without
+            entering execution admission. Misses, stale results and refreshes enter the run queue.
           content:
             application/json:
               schema:
@@ -4409,6 +4441,42 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    CachedRequest:
+      type: object
+      additionalProperties: false
+      required: [tier]
+      properties:
+        targets: {type: array, items: {type: string}, default: []}
+        files: {type: array, items: {type: string}, default: []}
+        tier: {type: string, enum: [store, local]}
+        partition: {type: [string, 'null']}
+        values: {type: boolean, default: false}
+        url_expires: {type: [integer, 'null'], minimum: 1, maximum: 604800}
+    CachedOutcome:
+      type: object
+      additionalProperties: false
+      required: [node, partition, status]
+      properties:
+        node: {type: string}
+        partition: {type: [string, 'null']}
+        status: {type: string, enum: [hit, miss]}
+        reason: {type: string, enum: [never_run, evicted, not_fetched]}
+        run_hash: {type: string}
+        format: {type: string}
+        size_bytes: {type: integer, minimum: 0}
+        path: {type: string}
+        url: {type: string}
+        fresh: {type: boolean}
+        source: {type: string, enum: [disk, store]}
+    CachedAnswer:
+      type: object
+      additionalProperties: false
+      required: [outcomes, final_output, path_scope]
+      properties:
+        outcomes: {type: array, items: {$ref: '#/components/schemas/CachedOutcome'}}
+        final_output: {}
+        path_scope: {type: string, enum: [local, server]}
+        error: {$ref: '#/components/schemas/Error'}
     AssetPin:
       type: object
       additionalProperties: false
@@ -4600,6 +4668,7 @@ components:
           type: string
           enum:
           - step_failed
+          - cache_miss
           - usage
           - infra
           - cancelled
@@ -4622,6 +4691,9 @@ components:
             - write_output
             - sink
           - type: 'null'
+        outcomes:
+          type: array
+          items: {$ref: '#/components/schemas/CachedOutcome'}
         reason:
           description: A stable name for an error a client may handle on its own, present
             only when barca has one. metadata_unusable means the metadata DB is there but this
@@ -4630,6 +4702,7 @@ components:
           type: string
           enum:
           - metadata_unusable
+          - cached_value_unsupported
           - authentication_required
           - invalid_token
           - invalid_event_cursor

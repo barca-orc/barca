@@ -56,6 +56,7 @@ command is experimental with it):
 <!-- BEGIN GENERATED experimental -->
 | Command or argument | Why it is experimental |
 |---|---|
+| `barca get --cached-only` | new in 0.47: completed-result reads and per-key outcome shapes may evolve |
 | `barca tokens` | new in 0.36 (RFC-0016): local bootstrap for opt-in project token access |
 | `barca tokens bootstrap` | prints a one-use bootstrap credential; token formats may evolve |
 | `barca pin` | new in 0.41 (barca docs pins): the JSON shapes, the version list and what a pin covers may change after field use |
@@ -329,6 +330,7 @@ default, and any aliases.
 
 | Argument | Value | Notes | Stability | Description |
 |---|---|---|---|---|
+| `--cached-only` | `store\|local` | - | experimental: new in 0.47: completed-result reads and per-key outcome shapes may evolve | Read completed results without execution; local excludes every store call |
 | `<ARGS>...` | - | - | stable | Target(s), then optional files/directories; omit files to discover the project |
 | `-o, --output` | `path\|value\|url\|json\|pretty` | - | stable | Choose the result output mode (see possible values) |
 | `--expires` | `DURATION` | - | experimental: new with -o url (signed links to results in a cloud store); the link format is the cloud's | Signed URL lifetime: 30m, 12h, 7d or seconds (default: 1h; maximum: 7d) |
@@ -822,6 +824,7 @@ Each error `kind` has exactly one exit code (stable):
 |---|---|---|
 | 0 | (success) | stable |
 | 1 | `step_failed` | stable |
+| 1 | `cache_miss` | stable |
 | 2 | `usage` | stable |
 | 3 | `infra` | stable |
 | 130 | `cancelled` | stable |
@@ -4745,6 +4748,91 @@ of refresh coordinates independently of the target domain. Each selector has one
 The existing refresh list in CLI, Python and server requests shares these semantics;
 `--partition` continues to narrow execution and skip affected fan-ins.
 
+### Completed-result reads
+
+Experimental `get --cached-only[=store|local]` does not execute or enqueue work. JSON returns
+`outcomes`, `final_output`, and `path_scope` (`local` or `server`); misses also carry `error`,
+the `cache_miss` envelope. Every selected key is a hit or miss, and any miss exits 1 with
+all outcomes in the stderr envelope. Executable pickle reconstruction is refused with infra
+reason `cached_value_unsupported`; verified artifact path access remains available. Python raises `CacheMiss(BarcaError)` with `outcomes`
+and `missing`. A store failure or invalid artifact exits 3. See `barca docs cache` for tiers,
+freshness, discovery limits and lifetime of artifact references.
+
+
+<!-- BEGIN GENERATED schema get_cached -->
+| Key | Type | Present |
+|---|---|---|
+| `final_output` | object | always |
+| `final_output._barca_artifact` | object | always |
+| `final_output._barca_artifact.format` | string | always |
+| `final_output._barca_artifact.path` | string | always |
+| `final_output._barca_artifact.size_bytes` | integer | always |
+| `outcomes` | array | always |
+| `outcomes[]` | object | always |
+| `outcomes[].format` | string | always |
+| `outcomes[].fresh` | boolean | always |
+| `outcomes[].node` | string | always |
+| `outcomes[].partition` | null | always |
+| `outcomes[].path` | string | always |
+| `outcomes[].run_hash` | string | always |
+| `outcomes[].size_bytes` | integer | always |
+| `outcomes[].source` | string | always |
+| `outcomes[].status` | string | always |
+| `path_scope` | string | always |
+<!-- END GENERATED schema get_cached -->
+
+<!-- BEGIN GENERATED schema get_cached_miss -->
+| Key | Type | Present |
+|---|---|---|
+| `error` | object | always |
+| `error.<name>` | array \| integer \| null \| string | always |
+| `error.<name>[]` | object | always |
+| `error.<name>[].node` | string | always |
+| `error.<name>[].partition` | string | always |
+| `error.<name>[].reason` | string | always |
+| `error.<name>[].status` | string | always |
+| `final_output` | `<user value>` | always |
+| `outcomes` | array | always |
+| `outcomes[]` | object | always |
+| `outcomes[].node` | string | always |
+| `outcomes[].partition` | string | always |
+| `outcomes[].reason` | string | always |
+| `outcomes[].status` | string | always |
+| `path_scope` | string | always |
+<!-- END GENERATED schema get_cached_miss -->
+
+<!-- BEGIN GENERATED schema get_cached_error -->
+| Key | Type | Present |
+|---|---|---|
+| `code` | integer | always |
+| `error` | string | always |
+| `kind` | string | always |
+| `outcomes` | array | always |
+| `outcomes[]` | object | always |
+| `outcomes[].node` | string | always |
+| `outcomes[].partition` | string | always |
+| `outcomes[].reason` | string | always |
+| `outcomes[].status` | string | always |
+| `remediation` | null | always |
+<!-- END GENERATED schema get_cached_error -->
+
+
+### Ordinary server cache hits
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
 
 ### Retained execution attempts (experimental)
 

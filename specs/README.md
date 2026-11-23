@@ -58,7 +58,7 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 29; the same routes on the project socket (`x-project-socket`) | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 30; the same routes on the project socket (`x-project-socket`) | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-service/tests/grammar_spec.rs), [argument owner](../crates/barca-python/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
 | Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 6 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-proc/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
@@ -152,8 +152,8 @@ from both implemented contracts and accepted design.
 [Computed and published](proposals/computed-and-published.md) is an unapproved draft that
 separates a step being computed from its output being published (store upload, sinks), with
 publication outside step capacity (#951).
-[A cache-only get](proposals/cached-only-get.md) is a draft for returning an asset's last result
-without running anything: disk, then the store, then a typed miss (#1085). [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
+Cached-only get (#1085) is implemented under [execution](behavior/execution.md#cached-only-reads-1085),
+with the approved decision and original proposal retained in PR #1086 history. [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
 investigation; completed implementation plans were deleted and remain in linked PR history.
 They are not current contract owners.
 

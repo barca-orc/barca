@@ -318,3 +318,12 @@ counts and digests. Missing or malformed observations never establish freshness.
 Producer source deltas are optional evidence capped at 256 KiB of conservative JSON size.
 Oversized changed values or removed-key lists send only the compact summary; the engine
 then uses normal artifact validation. Artifact payload size never expands the protocol frame.
+
+### Cached value reading
+
+The one-shot `_value` helper also accepts `{"op":"cached_value","artifacts":[{"path","format"}]}`.
+It returns the ordinary value entries, except executable pickle reconstruction is refused
+before deserialization with `{"error": "...", "kind": "cached_value_unsupported"}`. Plain-data
+pickles need no class resolution, reducer calls, persistent IDs or construction hooks. This
+operation never imports project source. Ordinary value/check requests retain their reader.
+Conformance: `python/tests/test_cached_only.py`.

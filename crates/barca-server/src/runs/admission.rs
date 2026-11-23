@@ -51,6 +51,69 @@ pub async fn admit_as(
 ) -> Result<Admitted, ApiError> {
     let channel = state.runs.replay.channel()?;
     let accepted_at = now_ts();
+    if let Some((result, outcome, lines)) = fresh_read(state, &spec, &run_id).await {
+        ensure_db(state).await?;
+        // A cache read has no durable queue entry to recover. Refuse it if its terminal
+        // record cannot be written, rather than acknowledge an identity that can be lost.
+        let body: serde_json::Value = serde_json::from_str(outcome.text()).expect("typed outcome");
+        let cached = body["steps"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .map(|s| s["partitions"]["cached"].as_u64().unwrap_or(1) as usize)
+            .sum();
+        let target = (!spec.targets.is_empty()).then(|| spec.targets.join(","));
+        let mut nodes = spec.nodes.clone();
+        nodes.sort();
+        let job = if nodes.is_empty() {
+            "all".into()
+        } else {
+            nodes.join(",")
+        };
+        barca_service::serve::record_cached_run(
+            &state.config.resolved.db_path,
+            barca_service::serve::UnstartedRun {
+                run_id: &run_id,
+                command: spec.command.as_str(),
+                files: super::run_files(state, &spec.files),
+                target: target.as_deref(),
+                trigger: &spec.trigger,
+            },
+            &job,
+            cached,
+            body["elapsed_seconds"].as_f64().unwrap_or_default(),
+            outcome.text(),
+        )
+        .await?;
+        track(state, &run_id, &spec, accepted_at, channel.clone());
+        state.runs.registry.get_mut(&run_id).unwrap().db_run_id = Some(run_id.clone());
+        channel.emit(barca_service::RunEvent::RunStarted {
+            run_id: run_id.clone(),
+        });
+        for (when, line) in lines {
+            channel.emit(barca_service::RunEvent::Line { line, when });
+        }
+        for step in body["steps"].as_array().into_iter().flatten() {
+            channel.emit(barca_service::RunEvent::StepFinished {
+                node_id: step["id"].as_str().unwrap_or_default().into(),
+                ok: true,
+                cached: true,
+                elapsed_seconds: None,
+                error: None,
+                import_seconds: None,
+            });
+        }
+        super::lifecycle::finish(
+            state, &run_id, &spec, &channel, result, outcome, true, false,
+        )
+        .await;
+        return Ok(Admitted {
+            run_id,
+            status: RunStatus::Complete,
+            position: None,
+            waiting_for: None,
+        });
+    }
     spec.policy.accepted_at(accepted_at);
     {
         let _admitting = state.runs.queue.admit.lock().await;
@@ -319,4 +382,165 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     if let Err(e) = run_queue::interrupt_predecessor(&cfg.db_path, run_id).await {
         barca_service::errln!("[barca] warning: {e}");
     }
+}
+
+/// A proved cache hit needs neither a run slot nor a pipeline worker. Keep the normal
+/// outcome/history/event contract; every inconclusive probe goes through admission.
+async fn fresh_read(
+    state: &AppState,
+    spec: &RunSpec,
+    run_id: &str,
+) -> Option<(
+    Option<barca_service::results::GetResult>,
+    barca_service::outcome::Outcome,
+    Vec<(barca_service::lines::LineWhen, String)>,
+)> {
+    use barca_service::{
+        cached,
+        outcome::{Outcome, RunCommand},
+        results::GetResult,
+    };
+    if spec.command != RunCommand::Get
+        || !matches!(spec.policy, CachePolicy::CacheAware)
+        || spec
+            .nodes
+            .iter()
+            .collect::<std::collections::HashSet<_>>()
+            .len()
+            != spec.targets.len()
+        || spec.rules.tick.is_some()
+    {
+        return None;
+    }
+    let _permit = state.reads.artifact_reads.acquire().await.ok()?;
+    let started = std::time::Instant::now();
+    let request = cached::Request {
+        targets: spec.targets.clone(),
+        files: super::run_files(state, &spec.files).to_vec(),
+        tier: cached::Tier::Store,
+        partition: spec.partition.as_ref().map(|s| s.to_json().to_string()),
+        values: spec.values,
+        url_expires: None,
+    };
+    let (answer, mut prediction) = cached::fresh(
+        &state.config.resolved,
+        &state.config.python,
+        &request,
+        &spec.batch,
+    )
+    .await
+    .ok()??;
+    let outputs: Vec<barca_service::cached::OutputRef> = answer
+        .outcomes
+        .iter()
+        .map(|o| serde_json::from_value(o.clone()))
+        .collect::<Result<_, _>>()
+        .ok()?;
+    for step in &mut prediction.steps {
+        step.status = step.action.take();
+    }
+    let partitions = answer
+        .outcomes
+        .first()
+        .is_some_and(|o| spec.targets.len() <= 1 && o["partition"].is_string())
+        .then(|| {
+            answer
+                .outcomes
+                .iter()
+                .zip(&outputs)
+                .map(|(o, output)| (o["partition"].as_str().unwrap().to_owned(), output.clone()))
+                .collect()
+        });
+    let result = GetResult {
+        run_id: run_id.into(),
+        elapsed_seconds: started.elapsed().as_secs_f64(),
+        steps_executed: 0,
+        phases: answer.phases,
+        final_output: outputs.first().cloned(),
+        steps: prediction.steps,
+        warnings: prediction.warnings,
+        partitions,
+        key_summary: answer.summaries.values().next().map(|keys| {
+            barca_service::results::KeySummary {
+                keys: *keys,
+                computed: 0,
+                listed: vec![],
+            }
+        }),
+        cache: answer.cache.clone(),
+        uploads: prediction.uploads,
+        metadata_seconds: None,
+        partition_selection: prediction.partition_selection,
+    };
+    if spec.targets.len() <= 1 {
+        let outcome = Outcome::success_with(&result, answer.final_output);
+        return Some((Some(result), outcome, answer.lines));
+    }
+    let mut targets = Vec::new();
+    let mut values = Vec::new();
+    for (name, node) in spec.targets.iter().zip(&spec.nodes) {
+        let selected: Vec<_> = answer
+            .outcomes
+            .iter()
+            .zip(&outputs)
+            .filter(|(o, _)| o["node"] == *node)
+            .collect();
+        let partitions = selected
+            .first()
+            .is_some_and(|(o, _)| o["partition"].is_string())
+            .then(|| {
+                selected
+                    .iter()
+                    .map(|(o, output)| {
+                        (
+                            o["partition"].as_str().unwrap().to_owned(),
+                            (*output).clone(),
+                        )
+                    })
+                    .collect()
+            });
+        targets.push((
+            name.clone(),
+            barca_service::results::TargetOutcome {
+                status: "success".into(),
+                final_output: selected.first().map(|(_, output)| (*output).clone()),
+                error: None,
+                failed_node: None,
+                failed_phase: None,
+                partitions,
+                key_summary: answer.summaries.get(name).map(|keys| {
+                    barca_service::results::KeySummary {
+                        keys: *keys,
+                        computed: 0,
+                        listed: vec![],
+                    }
+                }),
+            },
+        ));
+        values.push(
+            answer
+                .final_output
+                .as_ref()
+                .and_then(|v| v.get(name))
+                .cloned(),
+        );
+    }
+    let multi = barca_service::results::MultiResult {
+        run_id: result.run_id,
+        elapsed_seconds: result.elapsed_seconds,
+        steps_executed: 0,
+        phases: answer.phases,
+        steps: result.steps,
+        warnings: result.warnings,
+        targets,
+        cache: answer.cache.clone(),
+        uploads: result.uploads,
+        metadata_seconds: None,
+        partition_selection: result.partition_selection,
+    };
+    Some((
+        None,
+        Outcome::multi_with(&multi, &values, &super::context(spec.command, &spec.files)),
+        answer.lines,
+    ))
 }

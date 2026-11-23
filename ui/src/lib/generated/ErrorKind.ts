@@ -4,4 +4,4 @@
  * What went wrong, as an agent needs to know it: fix the command, fix the code, retry, or
  * nothing (the user cancelled). Each kind has exactly one exit code.
  */
-export type ErrorKind = "step_failed" | "usage" | "infra" | "cancelled";
+export type ErrorKind = "step_failed" | "cache_miss" | "usage" | "infra" | "cancelled";

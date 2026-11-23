@@ -71,7 +71,7 @@ What that means for `get` and `run`:
   `--watch`), not an edit it has not loaded. A command that names no file uses all of them; a
   file the server did not deploy is a usage error listing the deployed files. To run an edit
   the server has not loaded, pass `--local`.
-- The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
+- Work requiring execution waits for a run slot (`barca queue`), and Ctrl-C cancels it on the
   server. Like every requested run it starts ahead of the scheduled runs that wait; `--queue
   last` puts it behind them instead ([Operating barca serve: Queue a run last](/reference/serve-ops/#queue-a-run-last---queue-last)).
 - `-o url` is not available on a server yet; pass `--local` for it.
@@ -752,6 +752,27 @@ is late ([Scheduling With Cron](/scheduling/), "A schedule that missed its slot"
 UI shows a schedule as `late by 12m` when `schedule.late` is true and compares no times itself.
 A `--read-only` server reads the same runs and run queue from the shared metadata, so its
 answer is the scheduling server's, with slots in its own `--timezone`.
+
+
+### Cached reads and execution capacity
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Ordinary reads retain the run ID, event, history and output contracts; a cache hit can already
+be complete when its accepted run handle is returned.
 
 See also: [Scheduling With Cron](/scheduling/), [Remote Storage](/reference/remote-storage/), [CLI Contract](/reference/cli-contract/).
 

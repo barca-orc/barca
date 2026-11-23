@@ -51,6 +51,9 @@ command would run without running it.
   upstream hashes, not output contents, so a cached downstream asset still matches and the
   refreshed data never reaches it. Barca prints
   `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
+  Partitioned consumers report this once per node when any cached keys depend on the
+  refresh, and the warning propagates through cached consumers to downstream fan-ins.
+  Dry-run reports carry the same warning.
   `--no-cascade` without `--refresh` is a usage error (exit 2).
 - With `--partition`, only the selected keys of every partitioned node with that dimension are
   planned, upstream and downstream, so `--refresh` of any of them recomputes only those keys. A

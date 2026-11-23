@@ -294,6 +294,7 @@ pub enum Decision {
         missing: Vec<barca_model::model::PartitionKey>,
         refresh: Option<RunReason>,
         cutoff_stopped: bool,
+        stale_root: Option<String>,
     },
 }
 
@@ -850,6 +851,7 @@ pub async fn decide_step(
                 refresh: None,
                 cutoff_stopped: false,
                 refreshed: false,
+                stale_root: None,
             },
         ));
     }
@@ -959,6 +961,7 @@ pub async fn decide_step(
         let mut missing = Vec::new();
         let mut refresh = None;
         let mut refreshed = false;
+        let mut stale_root = None;
         // Many keys: their rows in one pass, when that is cheaper than a lookup per key.
         let rows = match cache {
             Some(cache) if step.partition_keys.len() >= KEYS_READ_TOGETHER => {
@@ -1041,6 +1044,10 @@ pub async fn decide_step(
             match hit {
                 Some(oref) => {
                     record_output(dag, state, &pdisplay, oref.content_hash.as_ref());
+                    if let Some(root) = stale_refresh_root(dag, state, &step, &pdisplay) {
+                        state.stale_cached.insert(pdisplay.clone(), root.clone());
+                        stale_root.get_or_insert(root);
+                    }
                     cached.push((pdisplay, oref))
                 }
                 None => missing.push(pk.clone()),
@@ -1055,6 +1062,7 @@ pub async fn decide_step(
                 refresh,
                 cutoff_stopped,
                 refreshed,
+                stale_root,
             },
         ));
     }
@@ -1068,23 +1076,7 @@ pub async fn decide_step(
         None => (step, Decision::Run(RunReason::NotMaterialized)),
         Some(oref) => {
             record_output(dag, state, &display_id, oref.content_hash.as_ref());
-            // Cached, but does it depend on something refreshed in this run?
-            // A cutoff upstream's new bytes are in this step's run hash: not stale through it.
-            let stale_root = step.inputs.values().find_map(|up| {
-                let up_base = up.split('[').next().unwrap_or(up);
-                if is_cutoff(dag, up_base) {
-                    None
-                } else if state.refreshed_ids.contains(up_base)
-                    || state.refreshed_ids.iter().any(|id| {
-                        id.strip_prefix(up_base)
-                            .is_some_and(|suffix| suffix.starts_with('['))
-                    })
-                {
-                    Some(short_name(up_base).to_string())
-                } else {
-                    state.stale_cached.get(up_base).cloned()
-                }
-            });
+            let stale_root = stale_refresh_root(dag, state, &step, &display_id);
             if let Some(root) = &stale_root {
                 state.stale_cached.insert(base_id.to_string(), root.clone());
             }
@@ -1098,6 +1090,48 @@ pub async fn decide_step(
                 },
             )
         }
+    })
+}
+
+/// Follow the same aligned inputs as refresh propagation. Keep evidence per key so a
+/// cached sibling of a refreshed key does not inherit that key's warning.
+fn stale_refresh_root(
+    dag: &Dag,
+    state: &DecideState,
+    step: &barca_compile::planner::StreamStep,
+    display: &str,
+) -> Option<String> {
+    if state.cascade_roots.is_empty() && state.stale_cached.is_empty() {
+        return None;
+    }
+    let (_, key) = barca_model::model::PartitionKey::parse_from_id(display);
+    let root_for = |id: &str| {
+        state
+            .cascade_roots
+            .get(id)
+            .or_else(|| state.stale_cached.get(id))
+            .cloned()
+    };
+    step.inputs.values().find_map(|up| {
+        let up_base = up.split('[').next().unwrap_or(up);
+        if is_cutoff(dag, up_base) {
+            return None;
+        }
+        if state.run_hashes.contains_key(up) {
+            return root_for(up);
+        }
+        let aligned = key.display_id(up);
+        if state.run_hashes.contains_key(&aligned) {
+            return root_for(&aligned);
+        }
+        let prefix = format!("{up}[");
+        state
+            .cascade_roots
+            .iter()
+            .chain(state.stale_cached.iter())
+            .filter(|(id, _)| id.starts_with(&prefix))
+            .min_by_key(|(id, _)| *id)
+            .map(|(_, root)| root.clone())
     })
 }
 
@@ -1306,6 +1340,7 @@ pub fn localize_decision(
             refresh,
             cutoff_stopped,
             refreshed,
+            stale_root,
         } => Decision::Partitioned {
             cached: cached
                 .into_iter()
@@ -1318,6 +1353,7 @@ pub fn localize_decision(
             refresh,
             cutoff_stopped,
             refreshed,
+            stale_root,
         },
         run => run,
     }

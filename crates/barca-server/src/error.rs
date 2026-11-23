@@ -116,6 +116,7 @@ fn engine(err: BarcaError, ctx: &Context) -> (StatusCode, ErrorEnvelope) {
         BarcaError::AmbiguousTarget(_) => StatusCode::CONFLICT,
         e => match ErrorKind::of(e) {
             ErrorKind::Usage => StatusCode::BAD_REQUEST,
+            ErrorKind::CacheMiss => StatusCode::NOT_FOUND,
             ErrorKind::Cancelled => StatusCode::CONFLICT,
             ErrorKind::StepFailed | ErrorKind::Infra => StatusCode::INTERNAL_SERVER_ERROR,
         },

@@ -42,6 +42,7 @@
 // Unit tests of a large module live beside it: `#[cfg(test)] mod tests;` in `<name>.rs` (or
 // `<name>/mod.rs`) points at `<name>/tests.rs`, which starts with `use super::*;`.
 
+pub mod cached;
 pub mod db;
 pub mod diagnostics;
 pub mod loaded;

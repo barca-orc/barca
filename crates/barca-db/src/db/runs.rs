@@ -493,6 +493,37 @@ pub async fn record_unstarted_run(
     Ok(())
 }
 
+/// Record an ordinary get completed entirely by cache I/O, before acknowledging its id.
+/// It has no execution ledger or attempts, but retains the planned/cache counts and job.
+pub async fn record_cached_run(
+    db_path: &str,
+    run: NewRun<'_>,
+    elapsed_seconds: f64,
+    outcome_json: &str,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, 0, ?6, datetime('now'), ?7, ?8, NULLIF(?9, ''), NULLIF(?10, ''), ?11, NULLIF(?12, ''), NULLIF(?13, ''))",
+        [
+            run.run_id.to_string(),
+            run.command.to_string(),
+            run.files.to_string(),
+            run.target.unwrap_or("").to_string(),
+            run.job.unwrap_or("all").to_string(),
+            run.steps_total.unwrap_or(0).to_string(),
+            elapsed_seconds.to_string(),
+            run.trigger.triggered_by.as_str().to_string(),
+            run.trigger.scheduled_at.clone().unwrap_or_default(),
+            run.trigger.schedule_id.clone().unwrap_or_default(),
+            outcome_json.to_string(),
+            run.trigger.principal.clone().unwrap_or_default(),
+            run.trigger.reason.clone().unwrap_or_default(),
+        ],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to record cached run: {e}")))?;
+    Ok(())
+}
+
 /// Store a finished run's outcome (`barca serve`): `GET /runs/{run_id}` answers from it after
 /// a restart. `status` corrects the row when the run ended before it recorded one.
 pub async fn set_run_outcome(

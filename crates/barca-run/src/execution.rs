@@ -57,9 +57,9 @@ use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
 use prepare::*;
+pub use progress::cached_step_line;
 use progress::{
-    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, reconcile_total,
+    RunOutcome, batch_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total,
 };
 use select::*;
 pub(crate) use workers::upload_pending;

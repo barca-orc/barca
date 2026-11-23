@@ -574,7 +574,7 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
     }
 }
 
-async fn persist_outcome(
+pub(super) async fn persist_outcome(
     state: &AppState,
     run_id: &str,
     spec: &RunSpec,

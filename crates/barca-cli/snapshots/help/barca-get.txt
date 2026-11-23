@@ -6,6 +6,8 @@ Arguments:
   [ARGS]...  Target(s), then optional files/directories; omit files to discover the project
 
 Options:
+      --cached-only[=<CACHED_ONLY>]
+          Read completed results without execution; local excludes every store call [possible values: store, local]
   -o, --output <OUTPUT>
           Choose the result output mode (see possible values) [possible values: path, value, url, json, pretty]
       --expires <DURATION>
