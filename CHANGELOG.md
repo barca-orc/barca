@@ -26,6 +26,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Run detail identifies cancellation ownership. CLI-owned and interrupted runs explain where to stop or reconcile them instead of offering a Cancel action that fails with “already finished (running)” (#934).
+
 - Warn once per partitioned node when `--refresh --no-cascade` serves cached keys downstream of refreshed assets, including downstream fan-ins and dry-run reports (#940).
 
 - Ordinary server gets of provably fresh cached targets now read independently of saturated pipeline capacity, using bounded I/O and GC-protected artifacts. Missing/stale results and explicit refreshes retain execution admission (#1133).

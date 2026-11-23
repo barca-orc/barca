@@ -61,7 +61,7 @@ export function RetryStep({ run, stepId, onStarted }: { run: Rerunnable; stepId:
 }
 
 /** Cancel one live run, keeping the request visible until polling reports its terminal state. */
-export function CancelRun({ id, queued }: { id: string; queued: boolean }) {
+export function CancelRun({ id, queued, control }: { id: string; queued: boolean; control: RunView['control'] }) {
   const client = useQueryClient()
   const writes = useWriteControl()
   const [asking, setAsking] = useState(false)
@@ -72,6 +72,7 @@ export function CancelRun({ id, queued }: { id: string; queued: boolean }) {
       void client.invalidateQueries({ queryKey: ['queue'] })
     },
   })
+  if (!control.cancellable) return <span className="barca-note">{control.reason ?? `Run owned by ${control.owner}`}</span>
   // Hidden until the server is known to take writes: a cancel is never offered to be refused.
   if (writes !== 'enabled') return null
   return <>

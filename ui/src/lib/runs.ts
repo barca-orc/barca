@@ -193,3 +193,8 @@ export function runTime(value: string | null, zone: TimeZone): string {
   if (!value) return '–'
   return formatAbsolute(value, zone)
 }
+
+/** Show control or ownership guidance for live runs and abandoned executions. */
+export function showRunControl(status: string): boolean {
+  return runIsLive(status) || parseRunStatus(status) === 'interrupted'
+}

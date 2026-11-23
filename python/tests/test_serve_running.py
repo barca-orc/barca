@@ -114,6 +114,16 @@ def test_a_cli_run_on_the_same_project_shows_as_running_until_it_ends(tmp_path):
         [run] = _get(port, "/runs?status=running")["runs"]
         assert run["id"] == running["run_id"], run
         assert run["status"] == "running", run
+        run_detail = serve.get(f"/runs/{run['id']}")
+        control = run_detail["control"]
+        assert control["cancellable"] is False, control
+        assert str(cli.pid) in control["owner"], control
+        assert "does not own" in control["reason"], control
+        code, refused = serve.request("DELETE", f"/runs/{run['id']}")
+        assert code == 409, refused
+        assert "already finished (running)" not in str(refused), refused
+        assert str(cli.pid) in str(refused), refused
+        assert cli.poll() is None
         assert [s["node_id"].split(":")[-1] for s in run["active_steps"]] == ["slow"], run
 
         (tmp_path / "release").write_text("")
@@ -142,6 +152,14 @@ def test_a_killed_cli_run_is_not_shown_as_running(tmp_path):
     try:
         assert _running_of(port, "slow") is None
         assert _get(port, "/runs?status=running")["runs"] == []
+        [run] = serve.get("/runs")["runs"]
+        detail = serve.get(f"/runs/{run['id']}")
+        assert detail["status"] == "interrupted", detail
+        assert detail["control"]["cancellable"] is False, detail
+        assert "barca history --reconcile" in detail["control"]["reason"], detail
+        code, refused = serve.request("DELETE", f"/runs/{run['id']}")
+        assert code == 409, refused
+        assert "barca history --reconcile" in str(refused), refused
     finally:
         _stop_server(serve)
 
@@ -332,3 +350,21 @@ def test_a_server_run_in_flight_and_the_days_activity_read_the_same_from_the_cli
     finally:
         (tmp_path / "release").write_text("")
         _stop_server(serve)
+
+
+def test_server_owned_pending_run_is_cancellable_until_it_finishes(tmp_path, serve):
+    _project(tmp_path)
+    server = serve("--no-schedule")
+    server.post("/queue/pause", {})
+    run_id = server.post("/runs", {"command": "get", "targets": ["slow"]})["run_id"]
+    detail = server.get(f"/runs/{run_id}")
+    assert detail["status"] == "pending", detail
+    assert detail["control"] == {"cancellable": True, "owner": "this server", "reason": None}
+    code, cancelled = server.request("DELETE", f"/runs/{run_id}")
+    assert code == 200, cancelled
+    done = server.get(f"/runs/{run_id}")
+    assert done["status"] == "cancelled", done
+    assert done["control"]["cancellable"] is False, done
+    code, refused = server.request("DELETE", f"/runs/{run_id}")
+    assert code == 409, refused
+    assert "finished" in str(refused), refused

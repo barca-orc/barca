@@ -159,6 +159,9 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let run_id = body["run_id"].as_str().unwrap().to_string();
+    let (_, detail) = send(&app, "GET", &format!("/runs/{run_id}"), None).await;
+    assert_eq!(detail["control"]["cancellable"], true, "{detail}");
+    assert_eq!(detail["control"]["owner"], "this server", "{detail}");
 
     // `first` finishes at once; `slow` then runs for seconds, and `after` waits for it.
     let running = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;

@@ -316,7 +316,19 @@ pub async fn cancel(
         None => {
             let snapshot = state.reads.snapshot_db().await?;
             match db::get_run(&snapshot.path, &run_id).await? {
-                Some(record) => record.status,
+                Some(record) => {
+                    let control = barca_service::served::run_control(
+                        &snapshot.path,
+                        &run_id,
+                        &record.status,
+                        false,
+                    )
+                    .await?;
+                    return Err(ApiError::Conflict(format!(
+                        "run '{run_id}': {}",
+                        control.reason.unwrap_or_default()
+                    )));
+                }
                 None => return Err(ApiError::NotFound(format!("run '{run_id}' not found"))),
             }
         }

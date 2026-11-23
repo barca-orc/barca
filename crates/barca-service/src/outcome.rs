@@ -550,12 +550,42 @@ impl<'de> Deserialize<'de> for OrderedMap {
     }
 }
 
+/// Whether the answering server owns cancellation of this run. Process identity is
+/// descriptive only: the server never signals a PID read from history.
+#[derive(Clone, Debug, Default, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunControl {
+    pub cancellable: bool,
+    /// `this server`, a recorded process description, or `unknown`.
+    pub owner: String,
+    /// Why cancellation is unavailable; null when this server can cancel it.
+    pub reason: Option<String>,
+}
+
+impl RunControl {
+    /// Authority while a server holds a run, and its terminal refusal afterwards.
+    pub fn server(status: &str) -> Self {
+        let cancellable = matches!(status, "pending" | "running");
+        Self {
+            cancellable,
+            owner: if cancellable {
+                "this server"
+            } else {
+                "not running"
+            }
+            .into(),
+            reason: (!cancellable).then(|| format!("The run already finished ({status}).")),
+        }
+    }
+}
+
 /// One run as `GET /runs/{run_id}` shows it: what started it, where it is, and, once it has
 /// finished, its [`Outcome`]. A finished run is read from the metadata DB, so it is the same
 /// after the server restarts.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunView {
+    pub control: RunControl,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub skip_reason: Option<String>,

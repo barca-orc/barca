@@ -22,7 +22,7 @@ pub use runs::{
     ActiveStep, Cancelling, FirstFailure, Flight, LiveRun, LiveStatus, LiveSteps,
     PartitionProgress, RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs,
     RunSummary, RunViewRequest, RunViewStatus, RunViewed, RunsQuery, in_flight, in_flight_list,
-    in_flight_now, run_detail, run_list, run_view,
+    in_flight_now, run_control, run_detail, run_list, run_view,
 };
 pub use schedule::{JobSkips, ScheduleJob, SchedulePauseAnswer, SkipReason, schedule_jobs};
 pub use server::{

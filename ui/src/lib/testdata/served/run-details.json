@@ -4,6 +4,11 @@
     "cancellation": null,
     "client_run_id": null,
     "command": "get",
+    "control": {
+      "cancellable": false,
+      "owner": "not running",
+      "reason": "The run already finished (success)."
+    },
     "elapsed_seconds": 0.5,
     "error": null,
     "explanation": {
@@ -161,6 +166,11 @@
     "cancellation": null,
     "client_run_id": null,
     "command": "get",
+    "control": {
+      "cancellable": false,
+      "owner": "not running",
+      "reason": "The run already finished (success)."
+    },
     "elapsed_seconds": 42.3,
     "error": null,
     "explanation": {
@@ -549,6 +559,11 @@
     "cancellation": null,
     "client_run_id": null,
     "command": "get",
+    "control": {
+      "cancellable": false,
+      "owner": "not running",
+      "reason": "The run already finished (failed)."
+    },
     "elapsed_seconds": 0.9,
     "error": "ValueError: 3 rows with a negative total",
     "explanation": {
@@ -726,6 +741,11 @@
     "cancellation": null,
     "client_run_id": null,
     "command": "get",
+    "control": {
+      "cancellable": false,
+      "owner": "not running",
+      "reason": "The run already finished (failed)."
+    },
     "elapsed_seconds": 0.7,
     "error": "KeyError: 'units'",
     "explanation": {

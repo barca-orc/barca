@@ -8,7 +8,7 @@ use crate::BarcaError;
 use crate::RunEvent;
 use crate::db;
 use crate::history_filter::HistoryFilter;
-use crate::outcome::{Outcome, RunView};
+use crate::outcome::{Outcome, RunControl, RunView};
 use crate::run_explain::{Cancellation, WaitingFor};
 use crate::run_list::RunningStep;
 use crate::step_status::StepStatus;
@@ -132,6 +132,37 @@ pub struct RunViewed {
     pub record: Option<db::RunRecord>,
 }
 
+/// Cancellation authority comes only from the answering server's live registry.
+/// Recorded PIDs describe other owners; they are never cancellation targets.
+pub async fn run_control(
+    read_path: &str,
+    id: &str,
+    status: &str,
+    server_owned: bool,
+) -> Result<RunControl, BarcaError> {
+    if server_owned || !matches!(status, "pending" | "running" | "interrupted") {
+        return Ok(RunControl::server(status));
+    }
+    let (pid, host) = db::runs::run_process(read_path, id).await?;
+    let owner = match (pid, host) {
+        (Some(pid), Some(host)) => format!("process {pid} on {host}"),
+        (Some(pid), None) => format!("process {pid} (host unknown)"),
+        (None, Some(host)) => format!("unknown process on {host}"),
+        (None, None) => "unknown".into(),
+    };
+    let reason = match status {
+        "interrupted" => "This execution was interrupted. Inspect or reconcile it with barca history --reconcile.".into(),
+        "pending" | "running" if owner == "unknown" => "This server does not own the run and its process is unknown. Inspect barca history before reconciling it.".into(),
+        "pending" | "running" => format!("This server does not own the run; stop it at its owner: {owner}."),
+        _ => format!("The run already finished ({status})."),
+    };
+    Ok(RunControl {
+        cancellable: false,
+        owner,
+        reason: Some(reason),
+    })
+}
+
 /// The run `req` names: its row, the outcome it stored, its steps (the recorded ones, then
 /// the ones it streamed and has not recorded yet) and its lines. `None` when neither the
 /// database nor the overlay knows it.
@@ -189,6 +220,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let outcome = live.and_then(|r| r.outcome.clone()).or(stored);
     let mut view = match (&record, live) {
         (Some(record), _) => RunView {
+            control: RunControl::default(),
             previous_attempts: record.previous_attempts.clone(),
             parent_run_id: record.parent_run_id.clone(),
             run_attempt: record.run_attempt,
@@ -230,6 +262,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
             logs: Vec::new(),
         },
         (None, Some(run)) => RunView {
+            control: RunControl::default(),
             previous_attempts: db::runs::previous_attempts(read_path, id).await?,
             parent_run_id: None,
             run_attempt: None,
@@ -289,6 +322,7 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
         }
         view.error = outcome.envelope().map(|e| e.error);
     }
+    view.control = run_control(read_path, id, &view.status, in_progress).await?;
     view.outcome = outcome;
     let (steps, mut steps_page) = db::get_run_steps_window(read_path, id, limit, offset).await?;
     view.steps = steps;

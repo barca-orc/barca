@@ -1169,6 +1169,7 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
+            control: crate::outcome::RunControl::server(&record.status),
             skip_reason: None,
             previous_attempts: Vec::new(),
             parent_run_id: None,
