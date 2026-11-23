@@ -37,6 +37,9 @@ use std::fs;
 
 /// Every column of `runs` except its row id.
 pub(crate) const RUN_COLUMNS: &[&str] = &[
+    "parent_run_id",
+    "run_attempt",
+    "stop_reason",
     "run_id",
     "command",
     "files",
@@ -61,11 +64,13 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     "principal",
     "trigger_reason",
     "plan_reasons",
+    "worker_failures",
     "cancellation",
 ];
 
 /// Every column of `materializations` except its row id.
 pub(crate) const STEP_COLUMNS: &[&str] = &[
+    "skip_reason",
     "node_id",
     "run_hash",
     "output_json",
@@ -155,6 +160,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
         &["run_id", "seq", "state", "spec", "queued_at"],
     ),
     ("server_state", &["key", "value"]),
+    ("metadata_info", &["key", "value"]),
     ("asset_pauses", &["node_id", "paused_at", "via"]),
     (
         "schedule_ticks",
@@ -173,6 +179,7 @@ pub(crate) const TABLES: &[(&str, &[&str])] = &[
             "failed",
             "not_reached",
             "targets",
+            "skipped",
         ],
     ),
     (

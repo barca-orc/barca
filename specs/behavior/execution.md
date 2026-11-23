@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 11. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -38,7 +38,7 @@ behavior follows the coordinator dependency rules, not ordinary data-failure pro
 
 | Event | Required transition/effect |
 | --- | --- |
-| Server accepts a request | Persist its queue entry before acknowledging its run identity |
+| Server accepts a request | Persist its queue entry, or its completed cache-read outcome, before acknowledging its run identity |
 | Admission/capacity permits execution | Begin work under that run's cancellation and progress ownership |
 | Work succeeds | Commit completed results and progress; a final successful outcome does not invent computations for cache hits |
 | A key fails | Preserve completed peers; skip data dependents that cannot proceed: only the same key of a dependent that reads it key for key (reported `upstream_key_failed`), the whole of one that reads every key (`upstream_failed`); the run goes on to later phases; finish the run with its real failures |
@@ -90,8 +90,26 @@ writes preserve successful work across interruption according to [cache
 decisions](cache-decisions.md)
 and [upload receipts](../interfaces/artifact-upload-receipts.md). Completion recording is at
 least once;
-replay must not duplicate the same run/key result. This is not an exactly-once promise for
+replay must not duplicate the same run/key result. A failed outcome from an earlier requeued
+attempt does not suppress a later success under the same run hash; each distinct outcome is
+retained, and replay of that success does not append another row (#929). Conformance:
+`test_requeued_failed_key_records_success_under_the_same_hash` in
+[server queue tests](../../python/tests/test_serve_queue.py) and
+`terminal_retry_records_success_after_failure_and_remains_idempotent` in
+[terminal persistence tests](../../crates/barca-run/src/persist.rs). This is not an exactly-once promise for
 user side effects or external sinks.
+
+Workers retain private process groups from spawn to shutdown. Cancellation, drain timeout,
+forced stop and normal pool teardown resume each group (including stopped `parallel()`
+callers), send TERM, allow one shared 200 ms grace window, then KILL remaining group members.
+Leader exit does not end descendant ownership. Retirement and replacement cleanup is awaited
+before pool shutdown completes. Local terminal SIGINT and coordinator SIGTERM still cancel
+with exit 130; workers do not receive terminal SIGINT directly. Deliberately daemonized,
+re-sessioned or re-grouped children are outside this boundary and require launcher cleanup.
+Conformance: [worker descendants](../../python/tests/test_worker_descendants.py)
+(`test_shutdown_leaves_no_worker_descendants`) exercises real PIDs, TERM-ignoring children,
+stopped parallel callers, unrelated processes and a subsequent server run; the existing
+[Ctrl-C tests](../../python/tests/test_ctrl_c_worker.py) cover startup and idle workers.
 
 An explicit cancellation stops that run's work and reaps its owned helpers. A step that
 finished before the cancellation stays recorded even when its upload to a store was abandoned;
@@ -102,6 +120,14 @@ nothing and names the runs it waited behind, among them one doing the same work.
 not deduplicate identical requests: each is a run, and the later one waits in the queue or
 shares the earlier one's in-flight asset steps. A server drain
 stops admission and waits; its configured deadline/requeue rules determine interrupted work.
+A terminal SIGINT reaches the server but not its workers: server-owned workers remain outside
+the terminal process group so the first Ctrl-C drains, and the second cancels through the
+server. Local `get`/`run` workers retain their terminal interruption behavior (#926).
+Conformance: `test_a_stop_signal_drains_the_runs_in_flight_and_exits_0`,
+`test_the_drain_timeout_requeues_the_runs_left_and_exits_0`, and
+`test_a_second_signal_stops_the_drain_at_once` in
+[server robustness](../../python/tests/test_serve_robustness.py), plus
+[local Ctrl-C](../../python/tests/test_ctrl_c_worker.py).
 Retry after a user exception may use the same worker. Crash, timeout, `sys.exit()` and failed
 import retries use a replacement worker. Backoff is enforced, not merely declared.
 These are physical step retries under the declared budget, not new invocation attempts.
@@ -187,6 +213,60 @@ computed locally. Empty/unset values retain configuration and other values are u
 The selected local environment is unchanged. This does not block network I/O in user code.
 The removed `BARCA_STATE=off` spelling and shared-history pull are not current alternatives.
 
+### Explicit task skips
+
+Raise `barca.Skip(reason)` in a task body when it has no work to perform, for example when
+another process holds its advisory lock:
+
+```python
+from barca import Skip, task
+
+@task
+def copy_data():
+    if another_copy_is_running():
+        raise Skip("another copy holds the lock")
+    copy_rows()
+```
+
+The attempt is recorded as `skipped` with `skip_reason`, with no result, artifact, cache
+entry, upload or ledger publication. It does not refresh the node. The existing history
+table stores the attempt; that row is not a successful materialization. `Skip` is task-only:
+raising it from an asset, sensor, import, or parallel branch is an ordinary exception.
+Returning a `Skip` instance does not skip. A skip is never retried, even with `retries=`.
+
+Scheduled skips neither increment nor reset the failure streak. Five skipped ticks do not
+hold the schedule; the next tick may run normally. There is no `max_skips` setting.
+`GET /schedule` reports `last_status: skipped` and `last_task_skip_reason` for the latest
+fired task run. The task reason is omitted after a success, failure, or newer scheduler-only
+decision. Its existing `skip_reason` describes scheduler decisions such as `in_flight`
+and `paused`, separately from the task's reason.
+
+A run is `skipped` only when it contains explicit skips and no successful executed work.
+Cached inputs do not change that outcome. Successful work plus skips is `success`; any
+failure makes the run `failed`. Explicit skipped steps carry `skip_reason`; downstream
+steps blocked by them have reason `upstream_skipped` and do not copy that reason. Skipped
+runs exit zero. History counts executed skips separately from `ok` and `not_reached`.
+
+### Ordinary server cache hits
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Conformance: `python/tests/test_cached_admission.py` exercises a saturated server, freshness
+controls, independent I/O admission and concurrent GC.
+
 ## Invariants
 
 - **INV-TASK-01:** Distinct explicit task invocations execute separately; an asset cache hit
@@ -216,6 +296,14 @@ The removed `BARCA_STATE=off` spelling and shared-history pull are not current a
 
 ## Failures and recovery
 
+A completed run retains each step's first worker-fatal error independently of its final
+materialization. The run summary identifies whether that step recovered after worker
+replacement and, if it ultimately failed, its later error. Independent failing steps remain
+separate; skipped dependents remain not reached, not additional root causes. This diagnostic
+is recorded at run completion, not guaranteed after an abruptly killed coordinator. Old runs
+without the evidence do not infer it from a retry count. The wire owner is `RunExplanation`
+in the [HTTP contract](../interfaces/server-api.openapi.yaml).
+
 A failed key preserves successful peers and blocks applicable data dependents: the same key of a
 dependent on exactly the same dimensions that reads it as a plain input, down the chain, and the
 whole of a dependent that reads every key (a `collect()` fan-in, an unpartitioned node, other
@@ -230,6 +318,10 @@ and lifecycle rules below define the precise existing behavior.
 Exercise explicit tasks, cached assets, per-key partial batch failure, worker death/retry,
 cancellation, durable queue acknowledgement and drain/restart. Assert actual executions
 separately from cache hits and preserve completed peers.
+
+Conformance (worker-fatal summaries, recovery and terminal retry):
+[worker-fatal tests](../../python/tests/test_duckdb_invalidated.py). These raise DuckDB's
+exception to exercise Barca's reporting path; they do not reproduce a native invalidation.
 
 Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [scheduler](../../python/tests/test_serve_schedule.py),
@@ -300,3 +392,23 @@ Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,
 not a current whole-engine memory guarantee. Performance workload scope and budgets are
 owned by [the performance contract](performance.md).
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
+
+### Cached-only reads (#1085)
+
+Implemented experimental in 0.47: a cached-only get is a read, never a run. It statically
+loads source, selects exact node/key identities, and reads each latest successful row in the
+chosen environment. Failed and in-progress rows do not supersede success. It executes no
+sensor, asset, task or partition expression, records/enqueues no run and publishes nothing.
+Disk precedes the store; local-only excludes every store call. Stale hits explicitly expose
+freshness and source. Every selected key has an outcome; any missing key fails the call with
+CacheMiss/exit 1. Missing objects differ from authorization, corruption and transport failures.
+Literal or recorded keys supply discovery; explicit coordinates cover unknown dynamic keys.
+Conformance: `python/tests/test_cached_only.py`; wire ownership: CLI contract and `/cached`
+in OpenAPI. Deferred: exposed content digest, bounded remote binary access and other-machine
+results absent from this environment's metadata. Cached value reads reject executable pickle
+reconstruction with typed infra reason `cached_value_unsupported`; verified artifact path
+access remains available, without importing project source or invoking pickle reducers.

@@ -4,4 +4,4 @@
  * How a node's newest attempt went, in one word (`last_attempt` of a status row): the fact
  * a surface shows beside `cache.state`, read off the row and nothing else.
  */
-export type LastAttempt = "never_run" | "success" | "failed";
+export type LastAttempt = "skipped" | "never_run" | "success" | "failed";

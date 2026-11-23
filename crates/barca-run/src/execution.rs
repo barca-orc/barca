@@ -26,7 +26,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use barca_python::load::build_dag;
+use barca_python::load::build_dag_until;
 use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
@@ -57,9 +57,9 @@ use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
 use prepare::*;
+pub use progress::cached_step_line;
 use progress::{
-    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, reconcile_total,
+    RunOutcome, batch_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total,
 };
 use select::*;
 pub(crate) use workers::upload_pending;
@@ -1050,6 +1050,30 @@ async fn collect_failures(
         let grace = std::time::Duration::from_millis(250);
         let _ = tokio::time::timeout(grace, session.started.cancel.cancelled()).await;
     }
+    let terminal_failures: std::collections::HashMap<_, _> =
+        coord.failed_items().into_iter().collect();
+    let remaining = barca_model::run_explain::WORKER_FAILURE_LIMIT
+        .saturating_sub(session.state.results.worker_failures.len());
+    for (id, first_error) in coord.worker_failures().iter().take(remaining) {
+        let retry_error = terminal_failures
+            .get(id)
+            .map(|error| barca_model::run_explain::bounded_worker_error(error));
+        session
+            .state
+            .results
+            .worker_failures
+            .push(barca_model::run_explain::WorkerFailure {
+                node_id: coord.item(*id).step_id.display(),
+                first_error: first_error.clone(),
+                retry_error,
+                recovered: coord.outputs().contains_key(id),
+            });
+    }
+    session
+        .state
+        .results
+        .worker_failures
+        .sort_by(|a, b| a.node_id.cmp(&b.node_id));
     let cancelled = session.started.cancel.is_cancelled();
     let mut first_non_group_failure: Option<(String, String)> = None;
     let mut first_failure_phase = None;
@@ -1144,7 +1168,20 @@ async fn collect_failures(
         if item.group.is_some() {
             continue;
         }
-        session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        if let Some((reason, elapsed)) = coord.explicit_skips().get(&item_id) {
+            session
+                .state
+                .results
+                .task_skips
+                .push(barca_model::step_result::TaskSkip {
+                    node_id: item.step_id.display(),
+                    reason: reason.clone(),
+                    elapsed_seconds: *elapsed,
+                    attempts: item.attempts,
+                });
+        } else {
+            session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        }
         let base = item.step_id.base_id().to_string();
         if item.step_id.partition.is_empty() {
             session.state.skipped_bases.insert(base);
@@ -1221,12 +1258,13 @@ struct BatchKeys {
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
 /// raises, `strict=True` with a key in no group) is returned with why, to be failed.
-fn plan_calls(
+async fn plan_calls(
     dag: &Dag,
     over: &barca_engine::batch::BatchOverride,
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
+    cancel: &CancellationToken,
 ) -> PlannedCalls {
     let mut keys_of: Vec<BatchKeys> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1273,12 +1311,15 @@ fn plan_calls(
         };
         let labels = match &grouping {
             barca_engine::batch::Grouping::By { source_text, .. } => {
-                match barca_engine::batch::evaluate_labels(
+                match barca_engine::batch::evaluate_labels_until(
                     python,
                     &node.invoke.python().source_file,
                     source_text,
                     &keys,
-                ) {
+                    barca_model::process::Until::cancelled(cancel),
+                )
+                .await
+                {
                     Ok(labels) => Some(labels),
                     Err(e) => {
                         errors.push((base.clone(), format!("could not group the keys: {e}")));
@@ -1391,7 +1432,13 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             &phase,
             session.request.python,
             &mut session.state.next_call,
-        );
+            &session.started.cancel,
+        )
+        .await;
+        if session.started.cancel.is_cancelled() {
+            session.state.phase_error = Some("run cancelled".into());
+            break;
+        }
         if let Some((base, message)) = ungrouped.first() {
             session.state.usage_error = Some(format!("{base}: {message}"));
             for (base, message) in ungrouped {
@@ -1557,6 +1604,39 @@ async fn return_outputs(
     }
 
     session.state.results.annotate_reports(&mut step_reports);
+    for report in &mut step_reports {
+        if report.reason.as_deref() == Some("upstream_failed")
+            && blocking_failure(
+                &session.prepared.dag,
+                &report.id,
+                &session.state.failed_bases,
+            )
+            .is_none()
+        {
+            report.reason = Some("upstream_skipped".into());
+            report.detail = Some("a task it depends on skipped".into());
+        }
+    }
+    for skip in &session.state.results.task_skips {
+        if let Some(report) = step_reports.iter_mut().find(|r| r.id == skip.node_id) {
+            report.status = Some("skipped".into());
+            report.skip_reason = Some(skip.reason.clone());
+            report.reason = Some("task_skipped".into());
+            report.detail = Some(skip.reason.clone());
+            report.attempts = Some(skip.attempts);
+            report.elapsed_seconds = Some(skip.elapsed_seconds);
+        }
+    }
+    for ((_, id), (_, outcome)) in session.prepared.targets.iter().zip(outcomes.iter_mut()) {
+        if session.state.skipped_bases.contains(id)
+            && !session.state.failed_bases.contains(id)
+            && blocking_failure(&session.prepared.dag, id, &session.state.failed_bases).is_none()
+        {
+            outcome.status = "skipped".into();
+            outcome.error = None;
+            outcome.failed_node = None;
+        }
+    }
 
     // Only a step that ran can record changed bytes: a run that executed none (every step
     // cached) is not looked up.

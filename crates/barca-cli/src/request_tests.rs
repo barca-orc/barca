@@ -138,3 +138,35 @@ fn status_picks_one_view() {
         StatusView::Nodes { limit: None, sample: 2, filter, .. } if filter.problems
     ));
 }
+
+#[test]
+fn cached_reads_have_tiers_and_reject_execution_options() {
+    for side in [Side::Here, Side::Server] {
+        let Request::Get { mode, .. } = request("barca get a p.py --cached-only", side).unwrap()
+        else {
+            panic!("get")
+        };
+        assert_eq!(mode.cached_only, Some(barca_service::cached::Tier::Store));
+        let Request::Get { mode, .. } =
+            request("barca get a p.py --cached-only=local", side).unwrap()
+        else {
+            panic!("get")
+        };
+        assert_eq!(mode.cached_only, Some(barca_service::cached::Tier::Local));
+        assert!(usage("barca get a p.py --cached-only=local -o url", side).contains("cannot sign"));
+    }
+    for flag in [
+        "--refresh=a",
+        "--refresh-all",
+        "--dry-run",
+        "--batch=all",
+        "--queue=last",
+        "--allow-paused",
+        "--no-cascade",
+    ] {
+        assert!(
+            Cli::try_parse_from(["barca", "get", "a", "p.py", "--cached-only", flag]).is_err(),
+            "{flag}"
+        );
+    }
+}

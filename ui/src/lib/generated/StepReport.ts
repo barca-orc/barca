@@ -6,7 +6,11 @@ import type { PartitionSummary } from "./PartitionSummary";
 /**
  * How a step was (or, in a dry run, will be) treated.
  */
-export type StepReport = { id: string,
+export type StepReport = {
+/**
+ * Present only when this task explicitly raised `barca.Skip`.
+ */
+skip_reason?: string, id: string,
 /**
  * `asset`, `task` or `sensor`.
  */

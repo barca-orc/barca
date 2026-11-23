@@ -6,8 +6,8 @@ use crate::source_scan;
 use std::path::Path;
 
 /// The words only a step status spells. `success` and `failed` are left out: run and
-/// materialization statuses spell theirs the same way.
-const WORDS: [&str; 5] = ["cached", "ran", "partial", "skipped", "blocked"];
+/// materialization statuses spell theirs the same way. `skipped` is also a run/attempt outcome.
+const WORDS: [&str; 4] = ["cached", "ran", "partial", "blocked"];
 
 /// Files that may spell one of [`WORDS`] as a bare literal, each with why.
 const ALLOWED: &[(&str, &str, &str)] = &[

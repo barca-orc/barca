@@ -3,4 +3,4 @@
 /**
  * Runs by status: the statuses of `barca history --status`.
  */
-export type StatusCounts = { success: number, failed: number, error: number, cancelled: number, interrupted: number, running: number, };
+export type StatusCounts = { skipped?: number, success: number, failed: number, error: number, cancelled: number, interrupted: number, running: number, };

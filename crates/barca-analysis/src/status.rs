@@ -530,6 +530,7 @@ pub async fn status_from_dag_with_membership(
         states.insert(id.to_string(), cache.state);
 
         let last_materialization = history.latest.map(|m| LastMaterialization {
+            skip_reason: m.skip_reason,
             content_hash: m.content_hash,
             partition: partition_of(&m.node_id),
             status: m.status,
@@ -975,6 +976,7 @@ mod tests {
         db::NodeHistory {
             last_bytes_change: None,
             latest: latest_status.map(|s| db::MaterializationRecord {
+                skip_reason: None,
                 content_hash: None,
                 node_id: "p.py:a".into(),
                 run_hash: Some("h1".into()),
@@ -1149,6 +1151,7 @@ mod tests {
 
     fn failed(mut n: NodeStatus, error: &str) -> NodeStatus {
         n.last_materialization = Some(LastMaterialization {
+            skip_reason: None,
             content_hash: None,
             status: "failed".into(),
             created_at: "2026-10-22 06:00:00".into(),

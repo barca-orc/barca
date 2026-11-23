@@ -14,7 +14,7 @@ export type RunSummary = { id: string, handle: string | null, run_id: string | n
  * Recorded steps that failed, a partitioned node's keys each counted (#758); absent for
  * a run not yet recorded. Experimental.
  */
-steps_failed?: number | null, error: string | null,
+steps_failed?: number | null, steps_skipped?: number | null, error: string | null,
 /**
  * The run's first failed step and its error; `null` when no step failed.
  */

@@ -18,6 +18,7 @@ pub enum RunStatus {
     Running,
     /// Finished successfully.
     Complete,
+    Skipped,
     /// Finished with an error.
     Failed,
     /// Stopped mid-flight via `DELETE /runs/{id}` or server shutdown.
@@ -84,6 +85,7 @@ pub struct RunState {
 }
 
 /// A run to start: what to run, how, and what asked for it.
+#[derive(Clone)]
 pub(crate) struct RunSpec {
     pub command: RunCommand,
     /// As given (`[]`: every asset and sensor).

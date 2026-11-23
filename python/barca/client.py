@@ -77,7 +77,7 @@ class _ServerRedirects(urllib.request.HTTPRedirectHandler):
 
 
 # Terminal run states reported by ``GET /status``.
-_TERMINAL = {"complete", "failed", "cancelled"}
+_TERMINAL = {"complete", "skipped", "failed", "cancelled"}
 
 
 def _quote(target: str) -> str:

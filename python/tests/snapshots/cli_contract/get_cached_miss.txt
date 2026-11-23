@@ -1,0 +1,16 @@
+# barca get per_key pipeline.py --cached-only=local --partition k=a,b --json  (stdout, exit 1)
+error : object
+error.<name> : array|integer|null|string
+error.<name>[] : object
+error.<name>[].node : string
+error.<name>[].partition : string
+error.<name>[].reason : string
+error.<name>[].status : string
+final_output : <user value>
+outcomes : array
+outcomes[] : object
+outcomes[].node : string
+outcomes[].partition : string
+outcomes[].reason : string
+outcomes[].status : string
+path_scope : string

@@ -102,7 +102,8 @@ pub fn pin(run_id: &str) -> Pin {
     pin_at(run_id, &std::env::current_dir().unwrap_or_default())
 }
 
-fn pin_at(run_id: &str, root: &Path) -> Pin {
+/// Protect a read or run in an explicitly named project.
+pub fn pin_at(run_id: &str, root: &Path) -> Pin {
     let id = NEXT_PIN.fetch_add(1, Ordering::Relaxed);
     pins().insert(
         id,

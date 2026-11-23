@@ -1,0 +1,18 @@
+# barca get total pipeline.py --cached-only=local --json  (stdout, exit 0)
+final_output : object
+final_output._barca_artifact : object
+final_output._barca_artifact.format : string
+final_output._barca_artifact.path : string
+final_output._barca_artifact.size_bytes : integer
+outcomes : array
+outcomes[] : object
+outcomes[].format : string
+outcomes[].fresh : boolean
+outcomes[].node : string
+outcomes[].partition : null
+outcomes[].path : string
+outcomes[].run_hash : string
+outcomes[].size_bytes : integer
+outcomes[].source : string
+outcomes[].status : string
+path_scope : string

@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '30'
-  description: 'Normative current wire contract; specification version 30 is independent of package versions.
+  version: '31'
+  description: 'Normative current wire contract; specification version 31 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -32,6 +32,36 @@ x-project-socket: 'A server that holds its environment (serve.lock) also listens
   killed server left refuses connections. barca commands run in the project use it (barca docs
   server-mode). Conformance: crates/barca-server/src/project_socket.rs, python/tests/test_project_socket.py.'
 paths:
+  /cached:
+    post:
+      summary: Read latest completed results without executing or enqueueing work
+      operationId: cachedGet
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/CachedRequest'}
+      responses:
+        '200':
+          description: Every selected key was found
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CachedAnswer'}
+        '404':
+          description: At least one selected key missed; all outcomes and typed cache_miss error
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/CachedAnswer'}
+        '400':
+          description: Invalid target, partition or incompatible options
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
+        '500':
+          description: Metadata, authorization to storage, corruption or other read failure
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/Error'}
   /auth/status:
     get:
       summary: Public authentication mode
@@ -3464,7 +3494,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '202':
-          description: Accepted and recorded in the run queue; stream GET /runs/{run_id}/events
+          description: Accepted and durably recorded; stream GET /runs/{run_id}/events. A provably
+            fresh get can finish using bounded artifact I/O before its handle is returned, without
+            entering execution admission. Misses, stale results and refreshes enter the run queue.
           content:
             application/json:
               schema:
@@ -3630,7 +3662,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
-          description: Cancelling; the stream ends with a cancelled outcome
+          description: Cancelled when removed from the queue; cancelling while execution stops. The stream ends with a cancelled outcome.
           content:
             application/json:
               schema:
@@ -4409,6 +4441,42 @@ components:
         application/json:
           schema: {$ref: '#/components/schemas/Error'}
   schemas:
+    CachedRequest:
+      type: object
+      additionalProperties: false
+      required: [tier]
+      properties:
+        targets: {type: array, items: {type: string}, default: []}
+        files: {type: array, items: {type: string}, default: []}
+        tier: {type: string, enum: [store, local]}
+        partition: {type: [string, 'null']}
+        values: {type: boolean, default: false}
+        url_expires: {type: [integer, 'null'], minimum: 1, maximum: 604800}
+    CachedOutcome:
+      type: object
+      additionalProperties: false
+      required: [node, partition, status]
+      properties:
+        node: {type: string}
+        partition: {type: [string, 'null']}
+        status: {type: string, enum: [hit, miss]}
+        reason: {type: string, enum: [never_run, evicted, not_fetched]}
+        run_hash: {type: string}
+        format: {type: string}
+        size_bytes: {type: integer, minimum: 0}
+        path: {type: string}
+        url: {type: string}
+        fresh: {type: boolean}
+        source: {type: string, enum: [disk, store]}
+    CachedAnswer:
+      type: object
+      additionalProperties: false
+      required: [outcomes, final_output, path_scope]
+      properties:
+        outcomes: {type: array, items: {$ref: '#/components/schemas/CachedOutcome'}}
+        final_output: {}
+        path_scope: {type: string, enum: [local, server]}
+        error: {$ref: '#/components/schemas/Error'}
     AssetPin:
       type: object
       additionalProperties: false
@@ -4600,6 +4668,7 @@ components:
           type: string
           enum:
           - step_failed
+          - cache_miss
           - usage
           - infra
           - cancelled
@@ -4622,6 +4691,9 @@ components:
             - write_output
             - sink
           - type: 'null'
+        outcomes:
+          type: array
+          items: {$ref: '#/components/schemas/CachedOutcome'}
         reason:
           description: A stable name for an error a client may handle on its own, present
             only when barca has one. metadata_unusable means the metadata DB is there but this
@@ -4630,6 +4702,7 @@ components:
           type: string
           enum:
           - metadata_unusable
+          - cached_value_unsupported
           - authentication_required
           - invalid_token
           - invalid_event_cursor
@@ -5151,13 +5224,15 @@ components:
       properties:
         run_id: *id003
         status:
-          const: cancelling
+          type: string
+          enum: [cancelling, cancelled]
     RunStatus:
       type: string
       enum:
       - pending
       - running
       - complete
+      - skipped
       - failed
       - cancelled
     NodeRoot:
@@ -5833,6 +5908,9 @@ components:
       - id
       - kind
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task Skip reason; absent on ordinary blocked downstream steps.
         batch:
           $ref: '#/components/schemas/BatchPlan'
         batch_execution:
@@ -6635,6 +6713,9 @@ components:
       - size_bytes
       - rows
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task reason for a skipped attempt, with no result or artifact.
         status: *id003
         created_at: *id003
         elapsed_seconds:
@@ -6841,7 +6922,7 @@ components:
             for a fresh node and one that has an estimate. Experimental.
         last_attempt: &id_last_attempt
           type: string
-          enum: [never_run, success, failed]
+          enum: [never_run, success, failed, skipped]
           description: How its newest attempt went, in one word. failed when its last
             materialization failed or any of its keys last failed (partitions.failed); never_run
             when no execution is recorded; else success. A fact beside cache.state and health,
@@ -7471,6 +7552,9 @@ components:
           - *id003
           - type: 'null'
           description: last_run_id under its older name.
+        last_task_skip_reason:
+          type: string
+          description: Explicit task skip reason from the newest fired run when its status is skipped; omitted after a success, failure or newer scheduler-only decision. Separate from scheduler skip_reason.
         last_status:
           anyOf:
           - type: string
@@ -7478,6 +7562,7 @@ components:
             - pending
             - running
             - success
+            - skipped
             - failed
             - cancelled
             - error
@@ -7545,6 +7630,7 @@ components:
       - stdout
       - stderr
     Log:
+      description: A recorded entry. Multiline stderr writes and failed-attempt tracebacks retain embedded newlines in line; stdout remains line-oriented.
       type: object
       additionalProperties: false
       required:
@@ -7667,6 +7753,9 @@ components:
           - type: 'null'
         steps_executed: *id054
         steps_cached: *id054
+        steps_skipped:
+          type: [integer, 'null']
+          description: Executed task attempts that explicitly skipped, counted across every page.
         steps_failed:
           anyOf:
           - *id054
@@ -7896,6 +7985,7 @@ components:
           additionalProperties: false
           required: [success, failed, error, cancelled, interrupted, running]
           properties:
+            skipped: {type: integer, minimum: 0}
             success: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
             error: {type: integer, minimum: 0}
@@ -7963,6 +8053,9 @@ components:
       - sink_seconds
       - output_tail
       properties:
+        skip_reason:
+          type: string
+          description: Explicit task Skip reason; absent on ordinary blocked downstream steps.
         batch:
           type: [string, "null"]
           description: Run-local call id linking this key to the other keys of its batched call; null for unbatched steps.
@@ -8096,6 +8189,14 @@ components:
           description: 'ErrorType: message, the first line of the message only.'
     RunEvent:
       oneOf:
+      - type: object
+        additionalProperties: false
+        required: [type, node_id, skip_reason, elapsed_seconds]
+        properties:
+          type: {const: step_skipped}
+          node_id: {type: string}
+          skip_reason: {type: string}
+          elapsed_seconds: {type: number}
       - type: object
         additionalProperties: false
         required:
@@ -8536,7 +8637,7 @@ components:
         - warnings
         properties:
           status:
-            const: success
+            enum: [success, skipped]
           run_id: *id005
           elapsed_seconds:
             type: number
@@ -8603,6 +8704,20 @@ components:
         counters and steps_page.nodes) by the code that prints barca history RUN_ID, whose --json has
         the same object. The wording may change; parse the recorded fields. Experimental.
       properties:
+        worker_failures:
+          type: array
+          description: Original worker-fatal errors and their retry outcome, at most 64 affected steps and 8 KiB per error. Shortened errors carry a diagnostic truncated marker. Not exhaustive at the limit; independent failures remain in ordinary step outcomes. Absent when none were recorded.
+          maxItems: 64
+          items:
+            type: object
+            additionalProperties: false
+            required: [node_id, first_error, retry_error, recovered]
+            properties:
+              node_id: {type: string}
+              first_error: {type: string}
+              retry_error: {type: [string, 'null']}
+              recovered: {type: boolean}
+
         target_line: {type: string}
         counts:
           type: object
@@ -8613,6 +8728,7 @@ components:
             ran: {type: integer}
             ok: {type: integer}
             failed: {type: integer}
+            skipped: {type: integer}
             cached: {type: integer}
             not_reached: {type: integer}
             nodes: {type: [integer, 'null']}
@@ -8832,6 +8948,32 @@ components:
       - steps_page
       - logs
       properties:
+        skip_reason:
+          type: string
+          description: The common explicit reason of an all-skipped run; absent when reasons differ.
+        previous_attempts:
+          type: array
+          description: Stopped executions of this accepted request, oldest first; absent when none.
+          items:
+            type: object
+            additionalProperties: false
+            required: [run_id, attempt, stop_reason]
+            properties:
+              run_id:
+                type: string
+              attempt:
+                type: integer
+                minimum: 1
+              stop_reason:
+                type: string
+        parent_run_id:
+          type: string
+          description: Original request id, present only on an archived execution.
+        run_attempt:
+          type: integer
+          minimum: 1
+        stop_reason:
+          type: string
         run_id: *id005
         status:
           type: string
@@ -8839,6 +8981,7 @@ components:
           - pending
           - running
           - success
+          - skipped
           - failed
           - cancelled
           - error
@@ -8954,6 +9097,7 @@ components:
                   node_id: *id003
                   keys: *id056
                   failed: *id056
+                  skipped: *id056
                   elapsed_seconds:
                     type: number
                   calls: *id056
@@ -9334,6 +9478,32 @@ components:
       - trigger_reason
       - cancellation
       properties:
+        skip_reason:
+          type: string
+          description: Common explicit reason of an all-skipped run; absent when reasons differ.
+        previous_attempts:
+          type: array
+          description: Stopped executions of this accepted request, oldest first; absent when none.
+          items:
+            type: object
+            additionalProperties: false
+            required: [run_id, attempt, stop_reason]
+            properties:
+              run_id:
+                type: string
+              attempt:
+                type: integer
+                minimum: 1
+              stop_reason:
+                type: string
+        parent_run_id:
+          type: string
+          description: Original request id, present only on an archived execution.
+        run_attempt:
+          type: integer
+          minimum: 1
+        stop_reason:
+          type: string
         run_id: *id005
         command: *id005
         files:
@@ -9627,6 +9797,7 @@ components:
         status:
           enum:
           - success
+          - skipped
           - failed
         created_at:
           type: string

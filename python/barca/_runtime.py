@@ -23,7 +23,7 @@ except ImportError:
 
 # ─── Socket connection ────────────────────────────────────────────────────────
 
-PROTOCOL_VERSION = 5
+PROTOCOL_VERSION = 6
 
 _socket: socket.socket | None = None
 # Separate locks: whole frames never interleave on either direction, and a
@@ -246,6 +246,12 @@ def emit_step_completed(node_id: str, artifact: dict) -> None:
     )
 
 
+def emit_step_skipped(node_id: str, reason: str, elapsed: float) -> None:
+    """Report an explicit task skip, without an artifact or failure."""
+    _report_repeated_warnings()
+    _emit_result({"type": "step_skipped", "node_id": node_id, "reason": reason, "elapsed": elapsed})
+
+
 def emit_step_error(
     node_id: str,
     error_type: str,
@@ -283,8 +289,8 @@ def emit_step_error(
 
 
 def emit_log(node_id: str, line: str, stream: str = "stdout") -> None:
-    """Stream a line of user stdout or stderr captured during a step, with the time it was
-    written (seconds since the epoch). Sent at once, one frame per line: a line written just
+    """Stream an entry of stdout or stderr captured during a step, with the time it was
+    written (seconds since the epoch). Sent at once, one frame per entry: a line written just
     before the process dies (a crash, os._exit) still reaches the coordinator."""
     send_message(
         {"type": "log", "node_id": node_id, "line": line, "stream": stream, "t": time.time()}

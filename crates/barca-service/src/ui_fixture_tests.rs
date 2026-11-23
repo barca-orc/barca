@@ -66,6 +66,7 @@ fn row(state: CacheState, last: &str, keys_failed: bool) -> NodeStatus {
     node.cache.state = state;
     if last != "none" {
         node.last_materialization = Some(LastMaterialization {
+            skip_reason: None,
             content_hash: None,
             status: last.to_string(),
             created_at: "2026-11-16 10:00:00".to_string(),
@@ -1096,6 +1097,7 @@ impl Project {
                     steps_executed: record.steps_executed,
                     steps_cached: record.steps_cached,
                     steps_failed: record.steps_failed,
+                    steps_skipped: None,
                     error: None,
                     first_failure,
                     target: record.target.as_deref(),
@@ -1167,6 +1169,11 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
+            skip_reason: None,
+            previous_attempts: Vec::new(),
+            parent_run_id: None,
+            run_attempt: None,
+            stop_reason: None,
             run_id: record.run_id.clone(),
             status: record.status.clone(),
             command: record.command.clone(),
@@ -1205,6 +1212,7 @@ impl Project {
         view.explanation = crate::run_explanation::explain(
             crate::run_explanation::RunFacts {
                 steps_failed: record.steps_failed,
+                steps_skipped: None,
                 ..(&view).into()
             },
             &view.steps_page.nodes,
@@ -1372,6 +1380,7 @@ fn explanations() -> String {
                 steps_executed: run["steps_executed"].as_i64().unwrap(),
                 steps_cached: run["steps_cached"].as_i64().unwrap(),
                 steps_failed: run["steps_failed"].as_i64(),
+                steps_skipped: None,
                 started_at: text("started_at").unwrap(),
                 plan_reasons: plan_reasons.as_ref(),
                 cancellation: cancellation.as_ref(),
@@ -1387,6 +1396,7 @@ fn explanations() -> String {
             steps_executed: run["steps_executed"].as_i64().unwrap(),
             steps_cached: run["steps_cached"].as_i64().unwrap(),
             steps_failed: run["steps_failed"].as_i64(),
+            steps_skipped: None,
             error: text("error"),
             first_failure: run["first_failure"]["node_id"]
                 .as_str()

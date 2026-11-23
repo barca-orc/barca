@@ -131,6 +131,43 @@ pub struct LatestSuccess {
     pub output: OutputRef,
 }
 
+/// Read the last completed artifact of each step of a node, preserving errors instead of
+/// treating a failed metadata read as absence. This is local metadata only, never a ledger.
+pub async fn cached_successes(
+    cache: &CacheReader,
+    base: &str,
+) -> Result<std::collections::BTreeMap<String, LatestSuccess>, BarcaError> {
+    let fail = |e| BarcaError::Db(format!("reading cached results: {e}"));
+    let mut rows = cache.conn().query(
+        "SELECT node_id, id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash \
+         FROM materializations WHERE status = 'success' AND artifact_path IS NOT NULL \
+         AND (node_id = ?1 OR substr(node_id, 1, length(?1) + 1) = ?1 || '[') ORDER BY id DESC",
+        [base],
+    ).await.map_err(fail)?;
+    let mut out = std::collections::BTreeMap::new();
+    while let Some(row) = rows.next().await.map_err(fail)? {
+        let node: String = row.get(0).map_err(fail)?;
+        if out.contains_key(&node) {
+            continue;
+        }
+        out.insert(
+            node,
+            LatestSuccess {
+                id: row.get(1).map_err(fail)?,
+                run_hash: row.get(2).map_err(fail)?,
+                output: OutputRef {
+                    path: row.get(3).map_err(fail)?,
+                    format: row.get(4).map_err(fail)?,
+                    size_bytes: row.get::<i64>(5).map_err(fail)? as u64,
+                    content_hash: row.get::<String>(6).ok().filter(|s| !s.is_empty()),
+                    elapsed_seconds: None,
+                },
+            },
+        );
+    }
+    Ok(out)
+}
+
 /// The latest successful materialization of `node_id` (a display id) whose artifact this run may
 /// read; `None` when it never succeeded.
 pub async fn latest_success(cache: &CacheReader, node_id: &str) -> Option<LatestSuccess> {
@@ -627,7 +664,7 @@ impl NewMaterialization {
     }
 }
 
-/// Appends successful steps' rows, unless the run already has a row for the node under the same
+/// Appends successful steps' rows, unless the run already has a successful row for the node under the same
 /// run hash. A run requeued and resumed on new code keeps its run id, so a step it re-executes
 /// under a new run hash gets a new row rather than leaving the earlier attempt's (#794).
 /// Prepared once per transaction and rebound for each row (#460).
@@ -637,11 +674,11 @@ impl StepInsert {
     // Turso otherwise intersects the node and run indexes, scanning this run
     // for each partition. Bound deduplication to the node's own history.
     const SQL: &'static str = concat!(
-        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows, sink_seconds) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
+        "INSERT INTO materializations (node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, elapsed_seconds, status, attempts, sinks_json, cpu_seconds, max_rss_bytes, output_hash, bytes_changed, run_id, components, batch_id, observation_hash, rows, sink_seconds, created_at) SELECT ?1, ?2, ?3, ?4, ?5, NULLIF(?6, ''), 'success', ?7, NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''), COALESCE((SELECT output_hash FROM materializations ",
         by_node_run!(),
-        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, '') WHERE NOT EXISTS (SELECT 1 FROM materializations ",
+        " WHERE node_id = ?1 AND run_hash = ?2 AND status = 'success' AND output_hash IS NOT NULL ORDER BY id DESC LIMIT 1) != NULLIF(?11, ''), 0), ?12, NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''), NULLIF(?17, ''), ?18 WHERE NOT EXISTS (SELECT 1 FROM materializations ",
         by_node_run!(),
-        " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12)"
+        " WHERE node_id = ?1 AND run_hash = ?2 AND run_id = ?12 AND status = 'success')"
     );
 
     pub async fn prepare(conn: &Connection) -> Result<Self, libsql::Error> {
@@ -674,9 +711,20 @@ impl StepInsert {
                 opt(row.observation_hash.clone()),
                 opt(row.rows.map(|r| r.to_string())),
                 opt(row.sink_seconds.map(|s| s.to_string())),
+                barca_model::time::db_timestamp(barca_model::time::now_secs_f64()),
             ])
             .await
     }
+}
+
+/// Record the attempt, with no cache identity, artifact, observation or successful result.
+pub(crate) async fn insert_task_skip(
+    conn: &Connection,
+    run_id: &str,
+    skip: &barca_model::step_result::TaskSkip,
+) -> Result<u64, libsql::Error> {
+    conn.execute("INSERT INTO materializations (run_id, node_id, status, skip_reason, elapsed_seconds, attempts) SELECT ?1, ?2, 'skipped', ?3, ?4, ?5 WHERE NOT EXISTS (SELECT 1 FROM materializations WHERE run_id = ?1 AND node_id = ?2 AND status = 'skipped')",
+        libsql::params![run_id, skip.node_id.clone(), skip.reason.clone(), skip.elapsed_seconds, skip.attempts]).await
 }
 
 /// Appends a permanently failed step as a `status = 'failed'` row (artifact columns NULL);

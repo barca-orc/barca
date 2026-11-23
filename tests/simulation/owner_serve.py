@@ -516,7 +516,15 @@ class Harness:
             self.problem("local get", "no JSON", out.stdout[-500:] + out.stderr[-500:], began)
             return
         expect = LOCAL_STEPS if whole else LAST_STEPS
-        if done.get("status") != "success" or done.get("steps_executed") != expect:
+        # A refresh accepted before another run's success may reuse that result (#928).
+        # Count only explicit post-acceptance evidence, not arbitrary old cache hits.
+        refreshed = sum(
+            step.get("partitions", {}).get("cached", 1)
+            for step in done.get("steps", [])
+            if step.get("status") == "cached" and step.get("reason") == "refreshed_by_this_run"
+        )
+        completed = (done.get("steps_executed") or 0) + refreshed
+        if done.get("status") != "success" or completed != expect:
             self.problem("local get", f"not {expect} steps", json.dumps(done)[:800], began)
         with self.lock:
             self.local_runs[done["run_id"]] = {

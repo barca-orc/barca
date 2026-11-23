@@ -305,7 +305,7 @@ async fn previous_run(db_path: &str, run_id: &str) -> Option<(String, String)> {
     let (_db, conn) = barca_db::db::open_conn(db_path).await.ok()?;
     let mut rows = conn
         .query(
-            "SELECT run_id, status FROM runs WHERE run_id != ?1 ORDER BY rowid DESC LIMIT 1",
+            "SELECT run_id, status FROM runs WHERE run_id != ?1 AND parent_run_id IS NULL ORDER BY rowid DESC LIMIT 1",
             [run_id],
         )
         .await

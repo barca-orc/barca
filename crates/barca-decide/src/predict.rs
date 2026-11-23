@@ -105,6 +105,46 @@ pub async fn explain_dag_with_keys(
     ),
     BarcaError,
 > {
+    explain_dag_with_hashes(
+        dag,
+        cfg,
+        target_names,
+        policy,
+        command_label,
+        partition,
+        rules,
+        file_args,
+        None,
+        None,
+    )
+    .await
+}
+
+/// The same prediction, optionally retaining each selected step's expected hash and the
+/// planned phase count for an ordinary cache-hit result.
+/// A latest-success reader compares its row with this evidence: an older matching result
+/// can make ordinary get fresh even while the latest success is stale after a code revert.
+#[allow(clippy::too_many_arguments)]
+pub async fn explain_dag_with_hashes(
+    dag: &Dag,
+    cfg: &barca_model::config::ResolvedConfig,
+    target_names: &[String],
+    policy: CachePolicy,
+    command_label: &str,
+    partition: Option<&barca_compile::selection::PartitionSelection>,
+    rules: &crate::freshness::RunRules,
+    file_args: &[String],
+    hashes: Option<&mut HashMap<String, String>>,
+    phases: Option<&mut usize>,
+) -> Result<
+    (
+        ExplainResult,
+        crate::cache::ExpandedMembership,
+        crate::cache::ExpandedMembership,
+        HeldNodes,
+    ),
+    BarcaError,
+> {
     let t0 = std::time::Instant::now();
     let mut targets = resolve_targets(dag, target_names, command_label)?;
     // The `Manual` nodes a real run would read as they are, and the cone it would plan.
@@ -127,6 +167,9 @@ pub async fn explain_dag_with_keys(
         Some(selection) => Some(selection.apply(dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
+    if let Some(phases) = phases {
+        *phases = exec_plan.phases.len();
+    }
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(
             dag,
@@ -304,6 +347,9 @@ pub async fn explain_dag_with_keys(
     } else {
         Vec::new()
     };
+    if let Some(hashes) = hashes {
+        *hashes = state.run_hashes().clone();
+    }
     let (members, will_run) = state.into_key_sets();
     Ok((
         ExplainResult {

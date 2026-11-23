@@ -209,12 +209,16 @@ def run_logs(cwd: Path, run_id: str) -> str:
     return out.stdout + out.stderr
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
-def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig):
+@pytest.mark.parametrize(
+    "sig,new_session",
+    [(signal.SIGTERM, False), (signal.SIGINT, False), (signal.SIGINT, True)],
+    ids=["sigterm", "sigint", "terminal-sigint"],
+)
+def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig, new_session):
     """#190: the first signal pauses the queue and waits for the runs in flight. SIGTERM used
     to be discarded when barca was process 1 of a container (#289), and an open /events
     stream kept a stopped server alive for ever."""
-    server = serve("--no-schedule")
+    server = serve("--no-schedule", new_session=new_session)
 
     # A run that has finished and one that is in the middle of a step, each with a client
     # that keeps its event stream open the way a browser tab on a run page does.
@@ -235,9 +239,9 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     server.send(sig)
     wait_until(lambda: draining(server), "/health to report draining")
 
-    # New runs are accepted into the queue for the next start, whatever the route, and none
-    # starts; reads and the run in flight go on.
-    for path in ("/run", "/get/quick", "/run/nightly"):
+    # Work needing execution is queued for the next start, whatever the route. The slow
+    # asset is still a cache miss; valid cached reads may finish while draining.
+    for path in ("/run", "/get/slow", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
         assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
@@ -260,17 +264,19 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     assert "3 runs wait in the queue for the next start" in log, log
 
 
-@pytest.mark.parametrize("setting", ["flag", "barca.toml"])
+@pytest.mark.parametrize("setting", ["flag", "barca.toml", "terminal-sigint"])
 def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, setting):
-    if setting == "flag":
-        server = serve("--no-schedule", "--drain-timeout", "1")
+    if setting != "barca.toml":
+        server = serve(
+            "--no-schedule", "--drain-timeout", "1", new_session=setting == "terminal-sigint"
+        )
     else:
         (project / "barca.toml").write_text("[server]\ndrain_timeout = 1\n")
         server = serve("--no-schedule")
     going = start_slow_run(server, project)
 
     started = time.monotonic()
-    server.send(signal.SIGTERM)
+    server.send(signal.SIGINT if setting == "terminal-sigint" else signal.SIGTERM)
     assert server.exited() == 0, server.stderr
     assert time.monotonic() - started < 15
     log = server.stderr
@@ -290,10 +296,11 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
     assert {s["node_id"].rsplit(":", 1)[1] for s in run["steps"]} >= {"quick", "slow"}, run
 
 
-def test_a_second_signal_stops_the_drain_at_once(project, serve):
-    server = serve("--no-schedule")  # the default drain timeout: 30 s
+@pytest.mark.parametrize("new_session", [False, True], ids=["pid", "terminal"])
+def test_a_second_signal_stops_the_drain_at_once(project, serve, new_session):
+    server = serve("--no-schedule", new_session=new_session)  # the default drain timeout: 30 s
     start_slow_run(server, project)
-    server.send(signal.SIGTERM)
+    server.send(signal.SIGINT if new_session else signal.SIGTERM)
     wait_until(lambda: draining(server), "/health to report draining")
 
     started = time.monotonic()

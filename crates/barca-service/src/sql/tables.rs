@@ -642,6 +642,7 @@ mod tests {
             run_status: Some("success".into()),
             queue_wait_seconds: Some(2.5),
             counts: Some(TickCounts {
+                skipped: 0,
                 rebuilt: 1,
                 up_to_date: 1,
                 failed: 0,

@@ -72,6 +72,10 @@ pub struct ScheduleJob {
     pub last_skipped: Option<i64>,
     /// That run's status, in the run list's words (`pending` while it waits in the run queue).
     pub last_status: Option<String>,
+    /// Explicit task reason from the newest fired run; separate from scheduler decisions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub last_task_skip_reason: Option<String>,
     /// The server's one answer to "is it late" (`barca docs scheduling`).
     #[serde(default)]
     pub late: bool,
@@ -150,6 +154,20 @@ pub fn schedule_jobs(
                 last_run_id: standing.last_run_id.clone(),
                 last_run: standing.last_run_id.clone(),
                 last_status: standing.last_status.clone(),
+                last_task_skip_reason: inputs
+                    .ticks
+                    .get(&job.id)
+                    .and_then(|t| {
+                        let run = t.newest.as_ref()?;
+                        let later_decision = t.decisions.first().is_some_and(|(at, decision)| {
+                            *at >= run.scheduled_at && *decision != crate::db::TickDecision::Fired
+                        });
+                        let later_skip = skip
+                            .and_then(|s| s.last_skipped)
+                            .is_some_and(|at| at >= run.scheduled_at);
+                        (!later_decision && !later_skip && run.status == "skipped").then_some(run)
+                    })
+                    .and_then(|r| r.task_skip_reason.clone()),
                 late: standing.late,
                 late_since: standing.late_since,
                 typical_queue_wait_seconds: block.typical_queue_wait_seconds,

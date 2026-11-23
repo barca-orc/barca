@@ -27,6 +27,13 @@ const HEADLINE_REASONS: usize = 3;
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunExplanation {
+    /// Each original worker-fatal cause and whether its step recovered after replacement.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "ts",
+        ts(as = "Option<Vec<barca_model::run_explain::WorkerFailure>>", optional)
+    )]
+    pub worker_failures: Vec<barca_model::run_explain::WorkerFailure>,
     /// The run's targets, one each: its job's node ids, else the targets as given. Empty for a
     /// run of every asset.
     pub targets: Vec<String>,
@@ -68,7 +75,7 @@ pub struct RunExplanation {
 
 /// A run's numbers (#1042), each counted once here so no surface counts them again. The unit
 /// is the step: one node, or one key of a partitioned node. They add up:
-/// `steps = ok + failed + cached + not_reached` and `ran = ok + failed`; with retries recorded,
+/// `steps = ok + failed + skipped + cached + not_reached` and `ran = ok + failed + skipped`; with retries recorded,
 /// `attempts = ran + retries`. Experimental.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
@@ -88,6 +95,9 @@ pub struct RunCounts {
     pub ok: u64,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub failed: u64,
+    #[serde(default, skip_serializing_if = "is_zero_count")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub skipped: u64,
     /// Steps served from cache, recorded as phases are decided.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub cached: u64,
@@ -264,6 +274,7 @@ pub struct RunFacts<'a> {
     pub steps_cached: i64,
     /// Recorded steps that failed, each key counted; `None` when the caller has no count.
     pub steps_failed: Option<i64>,
+    pub steps_skipped: Option<i64>,
     /// As recorded (`YYYY-MM-DD HH:MM:SS`, UTC) or RFC 3339.
     pub started_at: &'a str,
     pub plan_reasons: Option<&'a PlanReasons>,
@@ -284,6 +295,7 @@ impl<'a> From<&'a RunRecord> for RunFacts<'a> {
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
             steps_failed: r.steps_failed,
+            steps_skipped: r.steps_skipped,
             started_at: &r.started_at,
             plan_reasons: r.plan_reasons.as_ref(),
             cancellation: r.cancellation.as_ref(),
@@ -302,6 +314,7 @@ pub fn explain(
     let live = matches!(run.status, "pending" | "running");
     let counts = run_counts(run, nodes, steps);
     RunExplanation {
+        worker_failures: Vec::new(),
         targets: targets(run),
         requested_by: requested_by(run.triggered_by, run.principal),
         attempts: counts.attempts_line.clone(),
@@ -410,6 +423,7 @@ pub struct StepFacts<'a> {
     pub steps_cached: i64,
     /// Steps that failed, each key counted.
     pub steps_failed: u64,
+    pub steps_skipped: u64,
 }
 
 /// A run's steps by outcome, counted once: what a run's panel, a row of the run list and
@@ -419,7 +433,8 @@ pub fn step_counts(run: StepFacts<'_>) -> RunCounts {
     let ran = run.steps_executed.max(0) as u64;
     let cached = run.steps_cached.max(0) as u64;
     let failed = run.steps_failed.min(ran);
-    let ok = ran - failed;
+    let skipped = run.steps_skipped.min(ran - failed);
+    let ok = ran - failed - skipped;
     let steps = (run.steps_total.unwrap_or(0).max(0) as u64).max(ran + cached);
     let not_reached = steps - ran - cached;
     let live = matches!(run.status, "pending" | "running");
@@ -429,6 +444,9 @@ pub fn step_counts(run: StepFacts<'_>) -> RunCounts {
         parts.push(format!("{} started", count(ran)));
     } else {
         parts.push(format!("{} ok", count(ok)));
+        if skipped > 0 {
+            parts.push(format!("{} skipped", count(skipped)));
+        }
         if failed > 0 {
             parts.push(format!("{} failed", count(failed)));
         }
@@ -447,6 +465,7 @@ pub fn step_counts(run: StepFacts<'_>) -> RunCounts {
         ran,
         ok,
         failed,
+        skipped,
         cached,
         not_reached,
         not_reached_nodes: None,
@@ -485,6 +504,7 @@ fn run_counts(run: RunFacts<'_>, nodes: &[RunNodeSummary], steps: &[RunStep]) ->
         steps_executed: run.steps_executed,
         steps_cached: run.steps_cached,
         steps_failed: failed as u64,
+        steps_skipped: run.steps_skipped.unwrap_or(0).max(0) as u64,
     });
     if nodes.iter().any(|n| n.status.is_some()) {
         let skipped: Vec<&str> = nodes
@@ -727,37 +747,41 @@ fn target_outcomes(run: RunFacts<'_>, nodes: &[RunNodeSummary]) -> Vec<String> {
                 .or_else(|| nodes.iter().find(|n| short_name(&n.node_id) == name))?;
             let keys = node.keys as u64;
             let status = node.status.as_deref();
-            Some(if StepStatus::Skipped.is(status) {
-                match &node.blocked_by {
-                    None => format!("{name} did not run: the run stopped before it"),
-                    Some(blocked_by) => {
-                        let failed = nodes
-                            .iter()
-                            .find(|n| n.node_id == *blocked_by)
-                            .filter(|up| up.keys > 1)
-                            .map(|up| format!(" {}", keys_of(up.failed as u64)))
-                            .unwrap_or_default();
-                        format!(
-                            "{name} did not run: upstream {} failed{failed}",
-                            short_name(blocked_by)
-                        )
+            Some(
+                if node.skipped > 0 && node.skipped == node.keys && node.failed == 0 {
+                    format!("{name} skipped: no result produced")
+                } else if StepStatus::Skipped.is(status) {
+                    match &node.blocked_by {
+                        None => format!("{name} did not run: the run stopped before it"),
+                        Some(blocked_by) => {
+                            let failed = nodes
+                                .iter()
+                                .find(|n| n.node_id == *blocked_by)
+                                .filter(|up| up.keys > 1)
+                                .map(|up| format!(" {}", keys_of(up.failed as u64)))
+                                .unwrap_or_default();
+                            format!(
+                                "{name} did not run: upstream {} failed{failed}",
+                                short_name(blocked_by)
+                            )
+                        }
                     }
-                }
-            } else if StepStatus::Cached.is(status) {
-                format!("{name} was cached: nothing to do")
-            } else if node.failed > 0 && keys > 1 {
-                format!(
-                    "{name} failed: {} of {}",
-                    count(node.failed as u64),
-                    keys_of(keys)
-                )
-            } else if node.failed > 0 {
-                format!("{name} failed")
-            } else if keys > 1 {
-                format!("{name} ran: {}", keys_of(keys))
-            } else {
-                format!("{name} ran")
-            })
+                } else if StepStatus::Cached.is(status) {
+                    format!("{name} was cached: nothing to do")
+                } else if node.failed > 0 && keys > 1 {
+                    format!(
+                        "{name} failed: {} of {}",
+                        count(node.failed as u64),
+                        keys_of(keys)
+                    )
+                } else if node.failed > 0 {
+                    format!("{name} failed")
+                } else if keys > 1 {
+                    format!("{name} ran: {}", keys_of(keys))
+                } else {
+                    format!("{name} ran")
+                },
+            )
         })
         .collect()
 }
@@ -1081,6 +1105,33 @@ pub fn target_line(target: Option<&str>) -> String {
     }
 }
 
+fn is_zero_count(value: &u64) -> bool {
+    *value == 0
+}
+
+/// A terminal summary of one worker failure; independent failures stay separate.
+pub fn worker_failure_line(f: &barca_model::run_explain::WorkerFailure) -> String {
+    let outcome = if f.recovered {
+        "recovered after worker replacement"
+    } else if f.retry_error.is_some() {
+        "failed after worker replacement"
+    } else {
+        "did not complete after worker replacement"
+    };
+    let mut line = format!(
+        "{}: {outcome}; original cause: {}",
+        f.node_id,
+        f.first_error.lines().next().unwrap_or("unknown")
+    );
+    if let Some(error) = &f.retry_error {
+        line.push_str(&format!(
+            "; later attempt: {}",
+            error.lines().next().unwrap_or("unknown")
+        ));
+    }
+    line
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1100,6 +1151,7 @@ mod tests {
             steps_executed: 0,
             steps_cached: 0,
             steps_failed: None,
+            steps_skipped: None,
             started_at: "",
             plan_reasons: None,
             cancellation: None,
@@ -1162,6 +1214,7 @@ mod tests {
 
     fn node(id: &str, keys: usize, failed: usize, seconds: f64) -> RunNodeSummary {
         RunNodeSummary {
+            skipped: 0,
             node_id: id.into(),
             keys,
             failed,
@@ -1517,6 +1570,7 @@ mod tests {
                 steps_executed: executed,
                 steps_cached: cached,
                 steps_failed: failed,
+                steps_skipped: 0,
             })
         };
         assert_eq!(of("success", Some(8), 8, 0, 0).outcome, "8 ok · 0 cached");
@@ -1610,6 +1664,7 @@ mod tests {
             steps_executed: 4,
             steps_cached: 37,
             steps_failed: Some(3),
+            steps_skipped: Some(0),
             attempts: Some(4),
             retries: Some(0),
             plan_reasons: Some(&plan),

@@ -315,6 +315,7 @@ export const runByStatus = {
   pending: runView('queued'),
   running: runView('running'),
   success: runDetail(RUN_IDS.first),
+  skipped: runView('interrupted', { status: 'skipped', skip_reason: 'another copy holds the lock', outcome: { status: 'skipped', run_id: 'skipped', final_output: null } }),
   failed: runDetail(RUN_IDS.failed),
   cancelled: runView('cancelled by the server stopping', {
     outcome: { status: 'cancelled', envelope: envelope('cancelled', 'cancelled by DELETE /runs/127', null) },

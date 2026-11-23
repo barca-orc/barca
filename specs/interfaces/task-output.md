@@ -1,8 +1,9 @@
 # Task output and recorded output
 
-Status: implemented. Specification version: 5 (2: `RUN_ID` is optional; 3: stderr, `stream`,
+Status: implemented. Specification version: 6 (2: `RUN_ID` is optional; 3: stderr, `stream`,
 `ts`, `--follow`, reading from a server, the per-run cap; 4: keyed partitioned task results;
-5: clarify the implemented complete-line recording threshold).
+5: clarify the implemented complete-line recording threshold; 6: group multiline stderr writes
+and failed-attempt tracebacks into entries).
 Scope: local CLI get/run stdout routing and recorded-log inspection.
 Conformance: `python/tests/test_task_logs.py`, `python/tests/test_live_logs.py`, CLI
 contract/help snapshots, log transaction tests in `crates/barca-db/src/db/logs.rs`,
@@ -49,15 +50,17 @@ import follow the current step when the worker is reused. Complete lines and a f
 line flushed on function return or failure are recorded. Python-level stderr (`sys.stderr`:
 `logging`, `warnings`, explicit writes) is recorded the same way as `stream: "stderr"` and is
 still written to the worker's stderr as it comes; lines starting `[barca]` are not recorded.
-A failed attempt's traceback (user frames) and `ErrorType: message` are recorded as stderr
-lines of its step. Native descriptor writes and inherited subprocess output are outside the
+A failed attempt's traceback (user frames) and `ErrorType: message` are recorded as stderr,
+one multiline entry of its step. Complete lines of each stderr write form one entry; a
+trailing partial line waits for a newline or flush. Stdout remains line-oriented. Old records
+are read unchanged. Native descriptor writes and inherited subprocess output are outside the
 Python capture and retain their child-stream behavior. There is no promise to recover an
 unflushed line from an abruptly killed process. Lines are spooled as they arrive; runs record
 them in the database on completion, including ordinary step failures, and delete the spool. A
-run records complete user lines until their cumulative text reaches or exceeds 16 MiB,
-then one `[barca] log cap reached: ...` stderr line. The entire crossing line is retained;
+run records complete user entries until their cumulative text reaches or exceeds 16 MiB,
+then one `[barca] log cap reached: ...` stderr line. The entire crossing entry is retained;
 later user lines are not recorded. Framework notes may still be appended. This is a soft
-recording threshold, not a hard byte or memory bound: a single line can exceed it without
+recording threshold, not a hard byte or memory bound: a single entry can exceed it without
 limit. The marker names the threshold, not an exact final byte count. Hard coordinator
 resource bounds remain approved, unimplemented intent in [resources](../behavior/resources.md).
 Log-stream inserts are atomic and idempotent; a failed write cannot leave a partial stream

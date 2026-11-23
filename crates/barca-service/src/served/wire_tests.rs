@@ -79,6 +79,7 @@ fn health_is_the_body_the_route_built_by_hand() {
 #[test]
 fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
     let job = ScheduleJob {
+        last_task_skip_reason: None,
         cron: "0 5 * * *".into(),
         failing: false,
         failures: 1,
@@ -227,6 +228,10 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
     assert_eq!(
         bytes(&RunCancelling::of("run-1")),
         json!({ "run_id": "run-1", "status": "cancelling" }).to_string()
+    );
+    assert_eq!(
+        bytes(&RunCancelling::cancelled("run-1")),
+        json!({ "run_id": "run-1", "status": "cancelled" }).to_string()
     );
     let logs = RunLogs {
         logs: Vec::new(),

@@ -58,17 +58,17 @@ in the same PR. A known bug is identified as a deviation, not rewritten as inten
 
 | Interface | Owner | Status / revision | Executable conformance |
 | --- | --- | --- | --- |
-| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 30; the same routes on the project socket (`x-project-socket`) | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
+| HTTP routes and bodies | [OpenAPI 3.1 / JSON Schema](interfaces/server-api.openapi.yaml) | Implemented, specification 31; the same routes on the project socket (`x-project-socket`) | [Router](../crates/barca-server/tests/openapi.rs), [Token auth](../crates/barca-server/tests/auth.rs), [Python client](../python/tests/test_http_openapi_client.py) |
 | Python declarations | [Allium overview](interfaces/user-api.allium), [rationale](../docs/engineering/user-api-decisions.md) | Implemented declaration concepts, specification 3; hand-written grammar checks, no Allium compiler gate | [Grammar](../crates/barca-service/tests/grammar_spec.rs), [argument owner](../crates/barca-python/src/decorator_args.rs), [bindings](../python/tests/test_static_barca_bindings.py) |
 | CLI flags, envelopes and output | [CLI contract](../crates/barca-cli/docs/contract.md), existing native help/JSON snapshots | Implemented, stable/experimental surfaces identified there | [CLI integration](../python/tests/test_cli_contract.py), [Rust snapshots](../crates/barca-cli/src/contract.rs) |
-| Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 5 / protocol 5; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-proc/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
+| Worker/transfer sockets | [Protocol](interfaces/worker-protocol.md) | Specification 7 / protocol 6; sensor signals/compact observations in 0.33.0, batching in 0.32.0 | [Wire](../crates/barca-proc/src/protocol.rs), [negotiation](../python/tests/test_protocol_handshake.py), [batch/crash](../python/tests/test_compact_worker_protocol.py) |
 | Batched partitions | [Execution](behavior/execution.md), [RFC-0013](../site/src/content/docs/rfcs/0013-batched-partitions.md), existing wire owners | Implemented in 0.32.0; grouping/observability experimental | [Real worker/server](../python/tests/test_batched_partitions.py), [grouping](../crates/barca-engine/src/batch.rs) |
 | Materialization digests | [Digests](interfaces/materialization-digests.md) | Implemented producer, repair and ledger acceptance, specification 3 | [CLI](../python/tests/test_materialization_digests.py), [ledger](../python/tests/test_server_ledger.py) |
 | Artifact formats and dataset sinks | [Formats](interfaces/artifact-formats.md) | Implemented, specification 6 | [Extensions](../python/tests/test_artifact_extensions.py), [CSV](../python/tests/test_csv_outputs.py), [dataset sinks](../python/tests/test_dataset_sinks.py), [sink republish](../python/tests/test_sink_republish.py) |
 | `.barca/` paths and owners | [Layout](interfaces/dot-barca-layout.md) | Implemented, specification 2 | [Top-level entries](../python/tests/test_dot_barca_layout.py), [GC](../crates/barca-store/src/gc/tests.rs) |
 | Upload ownership/receipts | [Receipts](interfaces/artifact-upload-receipts.md) | Implemented, specification 3; concurrent input read isolation is explicitly not guaranteed | [Controlled overlaps](../python/tests/test_upload_snapshot_receipts.py), [cancellation](../python/tests/test_remote_cancel.py), [pending uploads](../python/tests/test_fail_soft_uploads.py), [drain/requeue](../python/tests/test_drain_keeps_computed_steps.py) |
 | Metadata compatibility | [Metadata](interfaces/metadata-schema.md) | Implemented policy specification 1; database format 1, legacy 0 | [Admission](../crates/barca-db/src/db/schema/ddl.rs), [validation](../crates/barca-db/src/state_validate.rs), [compatibility](../python/tests/test_metadata_compat.py) |
-| Task results and recorded output | [Task output](interfaces/task-output.md) | Implemented, specification 5 | [Task/stdout](../python/tests/test_task_logs.py), [live logs](../python/tests/test_live_logs.py) |
+| Task results and recorded output | [Task output](interfaces/task-output.md) | Implemented, specification 6 | [Task/stdout](../python/tests/test_task_logs.py), [live logs](../python/tests/test_live_logs.py) |
 | Project/credential diagnostics | [Doctor](interfaces/doctor.md) | Implemented, specification 2; check data experimental | [No-execution](../python/tests/test_doctor.py), [identity](../python/tests/test_identity.py), [server](../python/tests/test_debugging_problems.py) |
 
 Backup/restore layout and signed URLs remain owned by the [remote manual](../crates/barca-cli/docs/remote.md)
@@ -152,8 +152,8 @@ from both implemented contracts and accepted design.
 [Computed and published](proposals/computed-and-published.md) is an unapproved draft that
 separates a step being computed from its output being published (store upload, sinks), with
 publication outside step capacity (#951).
-[A cache-only get](proposals/cached-only-get.md) is a draft for returning an asset's last result
-without running anything: disk, then the store, then a typed miss (#1085). [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
+Cached-only get (#1085) is implemented under [execution](behavior/execution.md#cached-only-reads-1085),
+with the approved decision and original proposal retained in PR #1086 history. [Engineering notes](../docs/engineering/README.md) retain rationale and one empirical
 investigation; completed implementation plans were deleted and remain in linked PR history.
 They are not current contract owners.
 

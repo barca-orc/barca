@@ -1,6 +1,6 @@
 # Worker and transfer protocol
 
-Specification 5; protocol version 5. Batched calls are implemented for 0.32.0.
+Specification 7; protocol version 6. Batched calls are implemented for 0.32.0.
 
 ## Framing and negotiation
 
@@ -24,9 +24,9 @@ the other forever (#1001). A worker is sent a command only while it waits for on
 (`execute_batch` when idle, `parallel_response` while it blocks for it, `done`), so the
 worker loop writes each command whole.
 
-The helper first sends `{"type":"hello","role":"worker","protocol_version":5}`
+The helper first sends `{"type":"hello","role":"worker","protocol_version":6}`
 (or role `transfer`). The coordinator validates the role and integer version and
-acknowledges `{"type":"hello","role":"coordinator","protocol_version":5}`.
+acknowledges `{"type":"hello","role":"coordinator","protocol_version":6}`.
 A missing/mismatched version or role gets `protocol_error` with `message` and the
 expected version, then connection refusal. The error says to reinstall matching
 Barca packages. Connection and negotiation share the ten-second startup deadline.
@@ -222,13 +222,15 @@ moves no bytes: `done` carries its `size_bytes` and, for a store that is a plain
 `sha256`; a missing object is an `error` with `missing: true`. It is additive: the protocol
 version is unchanged, and a coordinator sends it only to a helper from the same build.
 
-`log` is `{type, node_id, line, stream?, t?}`, one frame per line, sent when the line is
-complete (or flushed at the end of the step). `stream` is `stdout` or `stderr` (absent:
+`log` is `{type, node_id, line, stream?, t?}`, one frame per entry, sent when complete
+(or flushed at the end of the step). Stdout entries are physical lines; stderr entries
+contain the complete lines of one write, with embedded newlines. `stream` is `stdout` or `stderr` (absent:
 `stdout`): the worker records Python's `sys.stdout` and `sys.stderr` while a step runs, and
 writes stderr through to its own stderr as well. `t` is when the line was written, seconds
 since the epoch as a float (absent: the coordinator stamps it on arrival). Both are additive
-fields of protocol version 3. Lines are not batched, so a line written just before a worker
-dies still arrives.
+fields of protocol version 3. Entries are sent immediately, so a complete line written just
+before a worker dies still arrives. Grouped stderr changes string content, not the wire
+shape or negotiated protocol version.
 
 A successful parallel response requires `artifact: {path,format,frame_type?}`. Every
 branch return value, including small JSON, is written to its run/group-owned file.
@@ -301,6 +303,8 @@ size and content digest. This is producer-owned data, not access to the metadata
 An unchanged observation can reuse it without rewriting the artifact. Results carry
 `sensor_changed` independently of `content_hash`: the coordinator records a freshness
 revision while the content digest continues to describe actual bytes.
+`sensor_explicit_value: true` is an optional diagnostic hint for `(True, non-None)` returns;
+the host warns once per node per process, without changing freshness. Older hosts ignore it.
 
 An unpartitioned source of `partitions_from` reports `source_observation`: count,
 `keyed`, membership digest, and, when verified previous bytes are available, the previous
@@ -314,3 +318,16 @@ counts and digests. Missing or malformed observations never establish freshness.
 Producer source deltas are optional evidence capped at 256 KiB of conservative JSON size.
 Oversized changed values or removed-key lists send only the compact summary; the engine
 then uses normal artifact validation. Artifact payload size never expands the protocol frame.
+
+Task execution may complete with `step_skipped` (`node_id`, `reason`, `elapsed` seconds).
+It completes one leased step without retry, result serialization or artifact publication.
+Batched calls emit it for each unfinished key when task code raises `Skip`. The result
+journal persists and replays this terminal message just like step results and errors.
+### Cached value reading
+
+The one-shot `_value` helper also accepts `{"op":"cached_value","artifacts":[{"path","format"}]}`.
+It returns the ordinary value entries, except executable pickle reconstruction is refused
+before deserialization with `{"error": "...", "kind": "cached_value_unsupported"}`. Plain-data
+pickles need no class resolution, reducer calls, persistent IDs or construction hooks. This
+operation never imports project source. Ordinary value/check requests retain their reader.
+Conformance: `python/tests/test_cached_only.py`.

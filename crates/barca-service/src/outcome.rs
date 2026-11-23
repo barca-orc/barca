@@ -163,9 +163,12 @@ impl RunRequest {
     /// The cache policy the flags ask for, as the CLI derives it.
     pub fn policy(&self) -> CachePolicy {
         if self.refresh_all {
-            CachePolicy::RefreshAll
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            }
         } else if !self.refresh.is_empty() {
             CachePolicy::RefreshSelective {
+                since: barca_model::time::now_secs_f64(),
                 names: self.refresh.clone(),
                 cascade: self.cascade,
             }
@@ -192,6 +195,8 @@ impl RunRequest {
 pub enum OutcomeStatus {
     /// Every target succeeded. The outcome is the `--json` stdout body.
     Success,
+    /// Tasks explicitly skipped without successful work.
+    Skipped,
     /// A step failed. The outcome is the failed-run stdout body plus `envelope`.
     Failed,
     /// Cancelled. The outcome is `envelope` only.
@@ -204,6 +209,7 @@ impl OutcomeStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             OutcomeStatus::Success => "success",
+            OutcomeStatus::Skipped => "skipped",
             OutcomeStatus::Failed => "failed",
             OutcomeStatus::Cancelled => "cancelled",
             OutcomeStatus::Error => "error",
@@ -255,7 +261,7 @@ impl Outcome {
             .get("status")
             .and_then(Value::as_str)
             .ok_or_else(|| "an outcome has a string `status`".to_string())?;
-        if !["success", "failed", "cancelled", "error"].contains(&status) {
+        if !["success", "skipped", "failed", "cancelled", "error"].contains(&status) {
             return Err(format!("unknown outcome status '{status}'"));
         }
         Ok(value)
@@ -356,6 +362,7 @@ impl Outcome {
             .and_then(|v| v["status"].as_str())
         {
             Some("success") => OutcomeStatus::Success,
+            Some("skipped") => OutcomeStatus::Skipped,
             Some("failed") => OutcomeStatus::Failed,
             Some("cancelled") => OutcomeStatus::Cancelled,
             _ => OutcomeStatus::Error,
@@ -371,7 +378,7 @@ impl Outcome {
     /// The exit code a local run ending this way exits with.
     pub fn exit_code(&self) -> i32 {
         match self.status() {
-            OutcomeStatus::Success => 0,
+            OutcomeStatus::Success | OutcomeStatus::Skipped => 0,
             _ => self
                 .envelope()
                 .map_or(ErrorKind::Infra.exit_code(), |e| e.code()),
@@ -458,7 +465,7 @@ impl Outcome {
                 let returned = returned_of(target.and(value.get("final_output")));
                 report::render_get_body(&value, target, &returned, get_shape(mode), fields)
             }
-            OutcomeStatus::Success => {
+            OutcomeStatus::Success | OutcomeStatus::Skipped => {
                 let target = targets.first().map(String::as_str);
                 // The body says `null` both for a run with no value and for a target whose
                 // value is `None`; only a run with a target has one.
@@ -549,6 +556,20 @@ impl<'de> Deserialize<'de> for OrderedMap {
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunView {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub skip_reason: Option<String>,
+    /// Stopped server executions, oldest first, with ids for their own logs and steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<crate::db::runs::RunAttempt>,
+    /// Original request id, on a retained stopped execution only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
     /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
@@ -641,6 +662,7 @@ impl<'a> From<&'a RunView> for crate::run_explanation::RunFacts<'a> {
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
             steps_failed: None,
+            steps_skipped: None,
             started_at: &r.started_at,
             plan_reasons: r.plan_reasons.as_ref(),
             cancellation: r.cancellation.as_ref(),
@@ -859,7 +881,7 @@ mod tests {
             CachePolicy::RefreshSelective { cascade: false, .. }
         ));
         request.refresh_all = true;
-        assert!(matches!(request.policy(), CachePolicy::RefreshAll));
+        assert!(matches!(request.policy(), CachePolicy::RefreshAll { .. }));
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"get","invented":1}"#).is_err());
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"sql"}"#).is_err());
         assert_eq!(

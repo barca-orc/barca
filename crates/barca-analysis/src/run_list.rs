@@ -96,6 +96,7 @@ pub struct RunLineFacts<'a> {
     pub steps_cached: i64,
     /// Recorded steps that failed, each key counted; `None` when not recorded.
     pub steps_failed: Option<i64>,
+    pub steps_skipped: Option<i64>,
     /// The run's own error (a run a server holds that failed outside a step).
     pub error: Option<&'a str>,
     /// The first failed step: its node id (with its key) and its error.
@@ -112,6 +113,7 @@ impl<'a> From<&'a barca_db::db::RunRecord> for RunLineFacts<'a> {
             steps_executed: r.steps_executed,
             steps_cached: r.steps_cached,
             steps_failed: r.steps_failed,
+            steps_skipped: r.steps_skipped,
             error: None,
             first_failure: r
                 .failure
@@ -183,6 +185,7 @@ pub fn run_line(run: RunLineFacts<'_>) -> RunLine {
         steps_executed: run.steps_executed,
         steps_cached: run.steps_cached,
         steps_failed: run.steps_failed.unwrap_or(0).max(0) as u64,
+        steps_skipped: run.steps_skipped.unwrap_or(0).max(0) as u64,
     });
     let steps = counts.outcome;
     let mut detail = vec![crate::run_explanation::STEP_UNITS.to_string()];
@@ -438,6 +441,9 @@ pub const ACTIVITY_HOURS: usize = 24;
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct StatusCounts {
+    #[serde(default, skip_serializing_if = "is_zero_count")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub skipped: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub success: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -523,6 +529,9 @@ impl ActivityHour {
             "success" => {
                 by_status.success += runs;
                 self.ok += runs;
+            }
+            "skipped" => {
+                by_status.skipped += runs;
             }
             "running" => {
                 by_status.running += runs;
@@ -808,6 +817,10 @@ pub fn run_activity(
     }
 }
 
+fn is_zero_count(value: &usize) -> bool {
+    *value == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -828,6 +841,7 @@ mod tests {
             steps_executed: 8,
             steps_cached: 3,
             steps_failed: Some(1),
+            steps_skipped: Some(0),
             target: None,
             error: None,
             first_failure: None,
@@ -838,6 +852,7 @@ mod tests {
     fn a_successful_run_counts_its_steps_and_says_nothing_went_wrong() {
         let line = run_line(RunLineFacts {
             steps_failed: Some(0),
+            steps_skipped: Some(0),
             ..facts("success")
         });
         assert_eq!(line.steps, "8 ok · 3 cached · 1 not reached");
@@ -873,6 +888,7 @@ mod tests {
     fn a_partitioned_failure_counts_its_keys() {
         let line = run_line(RunLineFacts {
             steps_failed: Some(7),
+            steps_skipped: Some(0),
             first_failure: Some(("m.py:forecast[day=1]", "BatchKeyFailed: 7 keys")),
             ..facts("failed")
         });

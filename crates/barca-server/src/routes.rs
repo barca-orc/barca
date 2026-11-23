@@ -61,6 +61,7 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()
         .merge(reads)
+        .route("/cached", post(crate::cached::get))
         .route("/auth/status", get(crate::auth_http::status))
         .route("/auth/bootstrap", post(crate::auth_http::bootstrap))
         .route(

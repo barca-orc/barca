@@ -41,6 +41,10 @@ last_skipped: number | null,
  */
 last_status: string | null,
 /**
+ * Explicit task reason from the newest fired run; separate from scheduler decisions.
+ */
+last_task_skip_reason?: string,
+/**
  * The server's one answer to "is it late" (`barca docs scheduling`).
  */
 late: boolean,
