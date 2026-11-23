@@ -203,8 +203,20 @@ pub async fn replay_run(
             scope.tick = Some(step.base_id().to_owned());
         }
         if !step.partition.0.is_empty() {
-            scope.partition =
-                Some(serde_json::to_string(&step.partition.0).expect("partition key is JSON"));
+            let original = scope
+                .partition
+                .as_deref()
+                .map(barca_service::selection::PartitionSelection::parse)
+                .transpose()
+                .map_err(ApiError::BadRequest)?
+                .unwrap_or_default();
+            scope.partition = Some(
+                original
+                    .narrowed_to(&step.partition)
+                    .map_err(ApiError::BadRequest)?
+                    .to_json()
+                    .to_string(),
+            );
         }
     }
     let command = match scope.command.as_str() {

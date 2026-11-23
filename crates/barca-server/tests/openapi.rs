@@ -2555,7 +2555,10 @@ async fn replay_request_and_recorded_scope_match_contract() {
     let (status, accepted) =
         request_json(&router, "POST", &format!("/runs/{handle}/replay"), body).await;
     assert_eq!(status, 202, "{accepted}");
-    validate(&contract()["components"]["schemas"]["RunHandle"], &accepted);
+    validate(
+        &contract()["components"]["schemas"]["RunAccepted"],
+        &accepted,
+    );
     let replay = accepted["run_id"].as_str().unwrap();
     wait(&router, replay).await;
     let view = checked(

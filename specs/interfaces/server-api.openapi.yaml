@@ -3730,7 +3730,7 @@ paths:
           description: Replay accepted
           content:
             application/json:
-              schema: {$ref: '#/components/schemas/RunHandle'}
+              schema: {$ref: '#/components/schemas/RunAccepted'}
         '400':
           description: Invalid replay or unavailable target
           content:
