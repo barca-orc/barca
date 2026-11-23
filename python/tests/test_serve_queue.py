@@ -232,7 +232,7 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     assert [r["run_id"] for r in queue["running"]] == [long], queue
     assert [r["run_id"] for r in queue["queued"]] == ids, queue
     assert [r["waiting_for"] for r in queue["running"] + queue["queued"]] == [None] * 4, queue
-    assert server.run(ids[0])["waiting_for"] is None
+    assert server.run(ids[0])["run"]["waiting_for"] is None
     assert queue["max_runs"] == 1, queue
 
     # Clients following a queued run: `barca logs -f` and the GET /runs/{id} poll.
@@ -251,9 +251,9 @@ def test_a_restart_finishes_the_run_in_flight_and_resumes_the_queued_runs_in_ord
     restarted = serve("--no-schedule", "--max-runs", "1")
     assert "[barca] resuming 3 queued runs" in restarted.stderr, restarted.stderr
     for run_id in ids:
-        assert restarted.finished(run_id)["status"] == "success"
+        assert restarted.finished(run_id)["run"]["status"] == "success"
     assert order(project) == ["one", "two", "three"], "in the order they were accepted"
-    assert restarted.run(long)["status"] == "success", "the run in flight finished"
+    assert restarted.run(long)["run"]["status"] == "success", "the run in flight finished"
     assert started(project, "long") == 1
 
     assert follower.wait(timeout=RUN) == 0
@@ -284,7 +284,7 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     assert [r["waiting_for"] for r in queue["queued"]] == ["restart"] * 2, queue
     assert [r["waiting_for"] for r in queue["running"]] == [None], "the run in flight finishes"
     view = server.run(accepted["run_id"])
-    assert (view["status"], view["waiting_for"]) == ("pending", "restart"), view
+    assert (view["run"]["status"], view["run"]["waiting_for"]) == ("pending", "restart"), view
     # A `--server` client submits, says it waits for a restart, and rides through it.
     rider = client(project, "run", "three", "--server", server.url, "--json")
     wait_until(lambda: len(server.request("GET", "/queue")[1]["queued"]) == 3, "the third run")
@@ -305,7 +305,9 @@ def test_a_run_submitted_during_the_drain_is_accepted_and_runs_after_the_restart
     assert "[barca] resuming 3 queued runs" in restarted.stderr
     for run_id in (accepted["run_id"], alias["run_id"]):
         finished = restarted.finished(run_id)
-        assert (finished["status"], finished["waiting_for"]) == ("success", None), finished
+        assert (finished["run"]["status"], finished["run"]["waiting_for"]) == ("success", None), (
+            finished
+        )
     assert rider.wait(timeout=RUN) == 0
     out, err = client_output(project, rider)
     assert json.loads(out)["status"] == "success", (out, err)
@@ -335,9 +337,9 @@ def test_the_drain_timeout_puts_the_run_in_flight_back_in_the_queue_and_exits_0(
     restarted = serve("--no-schedule", "--max-runs", "1")
     assert "[barca] resuming 2 queued runs" in restarted.stderr, restarted.stderr
     run = restarted.finished(long)
-    assert run["status"] == "success", run
+    assert run["run"]["status"] == "success", run
     assert started(project, "long") == 2, "the stopped attempt and the new one"
-    assert restarted.finished(behind)["status"] == "success"
+    assert restarted.finished(behind)["run"]["status"] == "success"
     assert follower.wait(timeout=RUN) == 0
     out, err = client_output(project, follower)
     assert "long done" in out, (out, err)
@@ -354,7 +356,7 @@ def test_cli_cancel_acknowledges_a_queued_run(project, serve):
     result = barca(project, "cancel", run_id, "--server", server.url, "--json")
     assert result.returncode == 0, result.stderr
     assert json.loads(result.stdout) == {"run_id": run_id, "status": "cancelled"}
-    assert server.finished(run_id)["status"] == "cancelled"
+    assert server.finished(run_id)["run"]["status"] == "cancelled"
     again = barca(project, "cancel", run_id, "--server", server.url, "--json")
     assert again.returncode != 0
     assert "already finished" in again.stderr
@@ -372,9 +374,9 @@ def test_a_second_signal_cancels_the_runs_in_flight_and_keeps_the_queued_ones(pr
     assert "1 run cancelled (server shutdown)" in log, log
 
     restarted = serve("--no-schedule")
-    assert restarted.run(long)["status"] == "cancelled"
+    assert restarted.run(long)["run"]["status"] == "cancelled"
     assert "[barca] resuming 1 queued run" in restarted.stderr, restarted.stderr
-    assert restarted.finished(behind)["status"] == "success"
+    assert restarted.finished(behind)["run"]["status"] == "success"
     assert started(project, "long") == 1, "a cancelled run is not started again"
 
 
@@ -409,7 +411,7 @@ def test_a_paused_queue_stays_paused_across_a_restart_until_resumed(project, ser
     resumed = barca(project, "queue", "resume", "--server", restarted.url, "--json")
     assert resumed.returncode == 0, resumed.stderr
     assert json.loads(resumed.stdout)["paused"] is False
-    assert restarted.finished(waiting["run_id"])["status"] == "success"
+    assert restarted.finished(waiting["run_id"])["run"]["status"] == "success"
 
 
 def test_a_scheduled_tick_while_paused_waits_in_the_queue_once(project, serve):
@@ -524,7 +526,7 @@ def test_a_run_requeued_onto_new_code_records_its_steps_under_the_new_run_hash(p
     restarted = serve("--no-schedule")
     assert "[barca] resuming 1 queued run" in restarted.stderr, restarted.stderr
     run = restarted.finished(run_id)
-    assert run["status"] == "success", run
+    assert run["run"]["status"] == "success", run
 
     # Both steps are recorded under the new run hashes: cached for the current code, and the
     # run's output is the new code's.
@@ -601,7 +603,7 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         listing = server.request("GET", "/runs")[1]
         assert listing["total"] == 1, listing
     (project / "release-long").touch()
-    assert server.finished(run_id)["status"] == "success"
+    assert server.finished(run_id)["run"]["status"] == "success"
     assert follower.wait(timeout=RUN) == 0, client_output(project, follower)
     out, err = client_output(project, follower)
     assert out.count("attempt started") == 3, out
@@ -690,7 +692,7 @@ def item(key: str) -> int:
     (project / "release-held").touch()
     restarted = serve("--no-schedule")
     run = restarted.finished(run_id)
-    assert run["status"] == "success", run
+    assert run["run"]["status"] == "success", run
     assert len(run["previous_attempts"]) == 1, run
     attempt_id = run["previous_attempts"][0]["run_id"]
     archived = restarted.request("GET", f"/runs/{attempt_id}")[1]
@@ -704,5 +706,5 @@ def item(key: str) -> int:
     assert len(successes) == 1, run
     assert started(project, "retry") == 2
     again = restarted.finished(restarted.submit("item", "get")["run_id"])
-    assert again["status"] == "success", again
+    assert again["run"]["status"] == "success", again
     assert started(project, "retry") == 2, "the successful retry must be cached"

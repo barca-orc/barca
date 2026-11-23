@@ -320,5 +320,5 @@ def held():
     assert skips[0]["skip_reason"] == "no work in this attempt"
     (tmp_path / "release").touch()
     restarted.post("/queue/resume", {})
-    assert restarted.finished(run_id)["status"] == "success"
+    assert restarted.finished(run_id)["run"]["status"] == "success"
     assert restarted.get(f"/runs/{attempt['run_id']}")["steps"] == archived["steps"]

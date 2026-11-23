@@ -161,7 +161,7 @@ def blocker(key):
         (tmp_path / "release-work").touch()
         restarted = serve("--no-schedule")
         try:
-            actual = restarted.finished(run_id)["status"]
+            actual = restarted.finished(run_id)["run"]["status"]
             assert (queued, status, actual, (tmp_path / "starts").read_text()) == (
                 (0,),
                 ("cancelled",),

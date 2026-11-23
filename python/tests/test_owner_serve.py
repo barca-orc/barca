@@ -123,7 +123,7 @@ def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
             # Backpressure: two live producers, not an unbounded queue whose size depends
             # on machine speed (the old loop accumulated >11,000 pending runs).
             done = server.finished(body["run_id"])
-            assert done["status"] == "success", done
+            assert done["run"]["status"] == "success", done
             with sample_lock:
                 completed += 1
                 enough()

@@ -135,7 +135,7 @@ def test_server_refresh_set(project):
         assert step(preview, "source")["partitions"]["will_run"] == 2
         answer = serve.post("/runs", request)
         result = serve.finished(answer["run_id"])
-        assert result["status"] == "success", result
+        assert result["run"]["status"] == "success", result
         assert calls(project) == sorted(
             ["source A", "source C", "aligned A", "aligned C", "batched A,C", "final"]
         )

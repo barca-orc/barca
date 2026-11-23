@@ -85,9 +85,9 @@ def served(tmp_path_factory):
         [real] = [
             r
             for r in get(server.port, "/runs?search=daily&limit=10")["runs"]
-            if r["status"] == "success" and not r["id"].startswith("report")
+            if r["status"] == "success" and not r["run_id"].startswith("report")
         ]
-        yield root, server.port, real["id"]
+        yield root, server.port, real["run_id"]
     finally:
         server.stop()
 
@@ -97,7 +97,7 @@ def _runs(port: int, **query: str | int) -> dict:
 
 
 def _ids(listing: dict) -> list[str]:
-    return [run["id"] for run in listing["runs"]]
+    return [run["run_id"] for run in listing["runs"]]
 
 
 def _history(root: Path, *args: str) -> subprocess.CompletedProcess:
@@ -166,7 +166,7 @@ def test_status_and_search_are_counted_over_every_run_not_the_page(served):
     assert _ids(bad) == ["stopped", "report_bad"]
     assert (bad["total"], bad["truncated"]) == (4, True)
     assert bad["activity"]["total"]["runs"] == 4
-    assert bad["activity"]["statuses"] == ["failed", "error", "cancelled", "interrupted"]
+    assert bad["activity"]["statuses"] == ["failed", "cancelled", "interrupted"]
     assert _runs(port, status="failed")["total"] == 3
     # Text in the run id, the target or the job, whatever its case.
     assert _ids(_runs(port, search="DAILY_rep")) == [real, "report_ok", "report_bad"]

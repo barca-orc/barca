@@ -21,11 +21,11 @@ def test_refresh_keeps_completed_asset_after_drain(project, serve, refresh, chan
         source.write_text(source.read_text().replace('return {"n": 1}', 'return {"n": 2}'))
     restarted = serve("--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
     result = restarted.finished(run_id)
-    assert result["status"] == "success", result
+    assert result["run"]["status"] == "success", result
     assert (project / "slow.runs").read_text() == "xx"
     assert (project / "quick.runs").read_text() == ("xx" if changed else "x")
     if not changed:
-        quick = next(s for s in result["outcome"]["steps"] if s["id"].endswith(":quick"))
+        quick = next(s for s in result["run"]["outcome"]["steps"] if s["id"].endswith(":quick"))
         assert quick["reason"] == "refreshed_by_this_run"
 
 
@@ -60,7 +60,7 @@ def test_partition_refresh_keeps_only_completed_keys(tmp_path, serve, refresh):
     assert server.stop() == 0, server.stderr
     (tmp_path / "release").touch()
     restarted = serve("--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
-    assert restarted.finished(run_id)["status"] == "success"
+    assert restarted.finished(run_id)["run"]["status"] == "success"
     assert (tmp_path / "a.runs").read_text() == "x"
     assert (tmp_path / "b.runs").read_text() == "xx"
 
@@ -110,11 +110,11 @@ def quick() -> int:
         "/runs", {"command": "get", "targets": ["quick"], "refresh_all": True, "queue": "last"}
     )
     other = server.post("/runs", {"command": "get", "targets": ["quick"]})
-    assert server.finished(other["run_id"])["status"] == "success"
+    assert server.finished(other["run_id"])["run"]["status"] == "success"
     (tmp_path / "release").touch()
-    assert server.finished(held["run_id"])["status"] == "success"
+    assert server.finished(held["run_id"])["run"]["status"] == "success"
     result = server.finished(waiting["run_id"])
-    assert result["status"] == "success", result
+    assert result["run"]["status"] == "success", result
     assert (tmp_path / "quick.runs").read_text() == "x"
 
 
@@ -126,7 +126,7 @@ def test_completed_tasks_can_repeat_after_drain(tmp_path, serve):
     assert server.stop() == 0, server.stderr
     (tmp_path / "release").touch()
     restarted = serve("--no-schedule", env=clean_env(BARCA_POOL_SIZE="2"))
-    assert restarted.finished(run_id)["status"] == "success"
+    assert restarted.finished(run_id)["run"]["status"] == "success"
     assert (tmp_path / "quick.runs").read_text() == "xx"
 
 

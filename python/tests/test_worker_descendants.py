@@ -131,7 +131,7 @@ def test_shutdown_leaves_no_worker_descendants(tmp_path, mode, parallel):
             assert server is not None
             assert server.get("/health")["status"] == "ok"
             next_run = server.submit("quick", "get")["run_id"]
-            assert server.finished(next_run)["status"] == "success"
+            assert server.finished(next_run)["run"]["status"] == "success"
     finally:
         # Also clean up the deliberately failing pre-fix run, without group signalling.
         for path in tmp_path.glob("*.json"):
@@ -161,7 +161,7 @@ def test_success_also_cleans_worker_descendants(tmp_path, parallel):
                 wait_until((tmp_path / f"{name}.ready").exists, f"{name} child ready", timeout=10)
                 records.append(json.loads((tmp_path / f"{name}.json").read_text()))
             (tmp_path / "finish").touch()
-            assert server.finished(run)["status"] == "success"
+            assert server.finished(run)["run"]["status"] == "success"
             wait_until(
                 lambda: all(process_state(pid) is None for record in records for pid in record[:2]),
                 "successful run's descendants to exit",

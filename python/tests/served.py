@@ -279,7 +279,7 @@ class Serve:
         """`GET /runs/{id}` once the run has ended."""
         return self.wait(
             f"run {run_id} to end",
-            lambda: (r := self.get(f"/runs/{run_id}"))["status"] not in LIVE and r,
+            lambda: (r := self.get(f"/runs/{run_id}"))["run"]["status"] not in LIVE and r,
         )
 
 

@@ -182,7 +182,7 @@ def test_a_command_a_step_starts_runs_in_the_step_not_on_the_server(project, ser
     (project / "barca.toml").write_text("[server]\nmax_runs = 1\n")
     server = serve("--no-schedule")
     run = server.submit("nested")
-    assert server.finished(run["run_id"])["status"] == "success"
+    assert server.finished(run["run_id"])["run"]["status"] == "success"
     assert "serve.sock" not in (project / "nested.stderr").read_text()
 
 
@@ -202,7 +202,7 @@ def test_gc_beside_a_server_with_a_run_recording_is_run_by_the_server(project, s
     # process beside a run considers only leftovers and superseded results, and says so).
     assert result["restricted"] is None
     assert took < 20, f"gc took {took:.1f}s beside a running server"
-    assert server.finished(run["run_id"])["status"] == "success"
+    assert server.finished(run["run_id"])["run"]["status"] == "success"
 
 
 def test_restore_and_reset_refuse_while_the_server_is_up(project, serve):
