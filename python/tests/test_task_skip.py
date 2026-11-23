@@ -309,10 +309,12 @@ def held():
     assert pending["status"] == "pending", pending
     assert not pending.get("skip_reason"), pending
     assert pending["steps"] == [], pending
+    assert pending["explanation"]["counts"].get("skipped", 0) == 0, pending
     attempt = pending["previous_attempts"][0]
     archived = restarted.get(f"/runs/{attempt['run_id']}")
     assert archived["parent_run_id"] == run_id
     assert archived["run_attempt"] == 1
+    assert archived["explanation"]["counts"]["skipped"] == 1, archived
     skips = [step for step in archived["steps"] if step["status"] == "skipped"]
     assert len(skips) == 1, archived
     assert skips[0]["skip_reason"] == "no work in this attempt"
