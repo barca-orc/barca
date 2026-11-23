@@ -7739,20 +7739,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Log'
-    FirstFailure:
-      type: object
-      additionalProperties: false
-      description: A run's first failed step.
-      required:
-      - node_id
-      - error
-      properties:
-        node_id:
-          type: string
-          description: The step's node id, with its partition key when it has one.
-        error:
-          type: string
-          description: ErrorType and message, the message's first line only.
     RunSummary:
       type: object
       additionalProperties: false

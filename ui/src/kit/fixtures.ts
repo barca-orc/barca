@@ -324,11 +324,13 @@ export const runByStatus = {
   cancelled: runView('cancelled by the server stopping', {
     outcome: { status: 'cancelled', envelope: envelope('cancelled', 'cancelled by DELETE /runs/127', null) },
   }),
-  error: runView('error', {
-    outcome: { status: 'error', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
-  }),
   interrupted: runView('interrupted'),
 } satisfies Record<RunViewStatus, RunView>
+
+export const runInfrastructureFailure = runView('error', {
+  status: 'failed',
+  outcome: { status: 'failed', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
+})
 
 const runTruncated: RunView = {
   ...runDetail(RUN_IDS.failed),

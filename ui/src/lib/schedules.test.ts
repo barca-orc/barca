@@ -170,7 +170,7 @@ describe('lateness', () => {
     ])
     expect(rows[0]?.last).toEqual({ status: 'success', at: '2026-11-16T12:08:00Z', runId: 'r3' })
     expect(rows[1]?.last).toEqual({ status: 'pending', at: '2026-11-16T12:00:00Z', runId: 'r7' })
-    expect(lastStatusLabel('pending')).toBe('queued')
+    expect(lastStatusLabel('pending')).toBe('pending')
     expect(lastStatusLabel('failed')).toBe('failed')
     expect(rows[2]?.last).toBeNull()
   })

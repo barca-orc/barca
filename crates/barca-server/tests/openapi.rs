@@ -446,7 +446,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
             ok: false,
             outcome: Some(
                 serde_json::value::RawValue::from_string(
-                    json!({"status":"error","envelope":{"error":"x","code":3,"kind":"infra","remediation":null}}).to_string(),
+                    json!({"status":"failed","envelope":{"error":"x","code":3,"kind":"infra","remediation":null}}).to_string(),
                 )
                 .unwrap(),
             ),
@@ -796,8 +796,11 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     // The run list names the failed step, and the node's row says how late it is.
     let runs = checked(&router, "GET", "/runs", "/runs", 200).await;
     let rows = runs["runs"].as_array().unwrap();
-    let failure = &rows.iter().find(|r| r["id"] == broken.as_str()).unwrap()["first_failure"];
-    assert!(failure["node_id"].as_str().unwrap().ends_with(":broken"));
+    let failure = &rows
+        .iter()
+        .find(|r| r["run_id"] == broken.as_str())
+        .unwrap()["failure"];
+    assert!(failure["node"].as_str().unwrap().ends_with(":broken"));
     assert_eq!(failure["error"], "ValueError: expected contract failure");
     // The activity is counted over the window, whatever `limit` lists (#991).
     let one = checked(&router, "GET", "/runs?limit=1", "/runs", 200).await;
@@ -848,7 +851,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     assert_eq!(failed["total"], 1);
-    assert_eq!(failed["runs"][0]["id"], broken.as_str());
+    assert_eq!(failed["runs"][0]["run_id"], broken.as_str());
     assert_eq!(failed["activity"]["total"]["runs"], 1);
     assert_eq!(failed["activity"]["search"], "BROKEN");
     assert_eq!(
@@ -1016,7 +1019,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     let detail = checked(&router, "GET", "/assets/slow", "/assets/{name}", 200).await;
     assert_eq!(detail["running"]["run_id"], slow.as_str());
     let in_flight = checked(&router, "GET", "/runs?status=running", "/runs", 200).await;
-    assert_eq!(in_flight["runs"][0]["id"], slow.as_str());
+    assert_eq!(in_flight["runs"][0]["run_id"], slow.as_str());
     assert!(in_flight["runs"][0]["active_steps"].is_array());
     assert_eq!(in_flight["activity"]["statuses"], json!(["running"]));
     assert_eq!(in_flight["activity"]["total"]["in_progress"], 1);
@@ -1124,7 +1127,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(view["outcome"], finished["outcome"]);
+    assert_eq!(view["run"]["outcome"], finished["outcome"]);
     checked(
         &router,
         "GET",
@@ -1263,9 +1266,9 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(detail["status"], "success");
+    assert_eq!(detail["run"]["status"], "success");
     assert_eq!(
-        detail["outcome"]["status"], "success",
+        detail["run"]["outcome"]["status"], "success",
         "the outcome survives a restart"
     );
     assert!(!detail["steps"].as_array().unwrap().is_empty());
@@ -1501,7 +1504,7 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     )
     .await;
     assert_eq!(
-        (&waiting["status"], &waiting["waiting_for"]),
+        (&waiting["run"]["status"], &waiting["run"]["waiting_for"]),
         (&json!("pending"), &json!("restart"))
     );
     assert_eq!(queue["running"], json!([]));
@@ -1547,9 +1550,9 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
         200,
     )
     .await;
-    assert_eq!(run["status"], "cancelled", "{run}");
+    assert_eq!(run["run"]["status"], "cancelled", "{run}");
     assert_eq!(
-        run["waiting_for"],
+        run["run"]["waiting_for"],
         Value::Null,
         "an ended run waits for nothing"
     );
@@ -1680,7 +1683,7 @@ async fn a_run_queued_last_matches_contract() {
         200,
     )
     .await;
-    assert_eq!(run["queue"], "last");
+    assert_eq!(run["run"]["queue"], "last");
     // The description the metadata DB keeps says so, and nothing for the default.
     let db = dir.path().join("metadata.db").display().to_string();
     let rows = barca_service::serve::run_queue::list(&db).await.unwrap();
@@ -1713,7 +1716,7 @@ async fn a_run_queued_last_matches_contract() {
         200,
     )
     .await;
-    assert_eq!(run["queue"], Value::Null);
+    assert_eq!(run["run"]["queue"], Value::Null);
 }
 
 #[tokio::test]
@@ -2147,9 +2150,9 @@ async fn pin_versions_and_unpin_match_contract() {
         200,
     )
     .await;
-    assert_eq!(detail["steps_executed"], 0, "{detail}");
+    assert_eq!(detail["run"]["steps_executed"], 0, "{detail}");
     assert_eq!(
-        detail["outcome"]["steps"][0]["reason"], "pinned",
+        detail["run"]["outcome"]["steps"][0]["reason"], "pinned",
         "{detail}"
     );
     // A read-only server refuses both writes.
@@ -2571,6 +2574,6 @@ async fn replay_request_and_recorded_scope_match_contract() {
         200,
     )
     .await;
-    assert!(!view["scope"]["files"].as_array().unwrap().is_empty());
-    assert_eq!(view["scope"]["refresh_all"], false);
+    assert!(!view["run"]["scope"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(view["run"]["scope"]["refresh_all"], false);
 }

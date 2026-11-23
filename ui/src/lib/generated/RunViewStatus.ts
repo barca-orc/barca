@@ -5,4 +5,4 @@
  * `running`, terminal otherwise. The fields themselves are strings (a row recorded by another
  * release is served as it is); this is their vocabulary, for a reader that switches on it.
  */
-export type RunViewStatus = "skipped" | "pending" | "running" | "success" | "failed" | "cancelled" | "error" | "interrupted";
+export type RunViewStatus = "skipped" | "pending" | "running" | "success" | "failed" | "cancelled" | "interrupted";

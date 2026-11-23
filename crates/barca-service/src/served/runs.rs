@@ -592,7 +592,6 @@ pub enum RunViewStatus {
     Success,
     Failed,
     Cancelled,
-    Error,
     Interrupted,
 }
 
@@ -819,16 +818,6 @@ impl RunSummary {
     fn in_progress(&self) -> bool {
         matches!(self.status.as_str(), "pending" | "running")
     }
-}
-
-/// A run's first failed step (`RunSummary::first_failure`).
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct FirstFailure {
-    /// The step's node id, with its partition key when it has one.
-    pub node_id: String,
-    /// `ErrorType: message`, the message's first line only.
-    pub error: String,
 }
 
 /// The keys of a partitioned node, while a run works on it.

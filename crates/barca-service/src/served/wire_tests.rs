@@ -243,15 +243,14 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
         bytes(&logs),
         json!({ "run_id": "run-1", "status": "running", "logs": [] }).to_string()
     );
-    // The words a run's status takes are the ones served today, whatever is decided of them
-    // (#943).
+    // Every host uses the same run-status vocabulary (#943).
     let words: Vec<String> = [
         RunViewStatus::Pending,
         RunViewStatus::Running,
         RunViewStatus::Success,
         RunViewStatus::Failed,
         RunViewStatus::Cancelled,
-        RunViewStatus::Error,
+        RunViewStatus::Skipped,
         RunViewStatus::Interrupted,
     ]
     .iter()
@@ -265,7 +264,7 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
             "success",
             "failed",
             "cancelled",
-            "error",
+            "skipped",
             "interrupted"
         ]
     );

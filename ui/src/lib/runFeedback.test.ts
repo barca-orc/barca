@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { runFeedback, runNotice, runOutcomeSummary } from './runFeedback'
-import { runByStatus } from '@/kit/fixtures'
+import { runInfrastructureFailure, runByStatus } from '@/kit/fixtures'
 import { RUN_IDS, runDetail } from './testdata/project'
 import type { LogLine, RunView, StatusKind } from './types'
 
@@ -118,7 +118,7 @@ describe('runOutcomeSummary', () => {
     const listed = { ...runByStatus.failed, steps_page: { total: 2, truncated: false } }
     const key = (k: string) => ({ ...runByStatus.failed.steps[0]!, node_id: `p.py:a[k=${k}]`, partition_key: `k=${k}` })
     expect(runOutcomeSummary({ ...listed, steps: [key('1'), key('2')] })).toBe('2 keys failed')
-    expect(runOutcomeSummary(runByStatus.error)).toBe('failed: could not start a worker: python3 not found')
+    expect(runOutcomeSummary(runInfrastructureFailure)).toBe('failed: could not start a worker: python3 not found')
     expect(runOutcomeSummary({ ...listed, run: { ...listed.run, error: null, failure: null } })).toBe('failed')
   })
 })

@@ -451,7 +451,7 @@ fn render_queue(view: &QueueView) -> String {
         slots => slots.to_string(),
     };
     let mut out = format!(
-        "queue: {} · {slots} · {} queued\n",
+        "queue: {} · {slots} · {} pending\n",
         state.join(", "),
         queued.len()
     );
