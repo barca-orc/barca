@@ -212,6 +212,8 @@ pub async fn history_now(
 /// One run and the steps it recorded, for `barca history RUN_ID`.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RunDetail {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worker_failures: Vec<barca_model::run_explain::WorkerFailure>,
     pub run: db::RunRecord,
     pub steps: Vec<db::RunStep>,
     /// How many steps the run recorded, and whether `steps` lists fewer.

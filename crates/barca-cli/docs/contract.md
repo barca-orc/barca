@@ -4615,6 +4615,11 @@ See `barca docs types` and `specs/interfaces/artifact-formats.md`.
 
 ### Task stdout and logs
 
+From 0.47.0, a multiline stderr write and each failed attempt's traceback occupy one
+entry with embedded newlines in `line`; stdout remains line-oriented. Old records retain
+their original boundaries. `--timestamps` prefixes each entry once. Use
+`barca logs --pretty | less` for a readable pager. JSON keys and types are unchanged.
+
 `logs RUN_ID` is stable. JSON returns an array of `{node_id: string, stream: "stdout" |
 "stderr", ts: string | null, line: string}` objects in recorded order; text returns only the
 lines (`--timestamps` puts each line's `ts` before it). `stream` (additive, 0.29.2) is
@@ -4964,5 +4969,16 @@ shutdown allows one second for SIGTERM, then kills and reaps the subprocess.
 | `run_id` | string | always |
 | `status` | string | always |
 <!-- END GENERATED schema cancel_queued -->
+### Worker-fatal run diagnostics
+
+Experimental in 0.47.0: history detail may include `explanation.worker_failures`, an array
+of `{node_id: string, first_error: string, retry_error: string | null, recovered: boolean}`.
+Absent when no evidence was recorded. Original causes survive successful retries; a terminal
+retry error belongs to the same step, and independent failures remain separate. CLI history
+and the server run page use this recorded evidence, not an inference from retry counts.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
 
 See also: `barca docs agents` (how to drive barca from scripts and agents), `barca docs skill`.

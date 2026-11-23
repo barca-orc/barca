@@ -1301,6 +1301,50 @@ pub(crate) async fn insert_posted_run(
     .await
 }
 
+/// Original worker-fatal causes, retained independently of the final materialization.
+pub async fn set_worker_failures(
+    conn: &libsql::Connection,
+    run_id: &str,
+    failures: &[barca_model::run_explain::WorkerFailure],
+) -> Result<(), BarcaError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE runs SET worker_failures = ?2 WHERE run_id = ?1",
+        [run_id, &serde_json::to_string(failures).unwrap()],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record worker failures: {e}")))?;
+    Ok(())
+}
+
+/// Empty for older databases and runs without a recorded worker-fatal error.
+pub async fn get_worker_failures(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Vec<barca_model::run_explain::WorkerFailure>, BarcaError> {
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "worker_failures").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn
+        .query(
+            "SELECT worker_failures FROM runs WHERE run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    Ok(row
+        .and_then(|r| r.get::<String>(0).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

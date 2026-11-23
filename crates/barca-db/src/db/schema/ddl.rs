@@ -46,6 +46,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
     // JSON): written as each phase is decided and with the outcome (#925). NULL for a run that
     // executed nothing and on older rows.
     "plan_reasons TEXT",
+    "worker_failures TEXT",
     // Why a cancelled run was cancelled (`barca_model::run_explain::Cancellation`, JSON; #925).
     // NULL otherwise and on older rows.
     "cancellation TEXT",

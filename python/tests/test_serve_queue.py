@@ -7,6 +7,7 @@ it again on the same port and project, as `systemctl restart` or `docker restart
 
 import json
 import signal
+import sqlite3
 import subprocess
 import time
 from pathlib import Path
@@ -563,12 +564,26 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         assert detail.returncode == 0, detail.stderr
         attempts = json.loads(detail.stdout)["run"]["previous_attempts"]
         assert len(attempts) == number
+        # Terminal diagnostic evidence belongs to the archived execution, never the
+        # synthetic pending view of the same logical request.
+        failures = [{
+            "node_id": "pipeline.py:long",
+            "first_error": "worker failed before drain",
+            "retry_error": None,
+            "recovered": True,
+        }]
+        with sqlite3.connect(project / ".barca" / "metadata.db") as db:
+            db.execute(
+                "UPDATE runs SET worker_failures = ? WHERE run_id = ?",
+                (json.dumps(failures), attempts[-1]["run_id"]),
+            )
         server = serve("--no-schedule", "--drain-timeout", "0")
         queued = server.request("GET", "/queue")[1]["queued"][0]
         assert queued["queued_at"] == accepted
         pending = server.request("GET", f"/runs/{run_id}")[1]
         assert pending["status"] == "pending"
         assert pending["steps"] == []
+        assert pending["explanation"].get("worker_failures", []) == []
         assert len(pending["previous_attempts"]) == number
         status, recorded = server.request("GET", f"/runs/{run_id}/logs")
         assert status == 200, recorded
@@ -579,6 +594,7 @@ def test_requeued_attempts_remain_readable_and_local_follower_waits(project, ser
         assert len(view["previous_attempts"]) == number
         archived = server.request("GET", f"/runs/{attempts[-1]['run_id']}")[1]
         assert archived["stop_reason"] == "server restart (requeued)"
+        assert archived["explanation"]["worker_failures"] == failures
         assert any(line["line"] == "attempt started" for line in archived["logs"])
         listing = server.request("GET", "/runs")[1]
         assert listing["total"] == 1, listing

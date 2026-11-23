@@ -117,6 +117,7 @@ pub struct RunDraft {
     view: RunView,
     record: Option<db::RunRecord>,
     steps_page: db::StepsPage,
+    worker_failures: Vec<barca_model::run_explain::WorkerFailure>,
     read_path: String,
     /// The live run has not recorded how it ended.
     unfinished: bool,
@@ -362,7 +363,9 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
             view.parent_run_id.as_deref().unwrap_or(&view.run_id),
         );
     }
+    let worker_failures = barca_db::db::runs::get_worker_failures(read_path, id).await?;
     Ok(Some(RunDraft {
+        worker_failures,
         view,
         record,
         steps_page,
@@ -422,6 +425,7 @@ impl RunDraft {
             mut view,
             record,
             steps_page,
+            worker_failures,
             ..
         } = self;
         view.steps_page = steps_page;
@@ -437,6 +441,7 @@ impl RunDraft {
             &view.steps,
             crate::time::now_secs_f64(),
         );
+        view.explanation.worker_failures = worker_failures;
         // What the targets returned, as rows: nothing prints the raw pointers (#1042).
         let outcome = view
             .outcome
@@ -496,6 +501,7 @@ pub async fn run_detail(
         steps: view.steps,
         steps_page: view.steps_page,
         outputs: view.explanation.outputs,
+        worker_failures: view.explanation.worker_failures,
     })
 }
 

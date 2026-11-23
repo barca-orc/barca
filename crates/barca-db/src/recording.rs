@@ -59,6 +59,7 @@ pub struct RunLedger<'a> {
     /// Why the run executed what it did (`barca_model::run_explain::PlanReasons` as JSON, #925),
     /// `None` when it executed nothing.
     pub plan_reasons: Option<String>,
+    pub worker_failures: &'a [barca_model::run_explain::WorkerFailure],
 }
 
 /// The steps of `run_id` already recorded, by node id, run hash and outcome: an earlier attempt of a
@@ -94,6 +95,7 @@ pub async fn write_terminal_ledger(
     db::runs::insert_run_if_absent(conn, l.run_id, l.command, &l.files, l.target, l.steps_total)
         .await
         .map_err(|e| BarcaError::Db(format!("failed to create terminal run: {e}")))?;
+    db::runs::set_worker_failures(conn, l.run_id, l.worker_failures).await?;
     // What the [`StepRecorder`] wrote during the run.
     let already = steps_of_run(conn, l.run_id).await?;
 

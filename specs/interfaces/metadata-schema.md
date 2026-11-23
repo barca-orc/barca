@@ -412,3 +412,15 @@ both versions. This is advisory; schema compatibility still decides admission. T
 is deduplicated within a process. Missing or unrecognized writer versions do not block access.
 Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
 `crates/barca-db/src/db/schema/writer.rs`.
+## Worker-fatal diagnostics
+
+Format 1 adds nullable `runs.worker_failures` JSON through the additive column migration.
+It records each affected step's original error, its terminal retry error if any, and whether
+it recovered. The terminal ledger writes it in the same transaction as the run outcome.
+It is independent of successful materializations; no failure is fabricated for a recovered
+step. Old databases and runs read as no recorded diagnostic. Run-history deletion removes it
+with the run, and backup/restore includes it as ordinary metadata.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.

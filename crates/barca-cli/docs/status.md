@@ -515,4 +515,19 @@ whose remediation is `barca history RUN_ID --local`.
 Each node's fields (health, what the last tick found, data signals and coverage, last materialization, artifact shape,
 run timing, what started a run), the rollup's keys, the JSON document, output limits and what status asks an artifact store are in `barca docs status-fields`.
 
+
+## Worker-fatal recovery
+
+When a worker-fatal error causes worker replacement, `barca history RUN_ID` names the
+original cause and whether the affected step recovered. A terminal retry error is shown as
+a later attempt of the same step. Independent failing steps and skipped dependents keep
+their own outcomes. The run page shows the same evidence, including after server restart.
+JSON exposes `explanation.worker_failures` when present: `node_id`, `first_error`,
+`retry_error` (null after recovery), and `recovered`. This diagnostic is experimental and
+recorded at run completion; older runs and abruptly killed coordinators may have none.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
+
 See also: `barca docs cache`, `barca docs logs`, `barca docs sql`, `barca docs agents`.

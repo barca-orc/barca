@@ -1098,6 +1098,7 @@ pub fn render_run_detail(
         crate::time::now_secs_f64(),
     );
     explanation.outputs = detail.outputs.clone();
+    explanation.worker_failures = detail.worker_failures.clone();
     if json {
         let mut out = serde_json::json!({
             "run": detail.run,
@@ -1146,6 +1147,13 @@ pub fn render_run_detail(
             attempt.attempt,
             attempt.stop_reason,
             attempt.run_id
+        );
+    }
+    for failure in &explanation.worker_failures {
+        line!(
+            rendered,
+            "{}",
+            crate::run_explanation::worker_failure_line(failure)
         );
     }
     let mut when = format!("started {}", crate::report::utc_cell(&r.started_at));
@@ -2174,6 +2182,7 @@ mod run_detail_tests {
             "ZeroDivisionError: division by zero\n  File \"p.py\", line 3, in clean",
         ));
         crate::queries::RunDetail {
+            worker_failures: Vec::new(),
             run,
             steps,
             steps_page: Default::default(),

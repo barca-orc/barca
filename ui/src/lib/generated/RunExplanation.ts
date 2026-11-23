@@ -5,11 +5,16 @@ import type { RunOutput } from "./RunOutput";
 import type { RunProgress } from "./RunProgress";
 import type { SlowNode } from "./SlowNode";
 import type { WhyRan } from "./WhyRan";
+import type { WorkerFailure } from "./WorkerFailure";
 
 /**
  * What a run says about itself. Experimental.
  */
 export type RunExplanation = {
+/**
+ * Each original worker-fatal cause and whether its step recovered after replacement.
+ */
+worker_failures?: Array<WorkerFailure>,
 /**
  * The run's targets, one each: its job's node ids, else the targets as given. Empty for a
  * run of every asset.

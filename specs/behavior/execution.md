@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 9. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
+Specification version: 10. Status: implemented rules; shared in-flight asset steps between a server's runs are implemented
 as experimental with three known gaps (Open questions and gaps); the rest of shared computation
 is approved design only.
 Scope: logical work, batch completion, run recovery, and process ownership.
@@ -240,6 +240,14 @@ The removed `BARCA_STATE=off` spelling and shared-history pull are not current a
 
 ## Failures and recovery
 
+A completed run retains each step's first worker-fatal error independently of its final
+materialization. The run summary identifies whether that step recovered after worker
+replacement and, if it ultimately failed, its later error. Independent failing steps remain
+separate; skipped dependents remain not reached, not additional root causes. This diagnostic
+is recorded at run completion, not guaranteed after an abruptly killed coordinator. Old runs
+without the evidence do not infer it from a retry count. The wire owner is `RunExplanation`
+in the [HTTP contract](../interfaces/server-api.openapi.yaml).
+
 A failed key preserves successful peers and blocks applicable data dependents: the same key of a
 dependent on exactly the same dimensions that reads it as a plain input, down the chain, and the
 whole of a dependent that reads every key (a `collect()` fan-in, an unpartitioned node, other
@@ -254,6 +262,10 @@ and lifecycle rules below define the precise existing behavior.
 Exercise explicit tasks, cached assets, per-key partial batch failure, worker death/retry,
 cancellation, durable queue acknowledgement and drain/restart. Assert actual executions
 separately from cache hits and preserve completed peers.
+
+Conformance (worker-fatal summaries, recovery and terminal retry):
+[worker-fatal tests](../../python/tests/test_duckdb_invalidated.py). These raise DuckDB's
+exception to exercise Barca's reporting path; they do not reproduce a native invalidation.
 
 Conformance: [task CLI](../../python/tests/test_task_logs.py),
 [scheduler](../../python/tests/test_serve_schedule.py),
@@ -324,3 +336,7 @@ Full bootstrap and validation still retain work proportional to partition count:
 [#655](https://github.com/barca-orc/barca/issues/655). Bounded scheduling is an accepted target,
 not a current whole-engine memory guarantee. Performance workload scope and budgets are
 owned by [the performance contract](performance.md).
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
