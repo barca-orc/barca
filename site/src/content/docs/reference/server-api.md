@@ -421,3 +421,14 @@ still hard-refreshes the cone including Manual nodes. Paused inputs stay held un
 options; no readable result means failure instead of computing a paused input. `allow_paused`
 permits named paused targets only. Whole-file/project runs skip paused targets. Dry runs and
 queue recovery preserve the same rules.
+
+### Remote refresh acceptance
+
+`POST /ledger/lookup` additionally accepts `nodes: [BASE_ID, ...]` and returns `identities`
+when these historical partition identities were requested. `POST /ledger/refresh` accepts
+`{run_id, accepted_at, nodes}` (Unix seconds and planned step identities) and returns
+`{run_id}` after making older successes ineligible for ordinary reuse. Clients must wait for
+acceptance before computing. Invalid requests return 400, read-only servers 403, and draining
+servers 503. Retrying with the original acceptance time preserves later successes. Explicit
+pins and history remain readable. Verified ledger posts can replace invalidated successes;
+ordinary conflicting posts retain the existing digest checks.

@@ -86,3 +86,27 @@ async fn post_inner(reads: Reads, lifecycle: Lifecycle, body: &[u8]) -> Result<R
         Err(Rejection::Infra(e)) => Err(ApiError::Barca(e)),
     }
 }
+
+/// Invalidate the old successes of a remote refresh before it can compute new inputs.
+pub async fn refresh(
+    State(reads): State<Reads>,
+    State(lifecycle): State<Lifecycle>,
+    body: axum::body::Bytes,
+) -> Response {
+    async {
+        refuse_if_read_only(&reads.config)?;
+        if lifecycle.is_draining() || lifecycle.shutdown.is_cancelled() {
+            return Err(ApiError::Unavailable {
+                message: "this server is shutting down and accepts no new refresh invalidations"
+                    .to_string(),
+                retry_after: crate::guards::retry_after_secs(&reads.config),
+            });
+        }
+        let request: ledger::RefreshRequest = serde_json::from_slice(&body)
+            .map_err(|e| ApiError::BadRequest(format!("invalid ledger refresh: {e}")))?;
+        let accepted = ledger::invalidate_refresh(&reads.config.resolved, &request).await?;
+        Ok::<_, ApiError>(Json(accepted).into_response())
+    }
+    .await
+    .unwrap_or_else(IntoResponse::into_response)
+}

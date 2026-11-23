@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 9. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 10. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -374,3 +374,27 @@ this is not an exactly-once promise for side effects.
 Conformance: `python/tests/test_refresh_restart.py` drives real drain/restart requests and
 new CLI refreshes; `db::cache_reader::observation_tests::refresh_acceptance_is_precise_and_requires_matching_success`
 checks same-second before/equal/after, legacy timestamps, hash mismatch and failure controls.
+
+### Durable refresh invalidation
+
+A refresh supersedes pre-acceptance successes in its planned scope before execution starts,
+including blocked downstream phases. Ordinary single, batched and grouped cache lookups
+exclude those rows. A cache-aware retry cannot resurrect them after failure or restart;
+new successful results and results at or after the original acceptance boundary remain
+eligible. Retrying the same invalidation does not invalidate these later successes.
+
+Scope follows partition-aligned refresh and cascade rules, cutoff boundaries, held nodes,
+explicit pins and request selection. No-cascade and out-of-cone consumers are not invalidated.
+Historical dynamic identities may be reconstructed from aligned consumers when upstream
+history was pruned; a pruned intermediate must not hide an old downstream fan-in. Explicit
+pins still read the historical rows.
+
+A remote-ledger client obtains historical identities from the server and must receive durable
+invalidation acceptance before computation. It discards and reloads pre-invalidation lookup
+answers. A verified post can replace an invalidated ledger result; ordinary conflicting
+posts still obey the ledger's digest rules. Unsupported acceptance fails before computation.
+This does not resolve the concurrent-version ordering gap tracked in freshness.
+
+Conformance: `python/tests/test_refresh_failure_retry.py`,
+`refresh_invalidations_survive_reopen_and_agree_across_lookup_paths`, and the ledger OpenAPI
+conformance test.

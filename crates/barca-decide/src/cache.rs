@@ -1219,6 +1219,159 @@ fn refresh_reason(
     }
 }
 
+/// The identities whose old successes a refresh supersedes, including later phases that
+/// a failure may prevent from being reached. Use the execution policy's own cascade rules.
+pub async fn refresh_scope(
+    dag: &Dag,
+    policy: &CachePolicy,
+    plan: &barca_compile::planner::ExecutionPlan,
+    cache: &CacheReader,
+    held: &HashMap<String, crate::freshness::Pin>,
+    pins: &[db::AssetPin],
+    selection: Option<&barca_compile::selection::PartitionSelection>,
+) -> Result<Vec<String>, barca_model::BarcaError> {
+    if matches!(policy, CachePolicy::CacheAware) {
+        return Ok(Vec::new());
+    }
+    let mut by_base: HashMap<&str, Vec<&barca_compile::planner::StreamStep>> = HashMap::new();
+    for step in plan
+        .phases
+        .iter()
+        .flat_map(|p| &p.streams)
+        .flat_map(|s| &s.steps)
+    {
+        by_base
+            .entry(step.step_id.base_id())
+            .or_default()
+            .push(step);
+    }
+    // History pruning may remove an upstream's rows before its consumers' rows. Gather
+    // identities first, then carry aligned consumer keys backwards through unresolved
+    // steps: absence of upstream history must not erase a refresh's cascade.
+    let mut identities: HashMap<&str, BTreeSet<String>> = HashMap::new();
+    for (&base, steps) in &by_base {
+        let ids = identities.entry(base).or_default();
+        for step in steps {
+            if !step.pending_partitions.is_empty() {
+                ids.extend(cache.recorded_step_ids(base).await?);
+                if let CachePolicy::RefreshSelective { names, .. } = policy {
+                    for name in names {
+                        let (_, key) = barca_model::model::PartitionKey::parse_from_id(name);
+                        if refresh_name_matches(base, name) && !key.is_empty() {
+                            ids.insert(key.display_id(base));
+                        }
+                    }
+                }
+            } else if step.partition_keys.is_empty() {
+                ids.insert(step.step_id.display());
+            } else {
+                ids.extend(step.partition_keys.iter().map(|key| key.display_id(base)));
+            }
+        }
+    }
+    for base in dag.topo_order().iter().rev() {
+        let Some(steps) = by_base.get(base) else {
+            continue;
+        };
+        let keys: Vec<_> = identities[base]
+            .iter()
+            .map(|id| barca_model::model::PartitionKey::parse_from_id(id).1)
+            .collect();
+        for up in steps.iter().flat_map(|step| step.inputs.values()) {
+            let Some(up_steps) = by_base.get(up.as_str()) else {
+                continue;
+            };
+            for step in up_steps {
+                if step.pending_partitions.is_empty() {
+                    continue;
+                }
+                for key in &keys {
+                    if key.0.len() == step.pending_partitions.len()
+                        && step
+                            .pending_partitions
+                            .keys()
+                            .all(|dim| key.0.contains_key(dim))
+                    {
+                        identities.entry(up).or_default().insert(key.display_id(up));
+                    }
+                }
+            }
+        }
+    }
+    let mut state = DecideState::default();
+    let mut scope = Vec::new();
+    for base in dag.topo_order() {
+        let Some(steps) = by_base.get(base) else {
+            continue;
+        };
+        // A new or pruned key can still feed an old fan-in. Carry the upstream's
+        // possible aligned identities forward, even when this node has no rows yet.
+        for step in steps {
+            if step.pending_partitions.is_empty() {
+                continue;
+            }
+            let mut inherited = Vec::new();
+            for up in step.inputs.values() {
+                for id in identities.get(up.as_str()).into_iter().flatten() {
+                    let (_, key) = barca_model::model::PartitionKey::parse_from_id(id);
+                    if key.0.len() == step.pending_partitions.len()
+                        && step
+                            .pending_partitions
+                            .keys()
+                            .all(|dim| key.0.contains_key(dim))
+                    {
+                        inherited.push(key.display_id(base));
+                    }
+                }
+            }
+            identities.entry(base).or_default().extend(inherited);
+        }
+        let ids = identities
+            .get_mut(base)
+            .expect("planned node has identities");
+        if ids.is_empty() {
+            // An unresolved node without historical keys still carries a whole-node
+            // refresh to its consumers. There is no old row for this placeholder itself.
+            ids.insert(base.to_string());
+        }
+        let mut candidates = Vec::new();
+        for step in steps.iter().take(1) {
+            for id in ids.iter() {
+                let (_, key) = barca_model::model::PartitionKey::parse_from_id(id);
+                if selection.is_none_or(|selected| selected.matches(&key)) {
+                    state.run_hashes.insert(id.clone(), String::new());
+                    candidates.push((*step, id.clone()));
+                }
+            }
+        }
+        if held.contains_key(base) {
+            continue;
+        }
+        for (step, id) in candidates {
+            if pins
+                .iter()
+                .any(|pin| pin.node_id == base || pin.node_id == id)
+            {
+                continue;
+            }
+            if let Some(reason) = refresh_reason(
+                dag,
+                policy,
+                &state,
+                step,
+                &id,
+                step.kind == barca_model::NodeKind::Asset,
+            ) {
+                remember_refresh(&mut state, &id, base, &reason);
+                scope.push(id);
+            }
+        }
+    }
+    scope.sort_unstable();
+    scope.dedup();
+    Ok(scope)
+}
+
 fn remember_refresh(state: &mut DecideState, display: &str, base: &str, reason: &RunReason) {
     let root = match reason {
         RunReason::RefreshCascade { root } => root.clone(),

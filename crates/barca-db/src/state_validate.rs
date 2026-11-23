@@ -70,6 +70,7 @@ pub(crate) const RUN_COLUMNS: &[&str] = &[
 
 /// Every column of `materializations` except its row id.
 pub(crate) const STEP_COLUMNS: &[&str] = &[
+    "refresh_invalidated_by",
     "skip_reason",
     "node_id",
     "run_hash",

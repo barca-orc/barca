@@ -306,6 +306,21 @@ selective cascade and cutoff rules are unchanged. A fully cached step satisfied 
 boundary has reason `refreshed_by_this_run`. Tasks outside ticks can repeat, including side
 effects; this is not an exactly-once guarantee. See [Operating barca serve](/reference/serve-ops/).
 
+
+### Failed refreshes and cache-aware retries
+
+Before a refresh executes, successful results older than its acceptance time in the planned
+refresh scope become ineligible for ordinary cache reuse. This includes downstream steps
+that a failure prevents from running. A cache-aware retry therefore computes the missing
+results from the refreshed inputs instead of reviving pre-refresh successes, even after a
+restart or another failed retry. New successes remain reusable.
+
+Partition selection, cutoff boundaries, held nodes and explicit pins still constrain the
+scope. `--no-cascade` and consumers outside the requested cone remain unchanged. Historical
+rows stay available for inspection and explicit pins. Against a remote ledger, the server
+must acknowledge invalidation before computation starts; upgrade an older server that does
+not support it. Ordinary cache reads do not need this handshake.
+
 See also: [Disk Use](/reference/disk/), [Where Things Live](/reference/layout/), [Remote Storage](/reference/remote-storage/), [Output Formats and Types](/reference/types/),
 [Partitions](/reference/partitions/), [barca status](/reference/cli/status/), [Server Mode: a Shared Ledger and --server](/reference/server-mode/), [CLI Contract](/reference/cli-contract/).
 

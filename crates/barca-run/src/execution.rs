@@ -726,6 +726,40 @@ async fn open_state(
         base_ids.len()
     );
 
+    if let CachePolicy::RefreshAll { since } | CachePolicy::RefreshSelective { since, .. } =
+        &request.policy
+    {
+        let scope = {
+            let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
+            barca_decide::cache::refresh_scope(
+                &prepared.dag,
+                &request.policy,
+                exec_plan,
+                &cache,
+                &prepared.pinned,
+                &prepared.user_pins,
+                request.partition.as_ref(),
+            )
+            .await?
+        };
+        if let Some(ledger) = barca_store::ledger::attached(cfg) {
+            ledger
+                .invalidate_refresh(&barca_store::ledger::RefreshRequest {
+                    run_id: run_id.to_string(),
+                    accepted_at: *since,
+                    nodes: scope.clone(),
+                })
+                .await?;
+            ledger
+                .prefetch(barca_decide::cache::cone_keys(
+                    &prepared.dag,
+                    &exec_plan.phases,
+                ))
+                .await?;
+        }
+        db::materializations::invalidate_refresh_scope(&db_path, run_id, *since, &scope).await?;
+    }
+
     // Measured-cost model: seed from persisted estimates so batch sizing is
     // pre-warmed — the cold-start probe is paid once ever per stable node,
     // not once per run.

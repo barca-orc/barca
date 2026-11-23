@@ -76,6 +76,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sql/query", post(crate::sql_query::query))
         // The ledger: what a local run on another machine asks and posts (RFC-0007).
         .route("/ledger/lookup", post(ledger::lookup))
+        .route("/ledger/refresh", post(ledger::refresh))
         .route("/ledger/runs", post(ledger::post_run))
         // The rest of the run contract.
         .route("/runs/{run_id}/events", get(runs::events))
