@@ -94,8 +94,9 @@ impl LedgerPost {
 pub struct PostAccepted {
     /// The run id the server recorded the run under.
     pub run_id: String,
-    /// Steps whose run hash the ledger already held with a different digest. The ledger keeps
-    /// its row; the posting machine prints the non-determinism warning for each.
+    /// Steps whose run hash the ledger already held with a different digest. An explicit
+    /// refresh permits replacement; otherwise the ledger keeps its row. The posting machine
+    /// prints the non-determinism warning for ordinary assets in either case.
     #[serde(default)]
     pub bytes_changed: Vec<String>,
 }

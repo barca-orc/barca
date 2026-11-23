@@ -186,6 +186,13 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
   server too; `--local` leaves it out (`barca docs doctor`, "Checking a server").
 
+A local refresh first invalidates pre-acceptance results in its planned scope on the server
+(`POST /ledger/refresh`). The client obtains historical partition identities through
+`POST /ledger/lookup` when needed, and waits for the server's acknowledgement before running
+workers. An unavailable, read-only or older server cannot silently fall back to local
+invalidation. A subsequent verified post may replace an invalidated result under the same
+run hash; ordinary conflicting posts retain the existing non-determinism checks.
+
 ## A local run against the server's ledger
 
 Without `--server` or `--local`, `barca get` and `barca run` run on this machine with this

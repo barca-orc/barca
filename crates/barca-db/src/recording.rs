@@ -196,7 +196,8 @@ pub async fn write_terminal_ledger(
 
 /// Record a verified post in one transaction: the run, then each step the ledger does not
 /// already hold. A step whose run hash the ledger holds with the same digest adds nothing; with
-/// a different digest the ledger keeps its row and the step is reported in `bytes_changed`.
+/// a different digest the ledger keeps its row unless refresh invalidated it. Both cases
+/// report the changed digest in `bytes_changed`.
 pub async fn record_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, BarcaError> {
     let failed = |e: libsql::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
     let run_id = db::generate_run_id();
@@ -212,6 +213,17 @@ pub async fn record_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepte
                 let held = db::materializations::held_hashes(&conn, &step.node_id, &step.run_hash)
                     .await
                     .map_err(failed)?;
+                if let Some(previous) = held.as_ref().filter(|h| h.invalidated) {
+                    // Refresh revokes reuse, not the diagnostic evidence that an ordinary
+                    // asset produced different bytes for the same computation identity.
+                    if previous.output.is_some() && previous.output != step.digest {
+                        bytes_changed.push(step.node_id.clone());
+                    }
+                    db::materializations::insert_posted_step(&conn, &run_id, step)
+                        .await
+                        .map_err(failed)?;
+                    continue;
+                }
                 match held.as_ref().map(|h| h.output.as_deref()) {
                     // Held, with the same bytes: nothing to add.
                     Some(Some(digest)) if Some(digest) == step.digest.as_deref() => {

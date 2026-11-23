@@ -2,14 +2,14 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '36'
-  description: 'Normative current wire contract; specification version 35 is independent of package versions.
+  version: '37'
+  description: 'Normative current wire contract; specification version 37 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
     consumes its own one-use local credential. No cookies or CORS credentials are accepted. The run contract and inspection routes of RFC-0007 section
     3.4 are shipped (POST /runs, GET /runs/{run_id}, its events, output, logs and cancel; /list, /nodes, /history,
-    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations) and its query route over barca''s own tables (POST /sql/query; the server never runs SQL over results or files), and so are its ledger routes (POST /ledger/lookup, POST /ledger/runs), POST /state/reset and POST /gc (barca gc run by the server), and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
+    /stats/{name}, /project), the barca sql reads (GET /sql/views, GET /materializations) and its query route over barca''s own tables (POST /sql/query; the server never runs SQL over results or files), and so are its ledger routes (POST /ledger/lookup, POST /ledger/refresh, POST /ledger/runs), POST /state/reset and POST /gc (barca gc run by the server), and the durable run queue (GET /queue, POST /queue/pause, POST /queue/resume: every accepted run is recorded before it is answered and resumed in order after a restart). GET /state, GET /assets/{name} and GET /runs?status=running report the runs working on each node now. Every error body is the CLI error
     envelope. Every GET of an inspection route answers with an ETag (a digest of its body) and Cache-Control: no-cache; a request whose If-None-Match names it gets 304 Not Modified and no body. Routes marked deprecated are aliases retained for Python Client compatibility, with no scheduled removal; a removal migrates Client first and lands in a minor release. Conformance: crates/barca-server/tests/openapi.rs
     and python/tests/test_http_openapi_client.py. The same routes are served on the project socket
     (x-project-socket).'
@@ -3293,6 +3293,59 @@ paths:
       description: 'What a local barca get on another machine asks before it runs (RFC-0007 section 4.1):
         for each node id and run hash, the latest successful result the ledger holds, by run hash only.
         A read-only server answers from a snapshot.'
+  /ledger/refresh:
+    post:
+      summary: Supersede old successes before a remote refresh computes
+      operationId: post_ledger_refresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LedgerRefresh'
+      responses:
+        '200':
+          description: Invalidation committed; repeated acceptance preserves later successes
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LedgerRefreshAccepted'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '400':
+          description: Invalid refresh request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '403':
+          description: Read-only server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          description: Metadata error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '503':
+          description: Server shutting down
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          description: Unsupported method
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+      description: The client supplies the planned refresh identities after applying selection,
+        cutoff and pin rules. Matching successes older than accepted_at (Unix seconds) cease to be
+        ordinary cache hits. History and explicit pins remain readable. The server commits before
+        acknowledging run_id; clients must not compute when acceptance fails or is unsupported.
   /ledger/runs:
     post:
       summary: Record a run another machine computed
@@ -3359,7 +3412,7 @@ paths:
         an object in this server''s store with its SHA-256 digest; the server checks each (a directory
         store by digest, an object store by size) before it writes the run (triggered_by client, with
         client_run_id) and its steps in one transaction. A run hash the ledger already holds with the
-        same digest adds nothing; with another digest the ledger keeps its row and names the step in
+        same digest adds nothing; after an explicit refresh invalidates that row, a verified replacement is recorded. Otherwise with another digest the ledger keeps its row and names the step in
         bytes_changed.'
   /runs:
     get:
@@ -9410,6 +9463,10 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LedgerKey'
+        nodes:
+          type: array
+          items: {type: string}
+          description: Optional base node IDs whose historical partition identities prepare a refresh.
     LedgerEntry:
       type: object
       additionalProperties: false
@@ -9445,6 +9502,26 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LedgerEntry'
+        identities:
+          type: array
+          items: {type: string}
+          description: Present when nodes were requested, including an empty array when no history exists.
+    LedgerRefresh:
+      type: object
+      additionalProperties: false
+      required: [run_id, accepted_at, nodes]
+      properties:
+        run_id: {type: string, minLength: 1}
+        accepted_at: {type: number, minimum: 0}
+        nodes:
+          type: array
+          items: {type: string}
+    LedgerRefreshAccepted:
+      type: object
+      additionalProperties: false
+      required: [run_id]
+      properties:
+        run_id: {type: string}
     LedgerRun:
       type: object
       required:
@@ -9566,7 +9643,7 @@ components:
           type: array
           items:
             type: string
-          description: Steps whose run hash the ledger already held with another digest; it kept its row.
+          description: Steps whose run hash the ledger already held with another digest; an explicit refresh permits replacement, otherwise its row is kept.
     HistoryRun:
       type: object
       additionalProperties: false

@@ -768,6 +768,7 @@ pub(crate) struct HeldHashes {
     /// Its output hash, when it recorded one (rows before digests were recorded have none).
     pub(crate) output: Option<String>,
     pub(crate) observation: Option<String>,
+    pub(crate) invalidated: bool,
 }
 
 /// The latest successful row of `node_id` under `run_hash`, if any.
@@ -778,7 +779,7 @@ pub(crate) async fn held_hashes(
 ) -> Result<Option<HeldHashes>, libsql::Error> {
     let mut rows = conn
         .query(
-            "SELECT output_hash, observation_hash FROM materializations WHERE node_id = ?1 AND \
+            "SELECT output_hash, observation_hash, refresh_invalidated_by IS NOT NULL FROM materializations WHERE node_id = ?1 AND \
              run_hash = ?2 AND status = 'success' ORDER BY id DESC LIMIT 1",
             [node_id.to_string(), run_hash.to_string()],
         )
@@ -786,6 +787,7 @@ pub(crate) async fn held_hashes(
     let held = rows.next().await?.map(|row| HeldHashes {
         output: row.get::<String>(0).ok().filter(|h| !h.is_empty()),
         observation: row.get::<String>(1).ok(),
+        invalidated: row.get::<i64>(2).is_ok_and(|v| v != 0),
     });
     while rows.next().await?.is_some() {}
     Ok(held)
@@ -1610,4 +1612,35 @@ mod step_history_tests {
             "the success without an artifact is looked for only after the newest with one: {details:?}"
         );
     }
+}
+
+/// Invalidate only pre-acceptance successes of the selected refresh scope. Retaining the
+/// rows preserves explicit pins/history; future ordinary lookups must not resurrect them.
+pub async fn invalidate_refresh_scope(
+    db_path: &str,
+    run_id: &str,
+    before: f64,
+    nodes: &[String],
+) -> Result<(), BarcaError> {
+    if nodes.is_empty() {
+        return Ok(());
+    }
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let tx = conn
+        .transaction()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?;
+    let before = barca_model::time::db_timestamp(before);
+    for chunk in nodes.chunks(4096) {
+        let ids = serde_json::to_string(chunk).expect("step identities are JSON");
+        tx.execute(
+            "UPDATE materializations SET refresh_invalidated_by = ?1 WHERE node_id IN (SELECT value FROM json_each(?2)) AND status = 'success' AND refresh_invalidated_by IS NULL AND (CASE WHEN length(created_at) = 19 THEN created_at || '.000000000' ELSE created_at END) < ?3",
+            [run_id, ids.as_str(), before.as_str()],
+        ).await.map_err(|e| BarcaError::Db(format!("failed to invalidate refresh scope: {e}")))?;
+    }
+    tx.commit()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?;
+    Ok(())
 }

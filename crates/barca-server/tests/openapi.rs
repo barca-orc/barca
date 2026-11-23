@@ -1875,8 +1875,64 @@ async fn ledger_lookup_and_post_match_contract() {
     assert_eq!(history["runs"][0]["client_run_id"], "c-1");
     assert_eq!(history["runs"][0]["triggered_by"], "client");
 
+    let identity_lookup = json!({"hashes": [], "nodes": ["pipeline.py:first"]});
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", identity_lookup).await;
+    assert_eq!(status, 200);
+    validate(&response("/ledger/lookup", 200), &body);
+    assert!(body["identities"].is_array());
+    let refresh = json!({"run_id": "refresh-client", "accepted_at": 2_000_000_000.0, "nodes": ["pipeline.py:first"]});
+    validate(
+        &contract()["paths"]["/ledger/refresh"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &refresh,
+    );
+    for _ in 0..2 {
+        let (status, body) =
+            request_json(&router, "POST", "/ledger/refresh", refresh.clone()).await;
+        assert_eq!(status, 200, "{body}");
+        validate(&response("/ledger/refresh", 200), &body);
+        assert_eq!(body["run_id"], "refresh-client");
+    }
+    let (_, body) = request_json(
+        &router,
+        "POST",
+        "/ledger/lookup",
+        json!({"hashes": [{"node_id": "pipeline.py:first", "run_hash": "h1"}]}),
+    )
+    .await;
+    assert_eq!(body["results"][0]["exists"], false);
+    let (status, body) = request_json(
+        &router,
+        "POST",
+        "/ledger/refresh",
+        json!({"run_id": "", "accepted_at": 0, "nodes": []}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/refresh", 400), &body);
+    checked(&router, "GET", "/ledger/refresh", "/ledger/refresh", 405).await;
+
+    let (status, body) = request_json(
+        &draining_app(config.clone()),
+        "POST",
+        "/ledger/refresh",
+        refresh.clone(),
+    )
+    .await;
+    assert_eq!(status, 503);
+    validate(&response("/ledger/refresh", 503), &body);
+
     let mut read_only = config.clone();
     read_only.read_only = true;
+    let (status, body) = request_json(
+        &barca_server::app(read_only.clone()),
+        "POST",
+        "/ledger/refresh",
+        refresh,
+    )
+    .await;
+    assert_eq!(status, 403);
+    validate(&response("/ledger/refresh", 403), &body);
     let (status, body) =
         request_json(&barca_server::app(read_only), "POST", "/ledger/runs", post).await;
     assert_eq!(status, 403);

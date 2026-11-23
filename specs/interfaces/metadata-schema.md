@@ -436,3 +436,15 @@ with the run, and backup/restore includes it as ordinary metadata.
 Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
 with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
 not exhaustive at its limit; ordinary step outcomes still report independent failures.
+
+## Refresh invalidation
+
+Format 1 adds nullable `materializations.refresh_invalidated_by` (TEXT), the run that first
+superseded a pre-acceptance successful row. Ordinary cache lookups exclude non-null rows. Ledger posts may replace them, while
+retaining the previous digest for non-determinism diagnostics. Historical inspection and explicit pins retain
+access to the rows. A transaction marks only the selected identities with `created_at` before
+the refresh's original acceptance time, normalizing legacy whole-second timestamps; retries
+leave later successes eligible. The marker is independent of run retention and survives
+backup/restore. Older snapshots gain the nullable column through additive migration.
+Conformance: `refresh_invalidations_survive_reopen_and_agree_across_lookup_paths` and
+`python/tests/test_refresh_failure_retry.py`.
