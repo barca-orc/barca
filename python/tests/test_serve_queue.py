@@ -679,7 +679,9 @@ def item(key: str) -> int:
     assert "stopped and put back in the queue" in server.stderr
     with snapshot(project) as db:
         failed = db.execute(
-            "select node_id, run_hash from materializations where run_id=? and status='failed'",
+            "select node_id, run_hash from materializations "
+            "where run_id in (select run_id from runs where parent_run_id=?) "
+            "and status='failed'",
             (run_id,),
         ).fetchall()
     assert len(failed) == 1, failed
@@ -689,6 +691,10 @@ def item(key: str) -> int:
     restarted = serve("--no-schedule")
     run = restarted.finished(run_id)
     assert run["status"] == "success", run
+    assert len(run["previous_attempts"]) == 1, run
+    attempt_id = run["previous_attempts"][0]["run_id"]
+    archived = restarted.request("GET", f"/runs/{attempt_id}")[1]
+    assert sum(step["status"] == "failed" for step in archived["steps"]) == 1, archived
     with snapshot(project) as db:
         successes = db.execute(
             "select artifact_path from materializations where run_id=? and node_id=? "
