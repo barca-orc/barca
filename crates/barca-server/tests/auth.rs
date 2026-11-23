@@ -85,6 +85,7 @@ async fn every_api_path_and_method_authenticates_before_dispatch_or_etag() {
             "/state",
             "/ledger/lookup",
             "/ledger/runs",
+            "/ledger/refresh",
             "/runs/missing/events",
             "/events/missing",
             "/queue",

@@ -1912,6 +1912,16 @@ async fn ledger_lookup_and_post_match_contract() {
     validate(&response("/ledger/refresh", 400), &body);
     checked(&router, "GET", "/ledger/refresh", "/ledger/refresh", 405).await;
 
+    let (status, body) = request_json(
+        &draining_app(config.clone()),
+        "POST",
+        "/ledger/refresh",
+        refresh.clone(),
+    )
+    .await;
+    assert_eq!(status, 503);
+    validate(&response("/ledger/refresh", 503), &body);
+
     let mut read_only = config.clone();
     read_only.read_only = true;
     let (status, body) = request_json(
