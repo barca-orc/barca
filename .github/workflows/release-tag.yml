@@ -37,7 +37,7 @@ jobs:
       contents: write   # push the tag
       actions: write    # dispatch release.yml
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.merge_commit_sha }}
           fetch-depth: 0   # tags and main, to check the commit is on main
