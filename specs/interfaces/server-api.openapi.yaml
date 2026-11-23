@@ -7626,7 +7626,6 @@ components:
             - skipped
             - failed
             - cancelled
-            - error
             - interrupted
           - type: 'null'
           description: That run's status, in the words of GET /runs; pending while it waits in the
@@ -8049,12 +8048,12 @@ components:
         by_status:
           type: object
           additionalProperties: false
-          required: [success, failed, error, cancelled, interrupted, running]
+          required: [pending, success, failed, cancelled, interrupted, running]
           properties:
             skipped: {type: integer, minimum: 0}
             success: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
-            error: {type: integer, minimum: 0}
+            pending: {type: integer, minimum: 0}
             cancelled: {type: integer, minimum: 0}
             interrupted: {type: integer, minimum: 0}
             running: {type: integer, minimum: 0}
@@ -8695,7 +8694,7 @@ components:
           type: object
     Outcome:
       description: 'A finished run, tagged by status. success: the exact barca get --json / barca run
-        --json body. failed: the failed-run stdout body plus envelope. cancelled and error: envelope only.'
+        --json body. failed: the failed-run stdout body plus envelope. cancelled and failures before execution: envelope only.'
       oneOf:
       - type: object
         required:
@@ -8765,7 +8764,6 @@ components:
           status:
             enum:
             - cancelled
-            - error
           envelope:
             $ref: '#/components/schemas/Error'
     RunExplanation:
@@ -9107,7 +9105,6 @@ components:
           - skipped
           - failed
           - cancelled
-          - error
           - interrupted
         command: *id005
         target: *id042

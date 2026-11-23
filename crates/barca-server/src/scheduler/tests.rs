@@ -423,7 +423,6 @@ fn get_schedule_reports_next_fire_in_the_servers_zone() {
             an_instant(),
             &Default::default()
         ));
-        let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
         assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
         assert_eq!(body[0]["id"], "f.py:daily");
     }
@@ -640,7 +639,7 @@ async fn a_skip_is_published_to_get_schedule() {
         an_instant(),
         &Default::default()
     ));
-    assert_eq!(body[0]["last_skipped"], 1_234);
+    assert_eq!(body[0]["last_skipped"], "1970-01-01T00:20:34Z");
     assert_eq!(body[0]["skipped_for"], "api");
     assert_eq!(body[0]["skip_reason"], "in_flight");
     assert_eq!(body[0]["paused"], false);
@@ -1517,7 +1516,7 @@ async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
     // so reached none of the tick's targets.
     assert!(done.started_at.is_some() && done.queue_wait_seconds.is_some());
     assert!(done.finished_at >= done.started_at);
-    assert_eq!(done.run_status.as_deref(), Some("error"));
+    assert_eq!(done.run_status.as_deref(), Some("failed"));
     assert_eq!(
         done.targets,
         Some(vec![(j.id.clone(), db::TickTargetOutcome::NotReached)])
@@ -1655,7 +1654,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let st = state_at(&path);
     crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
-    assert_eq!(row.run_status.as_deref(), Some("error"));
+    assert_eq!(row.run_status.as_deref(), Some("failed"));
     assert_eq!(
         (row.started_at, row.queue_wait_seconds),
         (Some(241.0), Some(1.0))

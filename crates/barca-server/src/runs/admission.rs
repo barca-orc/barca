@@ -337,7 +337,7 @@ pub async fn resume_at_startup(state: &AppState) -> Result<(), barca_service::Ba
 /// A run the last server started and never finished recording: it was killed (SIGKILL, a
 /// crash, a supervisor's grace period that ran out). It is not started again; its row, when it
 /// wrote one, is recorded `interrupted` by queue ownership, and one that never wrote a row
-/// gets one with an `error` outcome, so its id is not lost.
+/// gets one with a `failed` outcome, so its id is not lost.
 async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     let cfg = &state.config.resolved;
     barca_service::errln!(
@@ -346,14 +346,14 @@ async fn interrupted(state: &AppState, run_id: &str, spec: Option<RunSpec>) {
     );
     let unrecorded = matches!(db::get_run(&cfg.db_path, run_id).await, Ok(None));
     if let Some(spec) = &spec {
-        // The tick that started it ends as the run's row does: `interrupted`, or `error` for
+        // The tick that started it ends as the run's row does: `interrupted`, or `failed` for
         // a run that never wrote one.
-        let status = if unrecorded { "error" } else { "interrupted" };
+        let status = if unrecorded { "failed" } else { "interrupted" };
         crate::runs::record_tick_finished(state, run_id, spec, status, None).await;
     }
     if unrecorded && let Some(spec) = spec {
         let outcome = barca_service::outcome::Outcome::ended(
-            barca_service::outcome::OutcomeStatus::Error,
+            barca_service::outcome::OutcomeStatus::Failed,
             &barca_service::envelope::ErrorEnvelope::from_prose(
                 barca_service::envelope::ErrorKind::Infra,
                 "run interrupted: the server was killed before the run recorded itself\nRun it \

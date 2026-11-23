@@ -982,6 +982,11 @@ async fn read_runs(
         } else {
             row.get::<String>(4).unwrap_or_default()
         };
+        let status = if status == "error" {
+            "failed".into()
+        } else {
+            status
+        };
         records.push(RunRecord {
             run_id,
             command: row.get::<String>(1).unwrap_or_default(),
@@ -1075,7 +1080,7 @@ pub struct ActivityRow {
 /// The window's runs that did not succeed, each with its first failed step ([`run_activity`]).
 fn activity_failures_sql(first_failure: &str, trigger: &str, window: &str, text: &str) -> String {
     format!(
-        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), status, {trigger}, {first_failure}, id \
+        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, {first_failure}, id \
          FROM runs WHERE {window}{text} AND status NOT IN ('success', 'running')"
     )
 }
@@ -1149,7 +1154,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, COUNT(*) FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, COUNT(*) FROM runs \
                  WHERE {window}{text} GROUP BY 1, 2, 3 ORDER BY 1"
             ),
             (),
@@ -1168,7 +1173,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, elapsed_seconds FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, elapsed_seconds FROM runs \
                  WHERE {window}{text} AND status != 'running' AND elapsed_seconds IS NOT NULL"
             ),
             (),
@@ -1650,6 +1655,65 @@ mod tests {
             details.push(row.get::<String>(3).unwrap());
         }
         details
+    }
+
+    #[tokio::test]
+    async fn legacy_errors_are_failed_in_history_filters_and_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        seed_runs(
+            &path,
+            &[
+                ("legacy", "error", Some("api"), "2026-10-22 08:00:00"),
+                ("new", "failed", Some("api"), "2026-10-22 08:01:00"),
+                ("ok", "success", Some("api"), "2026-10-22 08:02:00"),
+            ],
+        )
+        .await;
+        let filter = RunFilter {
+            statuses: vec!["failed".into()],
+            ..Default::default()
+        };
+        let runs = get_runs_filtered(&path, 10, &filter).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|r| r.status == "failed"));
+        assert_eq!(
+            get_run(&path, "legacy").await.unwrap().unwrap().status,
+            "failed"
+        );
+        assert_eq!(listed(&path, 10, &filter).await.1, 2);
+        let facts = run_activity(&path, "2026-10-22 08:00:00", &RunFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            facts.counts.iter().filter(|r| r.status == "failed").count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .counts
+                .iter()
+                .find(|r| r.status == "failed")
+                .unwrap()
+                .runs,
+            2
+        );
+        assert!(facts.failures.iter().all(|r| r.status == "failed"));
+        let (_db, conn) = open_conn(&path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT status FROM runs WHERE run_id = 'legacy'", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "error"
+        );
     }
 
     #[tokio::test]

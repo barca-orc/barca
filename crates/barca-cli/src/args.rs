@@ -902,8 +902,8 @@ pub(crate) enum Cli {
         /// After verifying a run stopped, record it as interrupted; refuses a proven live owner
         #[arg(long, value_name = "RUN_ID", conflicts_with_all = ["limit", "all", "status", "target", "triggered_by", "not_triggered_by", "since", "until", "search"])]
         reconcile: Option<String>,
-        /// Only runs with one of these statuses (comma-separated): success, failed, cancelled,
-        /// error, running, interrupted; not_successful is every one but success and running
+        /// Only runs with one of these statuses (comma-separated): pending, running, success,
+        /// skipped, failed, cancelled, interrupted; not_successful means failed, cancelled or interrupted
         #[arg(long, value_name = "STATUS[,...]")]
         status: Option<String>,
         /// Only runs whose target or job is this node (a function name or node id); runs of
