@@ -163,9 +163,12 @@ impl RunRequest {
     /// The cache policy the flags ask for, as the CLI derives it.
     pub fn policy(&self) -> CachePolicy {
         if self.refresh_all {
-            CachePolicy::RefreshAll
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            }
         } else if !self.refresh.is_empty() {
             CachePolicy::RefreshSelective {
+                since: barca_model::time::now_secs_f64(),
                 names: self.refresh.clone(),
                 cascade: self.cascade,
             }
@@ -859,7 +862,7 @@ mod tests {
             CachePolicy::RefreshSelective { cascade: false, .. }
         ));
         request.refresh_all = true;
-        assert!(matches!(request.policy(), CachePolicy::RefreshAll));
+        assert!(matches!(request.policy(), CachePolicy::RefreshAll { .. }));
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"get","invented":1}"#).is_err());
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"sql"}"#).is_err());
         assert_eq!(

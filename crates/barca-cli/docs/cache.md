@@ -239,5 +239,15 @@ The project root, the `.barca/` directory, several barca processes in one projec
 records while it goes and after it is killed, and what an upgrade recomputes are in
 `barca docs layout`.
 
+### Refreshes across a server restart
+
+`--refresh-all` and `--refresh` require a matching successful materialization recorded at or
+after the request was accepted. The acceptance time survives a drain/restart: completed
+assets and partition keys are reused, including results another run computed after acceptance.
+A new request gets a new acceptance time. Older results or changed run hashes still compute;
+selective cascade and cutoff rules are unchanged. A fully cached step satisfied by that
+boundary has reason `refreshed_by_this_run`. Tasks outside ticks can repeat, including side
+effects; this is not an exactly-once guarantee. See `barca docs serve-ops`.
+
 See also: `barca docs disk`, `barca docs layout`, `barca docs remote`, `barca docs types`,
 `barca docs partitions`, `barca docs status`, `barca docs server-mode`, `barca docs contract`.

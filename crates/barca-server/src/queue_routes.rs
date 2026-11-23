@@ -267,6 +267,7 @@ mod tests {
             nodes: vec!["p.py:report".into()],
             files: vec!["p.py".into()],
             policy: CachePolicy::RefreshSelective {
+                since: barca_service::time::now_secs_f64(),
                 names: vec!["raw".into()],
                 cascade: false,
             },
@@ -292,15 +293,22 @@ mod tests {
         assert_eq!(back.files, spec.files);
         assert!(matches!(
             back.policy,
-            CachePolicy::RefreshSelective { ref names, cascade: false } if names == &["raw"]
+            CachePolicy::RefreshSelective { ref names, cascade: false, since } if names == &["raw"] && since == 12.5
         ));
         assert_eq!(back.trigger, spec.trigger);
         assert!(back.values);
         assert_eq!(back.partition, spec.partition);
         assert_eq!(back.rules, spec.rules);
-        for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
+        for policy in [
+            CachePolicy::CacheAware,
+            CachePolicy::RefreshAll {
+                since: barca_service::time::now_secs_f64(),
+            },
+        ] {
             let mut spec = RunSpec::api(RunCommand::Get, vec![], vec![]);
             spec.policy = policy.clone();
+            let mut policy = policy;
+            policy.accepted_at(0.0);
             let (back, _) = load(&store(&spec, 0.0)).unwrap();
             assert_eq!(format!("{:?}", back.policy), format!("{policy:?}"));
         }

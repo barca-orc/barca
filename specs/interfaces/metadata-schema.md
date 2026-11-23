@@ -374,6 +374,10 @@ transaction, rolled back on error, with every row preserved and the version left
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
 
+Successful materialization `created_at` values written by step persistence include fractional
+seconds (`YYYY-MM-DD HH:MM:SS.nnnnnnnnn`, UTC) to distinguish refresh acceptance within a
+second. Readers accept legacy whole-second values too. No column or schema migration is needed.
+
 ## Last writer version
 
 `metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)` is an additive format-1 table.

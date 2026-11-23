@@ -1051,7 +1051,8 @@ may grow.
 - `steps[]`: `status` is `ran`, `cached`, `partial` or `failed`; `reason` (why it ran) is one of
   `task`, `sensor`, `refresh`, `refresh_cascade`, `refresh_all`, `not_materialized`,
   `artifact_missing`, `evicted`, `partitions_unknown`, `sensor_output_unknown`, with `detail` in
-  words. A `cached` step served from a pin (`barca docs pins`) has `reason` `pinned`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
+  words. A `cached` step served from a pin (`barca docs pins`) has `reason` `pinned`. A cached refresh satisfied by a current-hash success recorded at or after
+  original acceptance has `reason` `refreshed_by_this_run`. Under `--partition`, a node the selection does not run (a fan-in over the selected keys,
   or what is below one) has `status` `skipped` (in a dry run, `action` `skipped`) and `reason`
   `partition_selection`, and the result has `partition_selection` (see "Partitioned targets").
   After a partition key fails, a key of a node that reads it key for key is a step with `status`

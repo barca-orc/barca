@@ -8,6 +8,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Record a successful retry after a server requeue even when the same run id and run hash already have a failed step. Earlier failure evidence remains in history, and the successful result is cached (#929).
+
+- Terminal Ctrl-C now drains server-owned workers instead of interrupting their running steps; the drain deadline requeues remaining work and a second signal still cancels it (#926).
+
+- A server refresh resumed after a drain/restart reuses completed assets and partition keys whose current-hash success was recorded since the original request was accepted. Tasks can still repeat, including side effects (#928).
+
 ### Documentation
 
 - Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
