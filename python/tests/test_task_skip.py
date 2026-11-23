@@ -227,17 +227,17 @@ def copy():
     server = serve("--no-schedule")
     started = server.post("/runs", {"command": "run", "targets": ["copy"]})
     run_id = started["run_id"]
-    wait_until(lambda: server.get(f"/runs/{run_id}")["status"] not in ("pending", "running"))
+    wait_until(lambda: server.get(f"/runs/{run_id}")["run"]["status"] not in ("pending", "running"))
     detail = server.get(f"/runs/{run_id}")
-    assert detail["status"] == "skipped", detail
+    assert detail["run"]["status"] == "skipped", detail
     from barca.client import Client, Run
 
     with pytest.warns(DeprecationWarning):
         client = Client(server.url)
-    assert Run(client, run_id).wait(timeout=2)["status"] == "skipped"
+    assert Run(client, run_id).wait(timeout=2)["run"]["status"] == "skipped"
     validate({"$ref": "#/components/schemas/RunView"}, detail)
-    assert detail["skip_reason"] == "already handled elsewhere"
-    assert detail["outcome"]["status"] == "skipped"
+    assert detail["run"]["skip_reason"] == "already handled elsewhere"
+    assert detail["run"]["outcome"]["status"] == "skipped"
     assert detail["explanation"]["counts"]["ok"] == 0
     assert detail["explanation"]["counts"]["skipped"] == 1
     listing = server.get("/runs")
@@ -306,14 +306,14 @@ def held():
     assert server.stop() == 0, server.stderr
     restarted = serve("--no-schedule", root=tmp_path)
     pending = restarted.get(f"/runs/{run_id}")
-    assert pending["status"] == "pending", pending
-    assert not pending.get("skip_reason"), pending
+    assert pending["run"]["status"] == "pending", pending
+    assert not pending["run"].get("skip_reason"), pending
     assert pending["steps"] == [], pending
     assert pending["explanation"]["counts"].get("skipped", 0) == 0, pending
-    attempt = pending["previous_attempts"][0]
+    attempt = pending["run"]["previous_attempts"][0]
     archived = restarted.get(f"/runs/{attempt['run_id']}")
-    assert archived["parent_run_id"] == run_id
-    assert archived["run_attempt"] == 1
+    assert archived["run"]["parent_run_id"] == run_id
+    assert archived["run"]["run_attempt"] == 1
     assert archived["explanation"]["counts"]["skipped"] == 1, archived
     skips = [step for step in archived["steps"] if step["status"] == "skipped"]
     assert len(skips) == 1, archived

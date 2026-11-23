@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use crate::guards::refuse_if_read_only;
 use crate::replay::RunChannel;
 use crate::respond::{json_text, stdout_of};
-use crate::run_model::{RunState, RunStatus};
+use crate::run_model::RunStatus;
 use crate::state::AppState;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
@@ -415,17 +415,13 @@ pub async fn get_target(
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
-/// `GET /status/{run_id}` (alias) — the live state of a run this server started.
+/// `GET /status/{run_id}` — deprecated alias of the durable run-detail response.
 pub async fn status(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Json<RunState>, ApiError> {
-    state
-        .runs
-        .registry
-        .get(&run_id)
-        .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
+    Query(page): Query<StepsQuery>,
+) -> Result<Json<RunView>, ApiError> {
+    detail(State(state), Path(run_id), Query(page)).await
 }
 
 // ─── cancel ─────────────────────────────────────────────────────────────────

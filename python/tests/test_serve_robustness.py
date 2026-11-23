@@ -184,7 +184,7 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project, se
 
     # A full id picks one of two nodes with the same name, and that run happens.
     result = client.get("other.py:quick").wait(timeout=30)
-    assert result["status"] == "complete", result
+    assert result["run"]["status"] == "success", result
     # It is the only run there has been: the refused requests started none.
     assert [r["status"] for r in history(project)] == ["success"]
 
@@ -224,7 +224,7 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     # that keeps its event stream open the way a browser tab on a run page does.
     done = server.request("POST", "/get/quick")[1]["run_id"]
     wait_until(
-        lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
+        lambda: server.request("GET", f"/status/{done}")[1]["run"]["status"] == "success",
         "the quick run to complete",
     )
     going = start_slow_run(server, project)
@@ -244,8 +244,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     for path in ("/run", "/get/slow", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
-        assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
-    assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
+        assert server.request("GET", f"/status/{body['run_id']}")[1]["run"]["status"] == "pending"
+    assert server.request("GET", f"/status/{going}")[1]["run"]["status"] == "running"
     assert server.proc.poll() is None, "the server waits for the run"
 
     (project / "release").write_text("")

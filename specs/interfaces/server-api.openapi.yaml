@@ -3186,7 +3186,7 @@ paths:
       deprecated: true
   /status/{run_id}:
     get:
-      summary: Poll a retained live run handle
+      summary: Read a run detail (deprecated alias)
       operationId: get_status_run_id
       responses:
         '401':
@@ -3196,7 +3196,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunState'
+                $ref: '#/components/schemas/RunView'
         '404':
           description: Resource not found
           content:
@@ -3221,8 +3221,7 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id003
-      description: Pending/running/complete/failed/cancelled, while the run is retained in memory. Deprecated
-        alias; GET /runs/{run_id} answers from the DB too.
+      description: Deprecated alias of GET /runs/{run_id}, with the same detail envelope, status vocabulary, RFC 3339 timestamps, and durable history.
       parameters: &id022
       - name: run_id
         in: path
@@ -3230,7 +3229,7 @@ paths:
         schema: *id003
       deprecated: true
     head:
-      summary: Poll a retained live run handle (headers only)
+      summary: Read a run detail (deprecated alias) (headers only)
       operationId: head_status_run_id
       responses:
         '401':
@@ -5284,15 +5283,6 @@ components:
         status:
           type: string
           enum: [cancelling, cancelled]
-    RunStatus:
-      type: string
-      enum:
-      - pending
-      - running
-      - complete
-      - skipped
-      - failed
-      - cancelled
     NodeRoot:
       type: object
       additionalProperties: false
@@ -6180,33 +6170,6 @@ components:
           type: array
           items:
             type: string
-    RunState:
-      type: object
-      additionalProperties: false
-      required:
-      - handle
-      - status
-      - result
-      - error
-      - started_at
-      - finished_at
-      properties:
-        handle: *id003
-        status:
-          $ref: '#/components/schemas/RunStatus'
-        result:
-          anyOf:
-          - $ref: '#/components/schemas/Result'
-          - type: 'null'
-        error:
-          anyOf:
-          - *id003
-          - type: 'null'
-        started_at: *id045
-        finished_at:
-          anyOf:
-          - *id045
-          - type: 'null'
     Cache:
       type: object
       additionalProperties: false

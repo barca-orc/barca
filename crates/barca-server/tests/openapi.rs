@@ -283,7 +283,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         validator(schema);
     }
     // Prove the conformance boundary rejects missing fields, unknown keys and invented states.
-    let v = validator(&json!({"$ref":"#/components/schemas/RunState"}));
+    let v = validator(&json!({"$ref":"#/components/schemas/RunView"}));
     assert!(!v.is_valid(&json!({"handle":"r","status":"pending"})));
     assert!(!v.is_valid(&json!({"handle":"r","status":"queued","result":null,"error":null,"started_at":1.0,"finished_at":null})));
     let step = validator(&json!({"$ref":"#/components/schemas/StepReport"}));
@@ -660,7 +660,9 @@ async fn wait(router: &Router, handle: &str) -> Value {
                 200,
             )
             .await;
-            if ["complete", "failed", "cancelled"].contains(&state["status"].as_str().unwrap()) {
+            if ["success", "skipped", "failed", "cancelled", "interrupted"]
+                .contains(&state["run"]["status"].as_str().unwrap())
+            {
                 return state;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -702,7 +704,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     );
     drop(stream);
     let complete = wait(&router, &handle).await;
-    assert_eq!(complete["status"], "complete");
+    assert_eq!(complete["run"]["status"], "success");
     checked(&router, "GET", "/state", "/state", 200).await;
     checked(
         &router,
@@ -713,7 +715,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     checked(&router, "GET", "/assets/second", "/assets/{name}", 200).await;
-    let durable = complete["result"]["run_id"].as_str().unwrap();
+    let durable = complete["run"]["run_id"].as_str().unwrap();
     checked(
         &router,
         "GET",
@@ -734,7 +736,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &task).await["status"], "complete");
+    assert_eq!(wait(&router, &task).await["run"]["status"], "success");
     let logs = checked(
         &router,
         "GET",
@@ -792,7 +794,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &broken).await["status"], "failed");
+    assert_eq!(wait(&router, &broken).await["run"]["status"], "failed");
     // The run list names the failed step, and the node's row says how late it is.
     let runs = checked(&router, "GET", "/runs", "/runs", 200).await;
     let rows = runs["runs"].as_array().unwrap();
@@ -1052,7 +1054,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+    assert_eq!(wait(&router, &slow).await["run"]["status"], "cancelled");
     // The run contract: POST /runs, its stream, its outcome, its output.
     for (body, status) in [
         (json!({"command":"get","targets":["missing"]}), 404),
@@ -1293,7 +1295,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         "GET",
         &format!("/status/{handle}"),
         "/status/{run_id}",
-        404,
+        200,
     )
     .await;
     checked(&restarted, "GET", "/runs?limit=10000", "/runs", 200).await;
@@ -1355,8 +1357,8 @@ async fn partial_and_empty_graph_health_and_run_admission_match_contract() {
     }));
     let handle = checked(&router, "POST", "/run", "/run", 200).await;
     assert_eq!(
-        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
-        "complete"
+        wait(&router, handle["run_id"].as_str().unwrap()).await["run"]["status"],
+        "success"
     );
     std::fs::write(&source, "def broken(: pass\n").unwrap();
     let empty = app(cfg.clone());
@@ -1452,8 +1454,8 @@ async fn declared_asset_name_matches_schema_state_and_get_target() {
     );
     let handle = checked(&router, "POST", "/get/published", "/get/{target}", 200).await;
     assert_eq!(
-        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
-        "complete"
+        wait(&router, handle["run_id"].as_str().unwrap()).await["run"]["status"],
+        "success"
     );
 }
 
@@ -1612,7 +1614,7 @@ async fn queue_pause_and_resume_match_contract() {
             .is_none()
     );
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     assert!(
         barca_service::serve::run_queue::list(&db)
             .await
@@ -1705,7 +1707,7 @@ async fn a_run_queued_last_matches_contract() {
     checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
     for run in [&next, &last] {
         let done = wait(&router, run["run_id"].as_str().unwrap()).await;
-        assert_eq!(done["status"], "complete", "{done}");
+        assert_eq!(done["run"]["status"], "success", "{done}");
     }
     // Not recorded with the finished run.
     let run = checked(
@@ -1919,7 +1921,7 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &handle).await["status"], "complete");
+    assert_eq!(wait(&router, &handle).await["run"]["status"], "success");
     assert_eq!(run_count(&router).await, 1);
 
     // Refused while a run is in flight; nothing moves.
@@ -1941,7 +1943,7 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
         200,
     )
     .await;
-    assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+    assert_eq!(wait(&router, &slow).await["run"]["status"], "cancelled");
 
     // The database moves aside and the next request sees an empty history.
     let reset = checked(&router, "POST", "/state/reset", "/state/reset", 200).await;
@@ -2078,7 +2080,7 @@ async fn pin_versions_and_unpin_match_contract() {
     .await;
     assert_eq!(status, 202, "{body}");
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     let url = "/assets/first/versions";
     let versions = checked(&router, "GET", url, "/assets/{name}/versions", 200).await;
     assert_eq!(versions["pinnable"], true);
@@ -2144,7 +2146,7 @@ async fn pin_versions_and_unpin_match_contract() {
     )
     .await;
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     let detail = checked(
         &router,
         "GET",

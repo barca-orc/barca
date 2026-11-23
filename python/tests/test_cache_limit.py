@@ -424,12 +424,12 @@ def test_serve_evicts_after_runs_reports_health_and_warns_about_the_working_set_
         run_id = server.request("POST", "/get/report")[1]["run_id"]
         server.wait(
             "the run",
-            lambda: server.get(f"/status/{run_id}")["status"]
-            in ("complete", "failed", "cancelled"),
+            lambda: server.get(f"/status/{run_id}")["run"]["status"]
+            in ("success", "failed", "cancelled"),
         )
         state = server.get(f"/status/{run_id}")
-        assert state["status"] == "complete", state
-        assert state["result"]["cache"]["limit_bytes"] == 1, state
+        assert state["run"]["status"] == "success", state
+        assert state["run"]["outcome"]["cache"]["limit_bytes"] == 1, state
     cache = server.wait("a measurement", lambda: server.get("/health")["cache"])
     assert cache["limit_bytes"] == 1 and cache["size_bytes"] > 1
     server.kill()

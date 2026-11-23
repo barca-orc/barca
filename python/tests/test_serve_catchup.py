@@ -78,10 +78,11 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
         assert job["last_fired"] >= anchored
         run = second.wait(
             "the catch-up run to finish",
-            lambda: (r := second.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+            lambda: (r := second.get(f"/status/{handle}"))["run"]["status"]
+            not in ("pending", "running")
             and r,
         )
-        assert run["status"] == "complete", run
+        assert run["run"]["status"] == "success", run
         caught_up = job["last_fired"]
         done = schedule(second)
         assert (done["last_run_id"], done["last_status"]) == (handle, "success"), done

@@ -60,6 +60,8 @@ def test_detail_envelope_and_history_names_are_shared(tmp_path):
         detail = finished(server, run_id)
         assert {"run", "steps", "steps_page", "explanation"} <= detail.keys(), detail
         assert "status" not in detail
+        alias = server.get(f"/status/{run_id}")
+        assert alias == detail, (alias, detail)
         run = detail["run"]
         assert run["run_id"] == run_id and run["status"] == "failed"
         rfc3339(run["started_at"])

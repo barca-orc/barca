@@ -110,7 +110,7 @@ pub async fn admit_as(
         .await;
         return Ok(Admitted {
             run_id,
-            status: RunStatus::Complete,
+            status: RunStatus::Success,
             position: None,
             waiting_for: None,
         });

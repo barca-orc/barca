@@ -198,7 +198,7 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
     // Five finished runs whose event backlogs hold about 10 KB each, and one still running.
     for (i, handle) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
         let mut run = live(handle);
-        run.status = RunStatus::Complete;
+        run.status = RunStatus::Success;
         run.finished_at = Some(1000.0 + i as f64);
         state.runs.registry.insert(handle.to_string(), run);
         let channel = RunChannel::new();

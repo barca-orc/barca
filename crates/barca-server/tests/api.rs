@@ -418,7 +418,7 @@ async fn delete_cancels_in_flight_run() {
             "run never started executing"
         );
         let (_, s) = send(&app, "GET", &status_uri).await;
-        match s["status"].as_str() {
+        match s["run"]["status"].as_str() {
             Some("running") => {
                 #[cfg(target_os = "linux")]
                 if workers_running(&marker) == 0 {
@@ -439,9 +439,9 @@ async fn delete_cancels_in_flight_run() {
 
     loop {
         let (_, s) = send(&app, "GET", &status_uri).await;
-        match s["status"].as_str() {
+        match s["run"]["status"].as_str() {
             Some("cancelled") => {
-                assert_eq!(s["error"], "run cancelled");
+                assert_eq!(s["run"]["error"], "run cancelled");
                 break;
             }
             Some("running" | "pending") => {}
@@ -574,7 +574,7 @@ async fn a_due_tick_is_skipped_while_a_run_started_over_http_is_in_flight() {
     assert_eq!(status, StatusCode::OK);
     loop {
         let (_, s) = send(&app, "GET", &format!("/status/{handle}")).await;
-        if s["status"] == "cancelled" {
+        if s["run"]["status"] == "cancelled" {
             break;
         }
         assert!(

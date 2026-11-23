@@ -10,7 +10,7 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
-- Run details now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
+- Run details (including the deprecated `/status/{run_id}` alias and Python `Client.status`/`Run.wait`) now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
 
 - Run infrastructure and request failures now use `failed` instead of `error`, including restored outcomes and history filters. Error envelopes retain their cause and exit codes; use `--status failed` to include legacy error records. Activity status counts use `pending` and fold former `error` counts into `failed`.
 
