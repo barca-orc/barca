@@ -271,3 +271,52 @@ def consumer(source, key):
     assert result["final_output"] == {"key=b": "b"}
     skipped = next(s for s in result["steps"] if s.get("skip_reason"))
     assert skipped["skip_reason"] == "locked a"
+
+
+def test_requeued_task_skip_stays_with_its_archived_attempt(tmp_path, serve):
+    """Requeue preserves skip evidence without assigning it to the pending attempt."""
+    write_module(
+        tmp_path,
+        "pipeline.py",
+        """
+import time
+from pathlib import Path
+from barca import Skip, task
+
+@task()
+def skipped():
+    raise Skip("no work in this attempt")
+
+@task()
+def held():
+    Path("held.started").touch()
+    while not Path("release").exists():
+        time.sleep(0.02)
+""",
+        strip=True,
+    )
+    server = serve("--no-schedule", "--drain-timeout", "0", root=tmp_path)
+    run_id = server.post("/runs", {"command": "run", "targets": ["skipped", "held"]})["run_id"]
+    server.wait("held task to start", lambda: (tmp_path / "held.started").exists())
+    server.wait(
+        "explicit skip to arrive",
+        lambda: any(step.get("skip_reason") for step in server.get(f"/runs/{run_id}")["steps"]),
+    )
+    server.post("/queue/pause", {})
+    assert server.stop() == 0, server.stderr
+    restarted = serve("--no-schedule", root=tmp_path)
+    pending = restarted.get(f"/runs/{run_id}")
+    assert pending["status"] == "pending", pending
+    assert not pending.get("skip_reason"), pending
+    assert pending["steps"] == [], pending
+    attempt = pending["previous_attempts"][0]
+    archived = restarted.get(f"/runs/{attempt['run_id']}")
+    assert archived["parent_run_id"] == run_id
+    assert archived["run_attempt"] == 1
+    skips = [step for step in archived["steps"] if step["status"] == "skipped"]
+    assert len(skips) == 1, archived
+    assert skips[0]["skip_reason"] == "no work in this attempt"
+    (tmp_path / "release").touch()
+    restarted.post("/queue/resume", {})
+    assert restarted.finished(run_id)["status"] == "success"
+    assert restarted.get(f"/runs/{attempt['run_id']}")["steps"] == archived["steps"]
