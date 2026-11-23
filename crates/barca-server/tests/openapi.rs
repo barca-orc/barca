@@ -1768,7 +1768,10 @@ async fn schedule_pause_and_resume_match_contract() {
     let now = chrono::Utc::now().timestamp();
     assert!((7190..=7210).contains(&(until - now)), "{timed}");
     let pauses = checked(&router, "GET", "/pauses", "/pauses", 200).await;
-    assert_eq!(pauses["schedules"][0]["until"], until, "{pauses}");
+    assert_eq!(
+        pauses["schedules"][0]["until"], timed["paused_until"],
+        "{pauses}"
+    );
     assert!(
         pauses["schedules"][0]["id"]
             .as_str()

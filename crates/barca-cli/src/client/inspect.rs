@@ -1118,9 +1118,8 @@ fn print_pauses(body: &Value, pauses: &Pauses, json: bool) {
             out.push_str(&format!(
                 "{:<40} {:<22} {}\n",
                 s.id,
-                barca_service::outcome::rfc3339(s.paused_at),
-                s.until
-                    .map_or("resumed".to_string(), barca_service::outcome::rfc3339)
+                s.paused_at,
+                s.until.as_deref().unwrap_or("resumed")
             ));
         }
     }

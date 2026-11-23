@@ -164,7 +164,7 @@ fn pauses_and_pins_are_the_bodies_the_routes_built_by_hand() {
     }];
     let schedules = vec![crate::pauses::PausedSchedule {
         id: "p.py:daily".into(),
-        paused_at: 11,
+        paused_at: "1970-01-01T00:00:11Z".into(),
         until: None,
     }];
     let listed = Pauses::of(paused.clone(), schedules.clone());

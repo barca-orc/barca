@@ -5093,11 +5093,13 @@ components:
             properties:
               id: {type: string}
               paused_at:
-                type: integer
-                description: Unix seconds
+                type: string
+                format: date-time
+                description: RFC 3339 UTC time when the schedule was paused
               until:
-                type: [integer, 'null']
-                description: Unix seconds at which the pause ends by itself; null until resumed
+                type: [string, 'null']
+                format: date-time
+                description: RFC 3339 UTC time when the pause ends; null until resumed
     PauseCover:
       type: object
       additionalProperties: false
