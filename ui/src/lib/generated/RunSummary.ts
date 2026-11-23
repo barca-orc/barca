@@ -2,6 +2,7 @@
 import type { ActiveStep } from "./ActiveStep";
 import type { Cancellation } from "./Cancellation";
 import type { FirstFailure } from "./FirstFailure";
+import type { RunControl } from "./RunControl";
 import type { RunLine } from "./RunLine";
 import type { RunNow } from "./RunNow";
 import type { TriggeredBy } from "./TriggeredBy";
@@ -9,7 +10,7 @@ import type { TriggeredBy } from "./TriggeredBy";
 /**
  * One run of `GET /runs`.
  */
-export type RunSummary = { id: string, handle: string | null, run_id: string | null, command: string, files: Array<string>, target: string | null, status: string, triggered_by: TriggeredBy | null, scheduled_at: string | null, schedule_id: string | null, started_at: string, finished_at: string | null, elapsed_seconds: number | null, steps_total: number | null, steps_executed: number, steps_cached: number,
+export type RunSummary = { control: RunControl, id: string, handle: string | null, run_id: string | null, command: string, files: Array<string>, target: string | null, status: string, triggered_by: TriggeredBy | null, scheduled_at: string | null, schedule_id: string | null, started_at: string, finished_at: string | null, elapsed_seconds: number | null, steps_total: number | null, steps_executed: number, steps_cached: number,
 /**
  * Recorded steps that failed, a partitioned node's keys each counted (#758); absent for
  * a run not yet recorded. Experimental.

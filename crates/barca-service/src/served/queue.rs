@@ -25,6 +25,7 @@ pub enum QueueEntryStatus {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct QueueEntry {
+    pub control: crate::outcome::RunControl,
     pub run_id: String,
     /// `pending` (waiting to start) or `running`.
     #[cfg_attr(feature = "ts", ts(as = "QueueEntryStatus"))]
@@ -167,6 +168,7 @@ pub fn recorded(
             .map(|at| crate::estimates::rounded(*at, now));
         let target = (!row.targets.is_empty()).then(|| row.targets.join(","));
         let item = QueueEntry {
+            control: crate::outcome::RunControl::elsewhere(),
             run_id: row.run_id,
             status: if started { "running" } else { "pending" }.into(),
             position: (!started).then_some(queued.len() + 1),

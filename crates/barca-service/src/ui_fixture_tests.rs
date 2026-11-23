@@ -1103,6 +1103,7 @@ impl Project {
                     target: record.target.as_deref(),
                 });
                 let mut row = serde_json::json!({
+                    "control": crate::outcome::RunControl::server(&record.status),
                     "id": record.run_id, "handle": null, "run_id": record.run_id,
                     "command": record.command, "files": record.files, "target": record.target,
                     "status": record.status, "triggered_by": record.triggered_by,

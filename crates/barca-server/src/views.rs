@@ -78,6 +78,7 @@ pub struct JobStatus {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct NodeRunning {
+    pub control: barca_service::outcome::RunControl,
     /// The run (`GET /runs/{run_id}`).
     pub run_id: String,
     /// What started the run; `null` for a CLI run recorded by a barca that did not record it.

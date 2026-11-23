@@ -136,6 +136,7 @@ export function waitingForLabel(waitingFor: QueueEntry['waiting_for']): string |
 
 /** One run of the queue list: a running one (first) or a waiting one, in order. */
 interface QueueRow {
+  control: QueueEntry['control']
   runId: string
   /** `running` for a run that executes now, `#1` for the next run to start. */
   state: 'running' | 'waiting'
@@ -181,6 +182,7 @@ export function queueRows(
   const row = (entry: QueueEntry, state: QueueRow['state'], since: string): QueueRow => {
     const seconds = secondsSince(since, nowMs)
     return {
+      control: entry.control,
       runId: entry.run_id,
       state,
       position: state === 'running' ? 'running' : entry.position === null ? '–' : `#${entry.position}`,

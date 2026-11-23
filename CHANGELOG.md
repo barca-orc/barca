@@ -26,6 +26,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Cancel live server-owned runs directly from run-list rows, running and queued entries, run notices, and running badges. Unknown write access keeps Cancel visible but disabled with an explanation (#933).
+
 - Run detail identifies cancellation ownership. CLI-owned and interrupted runs explain where to stop or reconcile them instead of offering a Cancel action that fails with “already finished (running)” (#934).
 
 - Live runs report cached steps as phases are decided, including expanded partition keys; CLI, history and UI progress include them before completion without double-counting recovery (#942).

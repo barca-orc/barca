@@ -22,6 +22,7 @@ import { startsLabel,
 
 function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
   return {
+    control: { cancellable: true, owner: 'this server', reason: null },
     run_id,
     status: 'pending',
     position: 1,
@@ -130,6 +131,7 @@ describe('queueRows', () => {
     ] }), iso, now)
     expect(rows.map((r) => r.runId)).toEqual(['r1', 'r2'])
     expect(rows[0]).toEqual({
+      control: entry('r1').control,
       runId: 'r1',
       state: 'waiting',
       position: '#1',
