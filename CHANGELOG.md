@@ -26,6 +26,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- The UI’s Run button for tasks now brings upstream assets up to date using the cache, like `barca run`, instead of implicitly forcing `--refresh-all` and recomputing Manual upstreams (#937).
+
 - Run detail identifies cancellation ownership. CLI-owned and interrupted runs explain where to stop or reconcile them instead of offering a Cancel action that fails with “already finished (running)” (#934).
 
 - Live runs report cached steps as phases are decided, including expanded partition keys; CLI, history and UI progress include them before completion without double-counting recovery (#942).

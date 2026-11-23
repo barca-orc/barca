@@ -183,9 +183,9 @@ export const api = {
    * is `--allow-paused`: without it the server refuses a paused target. */
   getTarget: (target: string, allowPaused = false) =>
     startRun({ command: 'get', targets: [target], ...(allowPaused ? { allow_paused: true } : {}) }),
-  /** `barca run <task> --refresh-all`: the task re-executes along with its upstream assets. */
+  /** `barca run <task>`: the task runs; upstream assets are brought up to date using the cache. */
   runTarget: (target: string, allowPaused = false) =>
-    startRun({ command: 'run', targets: [target], refresh_all: true, ...(allowPaused ? { allow_paused: true } : {}) }),
+    startRun({ command: 'run', targets: [target], ...(allowPaused ? { allow_paused: true } : {}) }),
   cancelRun: (runId: string) =>
     request<RunCancelling>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
   schedule: () => request<ScheduleJob[]>('/schedule'),

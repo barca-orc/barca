@@ -2,10 +2,10 @@ import { expect, type APIRequestContext, type Request } from '@playwright/test'
 
 const API = process.env.BARCA_E2E_API ?? 'http://127.0.0.1:8274'
 
-/** Start a run through `POST /runs`, as the UI does (a task `run` refreshes its upstream). */
+/** Start a cache-aware run through `POST /runs`, as the UI does. */
 export async function startRun(request: APIRequestContext, target: string, verb: 'run' | 'get' = 'run'): Promise<string> {
   const data = verb === 'run'
-    ? { command: 'run', targets: [target], refresh_all: true }
+    ? { command: 'run', targets: [target] }
     : { command: 'get', targets: [target] }
   const res = await request.post(`${API}/runs`, { data })
   expect(res.ok()).toBeTruthy()

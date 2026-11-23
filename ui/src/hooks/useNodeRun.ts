@@ -53,7 +53,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   }, [follow])
   const topbar = useTopbarRun({ node, show: showTopbar, scopes, fireNode: fire, busy: triggering, onStarted })
   const { readOnly, writes } = topbar
-  const title = writes === 'disabled' ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
+  const title = writes === 'disabled' ? topbar.title : node ? `Run ${shortName(node.id)}: bring its inputs up to date using cached results; Manual upstreams are read as they are` : topbar.title
 
   useEffect(() => {
     if (!run || stream.running) return
