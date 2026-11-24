@@ -190,7 +190,12 @@ def test_an_asset_read_while_pinned_is_rebuilt_by_the_next_tick_after_unpin(tmp_
     _chain(tmp_path)
     with served.Serve(tmp_path) as serve:
         serve.wait("first value", lambda: _delivered(tmp_path) == ["a"])
-        run_hash = serve.get("/assets/middle/versions")["versions"][0]["run_hash"]
+        # The task's file write can precede the API's completed-version snapshot.
+        versions = serve.wait(
+            "the completed middle version",
+            lambda: serve.get("/assets/middle/versions")["versions"],
+        )
+        run_hash = versions[0]["run_hash"]
         status, body = serve.request("POST", "/assets/middle/pin", {"run_hash": run_hash})
         assert status == 200, body
 
