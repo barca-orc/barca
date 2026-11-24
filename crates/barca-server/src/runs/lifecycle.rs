@@ -33,7 +33,7 @@ pub(crate) async fn start_as(
 
 /// The tick a scheduled run was started for: its schedule and slot (unix seconds). `None` for
 /// every other run, which the tick record does not concern.
-fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
+pub(super) fn tick_of(spec: &RunSpec) -> Option<(&str, i64)> {
     if spec.trigger.triggered_by != barca_service::outcome::TriggeredBy::Schedule {
         return None;
     }
@@ -190,10 +190,19 @@ async fn execute(
             // A request that names files reads only those, as `barca get x a.py` does.
             let files = run_files(&state, &spec.files);
             let dag = if spec.files.is_empty() {
-                state.reads.sources.current_dag().await?
+                state
+                    .reads
+                    .sources
+                    .current_dag_until(barca_service::process::Until::cancelled(&cancel))
+                    .await?
             } else {
                 std::sync::Arc::new(
-                    barca_service::load::build_dag(files, &state.config.python).await?,
+                    barca_service::load::build_dag_until(
+                        files,
+                        &state.config.python,
+                        barca_service::process::Until::cancelled(&cancel),
+                    )
+                    .await?,
                 )
             };
             serve_run(ServedRun {
@@ -207,6 +216,7 @@ async fn execute(
                 cancel: cancel.clone(),
                 event_tx: Some(event_tx),
                 options: RunOptions {
+                    scope: Some(spec.scope(&state.config.files)),
                     run_id: Some(run_id.clone()),
                     trigger: spec.trigger.clone(),
                     host: std::sync::Arc::new(barca_service::serve::ServeHost::new(
@@ -276,13 +286,8 @@ async fn execute(
             .queue
             .requeue
             .load(std::sync::atomic::Ordering::SeqCst)
-        && state
-            .runs
-            .registry
-            .get(&run_id)
-            .is_some_and(|r| !r.cancel_requested)
+        && requeue(&state, &run_id, &spec).await
     {
-        requeue(&state, &run_id).await;
         return;
     }
 
@@ -348,12 +353,12 @@ async fn execute(
         }
         Ok(RunResult::Multi(m)) => Outcome::multi(&m, spec.command, &ctx),
         Err(BarcaError::Cancelled) if timed_out => Outcome::ended(
-            OutcomeStatus::Error,
+            OutcomeStatus::Failed,
             &ErrorEnvelope::from_prose(ErrorKind::Infra, {
                 let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
                     "run timed out after {}s ({source})\nThe server stops a run that takes \
-                         longer than its run timeout; steps that finished are cached. Raise it \
+                         longer than its run timeout; matching completed assets can be reused; tasks may repeat. Raise it \
                          with --run-timeout, [server] run_timeout_seconds or \
                          Schedule(..., timeout_seconds=N); 0 means no limit.",
                     limit.as_secs(),
@@ -390,7 +395,18 @@ async fn execute(
 /// Put a run the stopping server stopped back in the queue ([`barca_service::serve::run_queue::requeue`]):
 /// the next server starts it again, under the same id. Its event stream ends without
 /// `run_finished` when the server stops; a client following it reconnects to the next one.
-async fn requeue(state: &AppState, run_id: &str) {
+async fn requeue(state: &AppState, run_id: &str, spec: &RunSpec) -> bool {
+    // Serialize the cancellation decision, durable transition and live queue publication
+    // with DELETE. A request arriving during the DB write cannot be lost.
+    let _transition = state.runs.queue.admit.lock().await;
+    if state
+        .runs
+        .registry
+        .get(run_id)
+        .is_none_or(|r| r.cancel_requested)
+    {
+        return false;
+    }
     match barca_service::serve::run_queue::requeue(&state.config.resolved.db_path, run_id, None)
         .await
     {
@@ -402,9 +418,21 @@ async fn requeue(state: &AppState, run_id: &str) {
             if let Some(mut r) = state.runs.registry.get_mut(run_id) {
                 r.status = RunStatus::Pending;
             }
+            state
+                .runs
+                .queue
+                .waiting
+                .lock()
+                .unwrap()
+                .push_back(crate::queue::Waiting {
+                    run_id: run_id.to_owned(),
+                    spec: spec.clone(),
+                });
+            true
         }
         Err(e) => {
             barca_service::errln!("[barca] could not put run {run_id} back in the queue: {e}");
+            false
         }
     }
 }
@@ -455,9 +483,10 @@ pub(super) async fn finish(
     if let Some(mut r) = state.runs.registry.get_mut(run_id) {
         r.finished_at = Some(now_ts());
         r.status = match status {
-            OutcomeStatus::Success => RunStatus::Complete,
+            OutcomeStatus::Success => RunStatus::Success,
+            OutcomeStatus::Skipped => RunStatus::Skipped,
             OutcomeStatus::Cancelled => RunStatus::Cancelled,
-            OutcomeStatus::Failed | OutcomeStatus::Error => RunStatus::Failed,
+            OutcomeStatus::Failed => RunStatus::Failed,
         };
         // The outcome holds what the run returned; the result is kept for its pointer and
         // counts, not for every key of a partitioned target (#623).
@@ -471,7 +500,7 @@ pub(super) async fn finish(
     }
     channel.emit(RunEvent::RunFinished {
         run_id: run_id.to_string(),
-        ok: status == OutcomeStatus::Success,
+        ok: matches!(status, OutcomeStatus::Success | OutcomeStatus::Skipped),
         outcome: Some(outcome.into_raw()),
     });
     evict_over_budget(state, FINISHED_RUNS_BUDGET);
@@ -522,7 +551,7 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
         .filter(|r| {
             matches!(
                 r.status,
-                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled
+                RunStatus::Success | RunStatus::Skipped | RunStatus::Failed | RunStatus::Cancelled
             )
         })
         .map(|r| {
@@ -547,7 +576,7 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
     }
 }
 
-async fn persist_outcome(
+pub(super) async fn persist_outcome(
     state: &AppState,
     run_id: &str,
     spec: &RunSpec,
@@ -571,6 +600,7 @@ async fn persist_outcome(
     barca_service::serve::record_unstarted_run(
         &cfg.db_path,
         barca_service::serve::UnstartedRun {
+            scope: Some(&spec.scope(&state.config.files)),
             run_id,
             command: spec.command.as_str(),
             files: run_files(state, &spec.files),
@@ -591,9 +621,10 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
         let cutoff = now_ts() - max_age.as_secs_f64();
         state.runs.registry.retain(|handle, run| {
             let keep = match run.status {
-                RunStatus::Complete | RunStatus::Failed | RunStatus::Cancelled => {
-                    run.finished_at.is_none_or(|t| t > cutoff)
-                }
+                RunStatus::Success
+                | RunStatus::Skipped
+                | RunStatus::Failed
+                | RunStatus::Cancelled => run.finished_at.is_none_or(|t| t > cutoff),
                 _ => true,
             };
             if !keep {

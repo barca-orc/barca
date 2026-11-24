@@ -1,0 +1,60 @@
+==> changelog   python3 scripts/check-changelog.py --base dcb94574536f87ab29216b9f4fcd4412fbb830a9
+==> specs       specs
+==> hooks       prek run --all-files
+==> clippy      cargo clippy --workspace --all-targets -- -D warnings
+rust tests: 44 changed file(s)
+  the whole workspace: .audit1044-equivalent/pipeline.py (no rule knows it: scripts/ci-rust-tests.py)
+==> cargo-test  cargo test --workspace --no-fail-fast
+
+   Doc-tests barca_proc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests barca_python
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests barca_run
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests barca_server
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests barca_service
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests barca_store
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: 2 targets failed:
+    `-p barca --bin barca`
+    `-p barca-server --test running`
+==> build       /home/mukulram/.local/bin/maturin develop --uv --profile fast --extras test
+python tests: python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+==> python      /home/mukulram/Personal/barca/.worktrees/issue-1044-assets-ui/.venv/bin/python -m pytest -q -p no:cacheprovider -n 4 --dist loadscope python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+
+check-fast summary (base dcb94574):
+  PASS  changelog (1s)
+  PASS  specs (0s)
+  PASS  hooks (3s)
+  PASS  clippy (2s)
+  FAIL  cargo-test (185s)  log: /tmp/check-fast.3vdeK2/cargo-test.log
+  PASS  build (19s)
+  PASS  python (37s)
+FAILED

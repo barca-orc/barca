@@ -10,13 +10,115 @@ use libsql::Connection;
 use serde::{Deserialize, Serialize};
 
 pub async fn delete_run(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM runs WHERE run_id = ?1", [run_id])
-        .await
+    conn.execute(
+        "DELETE FROM runs WHERE run_id = ?1 OR parent_run_id = ?1",
+        [run_id],
+    )
+    .await
 }
 
 pub async fn delete_logs(conn: &Connection, run_id: &str) -> Result<u64, libsql::Error> {
-    conn.execute("DELETE FROM logs WHERE run_id = ?1", [run_id])
+    conn.execute("DELETE FROM logs WHERE run_id = ?1 OR run_id IN (SELECT run_id FROM runs WHERE parent_run_id = ?1)", [run_id])
         .await
+}
+
+fn attempt_error(what: &'static str) -> impl Fn(libsql::Error) -> BarcaError {
+    move |e| BarcaError::Db(format!("run attempt: {what}: {e}"))
+}
+
+/// Keep a stopped execution under an inspectable id. Updating the existing row preserves
+/// every diagnostic column (including columns introduced by later additive migrations).
+pub async fn archive_attempt(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM runs WHERE run_id = ?1 AND status != 'pending'",
+            [run_id],
+        )
+        .await
+        .map_err(attempt_error("reading stopped execution"))?;
+    if rows
+        .next()
+        .await
+        .map_err(attempt_error("reading stopped execution"))?
+        .is_none()
+    {
+        return Ok(()); // A repeated recovery, or an execution that never recorded itself.
+    }
+    drop(rows);
+    let mut rows = conn
+        .query(
+            "SELECT COALESCE(MAX(run_attempt), 0) + 1 FROM runs WHERE parent_run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(attempt_error("numbering attempt"))?;
+    let attempt: i64 = rows
+        .next()
+        .await
+        .map_err(attempt_error("numbering attempt"))?
+        .unwrap()
+        .get(0)
+        .unwrap();
+    drop(rows);
+    let archived = format!("{run_id}-attempt-{attempt}");
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET run_id = ?1, parent_run_id = ?2, run_attempt = ?3, stop_reason = 'server restart (requeued)', status = 'interrupted', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?2",
+        libsql::params![archived.clone(), run_id, attempt]).await.map_err(attempt_error("archiving stopped execution"))?;
+    for table in ["logs", "materializations"] {
+        conn.execute(
+            &format!("UPDATE {table} SET run_id = ?1 WHERE run_id = ?2"),
+            [archived.as_str(), run_id],
+        )
+        .await
+        .map_err(attempt_error("archiving attempt evidence"))?;
+    }
+    // Keep the accepted request visible while its next execution waits. The archived
+    // attempt owns all prior execution evidence; the pending row has none of its results.
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, job, status, started_at, triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json) SELECT ?1, command, files, target, job, 'pending', COALESCE((SELECT queued_at FROM run_queue WHERE run_id = ?1), started_at), triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json FROM runs WHERE run_id = ?2",
+        [run_id, archived.as_str()],
+    ).await.map_err(attempt_error("restoring pending request"))?;
+    Ok(())
+}
+
+async fn preserve_spool(conn: &Connection, db_path: &str, run_id: &str) -> Result<(), BarcaError> {
+    // A killed coordinator has only a spool. Commit its complete lines before the next
+    // execution can truncate that spool. Already-persisted logs are authoritative.
+    let mut rows = conn
+        .query("SELECT 1 FROM logs WHERE run_id = ?1 LIMIT 1", [run_id])
+        .await
+        .map_err(attempt_error("reading attempt logs"))?;
+    let recorded = rows
+        .next()
+        .await
+        .map_err(attempt_error("reading attempt logs"))?
+        .is_some();
+    drop(rows);
+    if !recorded {
+        let (lines, _) =
+            crate::run_logs::read_spool(&crate::run_logs::spool_path(db_path, run_id), 0)?;
+        for (seq, line) in lines.into_iter().enumerate() {
+            conn.execute("INSERT INTO logs (run_id, seq, node_id, line, stream, ts) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                libsql::params![run_id, seq as i64, line.node_id, line.line, line.stream.as_str(), line.ts]).await.map_err(attempt_error("archiving spool"))?;
+        }
+    }
+    Ok(())
+}
+
+/// Finish a queue-owned predecessor, independently of host/PID liveness.
+/// The caller owns the transaction that also removes its queue entry.
+pub async fn interrupt_predecessor(
+    conn: &Connection,
+    db_path: &str,
+    run_id: &str,
+) -> Result<(), BarcaError> {
+    preserve_spool(conn, db_path, run_id).await?;
+    conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status IN ('pending', 'running')", [run_id]).await.map_err(attempt_error("interrupting predecessor"))?;
+    Ok(())
 }
 
 /// Clear `outcome_json` of up to `batch` of the oldest runs that have one, except the last
@@ -29,8 +131,8 @@ pub(crate) async fn clear_old_outcomes(
     conn.execute(
         &format!(
             "UPDATE runs SET outcome_json = NULL WHERE id IN (SELECT id FROM runs \
-             WHERE outcome_json IS NOT NULL AND id < (SELECT id FROM runs ORDER BY \
-             id DESC LIMIT 1 OFFSET {}) ORDER BY id LIMIT {batch})",
+             WHERE outcome_json IS NOT NULL AND COALESCE((SELECT p.id FROM runs p WHERE p.run_id = runs.parent_run_id), id) < (SELECT id FROM runs WHERE parent_run_id IS NULL ORDER BY \
+             id DESC LIMIT 1 OFFSET {}) AND COALESCE(parent_run_id, run_id) NOT IN (SELECT run_id FROM run_queue) ORDER BY id LIMIT {batch})",
             kept - 1
         ),
         (),
@@ -54,10 +156,42 @@ pub(crate) fn decode_files(raw: &str) -> Vec<String> {
     raw.split_whitespace().map(str::to_string).collect()
 }
 
+/// Recorded process identity for display only; it never grants cancellation authority.
+pub async fn run_process(
+    db_path: &str,
+    run_id: &str,
+) -> Result<(Option<i64>, Option<String>), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query("SELECT pid, host FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run process: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?;
+    Ok(row.map_or((None, None), |row| {
+        (
+            row.get::<i64>(0).ok().filter(|pid| *pid > 0),
+            row.get::<String>(1).ok().filter(|host| !host.is_empty()),
+        )
+    }))
+}
+
 /// Record of a single run.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunRecord {
     pub run_id: String,
+    /// Original request id for a stopped execution retained after requeue.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<RunAttempt>,
     pub command: String,
     /// The `.py` files the run was given.
     pub files: Vec<String>,
@@ -67,6 +201,8 @@ pub struct RunRecord {
     #[serde(default)]
     pub job: Option<String>,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_reason: Option<String>,
     pub steps_total: Option<i64>,
     pub steps_executed: i64,
     pub steps_cached: i64,
@@ -74,10 +210,14 @@ pub struct RunRecord {
     /// `GET /runs` shows it (#758); `barca history --json` does not yet, so it is not written.
     #[serde(default, skip_serializing)]
     pub steps_failed: Option<i64>,
+    #[serde(default, skip_serializing)]
+    pub steps_skipped: Option<i64>,
     /// Total recorded materialization attempts; cached steps contribute zero.
     #[serde(default)]
     pub attempts: Option<i64>,
+    #[serde(serialize_with = "barca_model::time::serialize_datetime")]
     pub started_at: String,
+    #[serde(serialize_with = "barca_model::time::serialize_optional_datetime")]
     pub finished_at: Option<String>,
     pub elapsed_seconds: Option<f64>,
     /// What started the run: `manual` (a command typed on a machine), `api`, `schedule` or
@@ -115,6 +255,40 @@ pub struct RunRecord {
     /// and for a run that executed nothing. Experimental.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_reasons: Option<barca_model::run_explain::PlanReasons>,
+}
+
+/// A stopped execution of the same accepted request. Its id reads its own logs and steps.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunAttempt {
+    pub run_id: String,
+    #[cfg_attr(feature = "ts", ts(type = "number"))]
+    pub attempt: i64,
+    pub stop_reason: String,
+}
+
+/// Stopped executions, oldest first. Legacy databases have none.
+pub async fn previous_attempts(db_path: &str, run_id: &str) -> Result<Vec<RunAttempt>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "parent_run_id").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn.query("SELECT run_id, run_attempt, stop_reason FROM runs WHERE parent_run_id = ?1 ORDER BY run_attempt", [run_id])
+        .await.map_err(|e| BarcaError::Db(e.to_string()))?;
+    let mut out = Vec::new();
+    while let Some(row) = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(e.to_string()))?
+    {
+        out.push(RunAttempt {
+            run_id: row.get(0).unwrap_or_default(),
+            attempt: row.get(1).unwrap_or_default(),
+            stop_reason: row.get(2).unwrap_or_default(),
+        });
+    }
+    Ok(out)
 }
 
 /// A recorded step error as (type, message, traceback). A worker reports a Python exception as
@@ -258,6 +432,7 @@ pub async fn create_run(
             job: None,
             trigger: &barca_model::trigger::Trigger::default(),
             traced: false,
+            scope: None,
         },
     )
     .await
@@ -279,6 +454,24 @@ pub struct NewRun<'a> {
     /// Whether the run's steps send a Datadog trace each (`runs.trace`): the caller asks
     /// `barca_service::telemetry::is_on("datadog")`. An unstarted run sends none.
     pub traced: bool,
+    pub scope: Option<&'a barca_model::run_scope::RunScope>,
+}
+
+/// Record acceptance alongside the queue entry, in the caller's transaction. No execution
+/// owner is attached until the coordinator starts the run.
+pub async fn record_pending_on(
+    conn: &Connection,
+    run: &NewRun<'_>,
+    accepted_at: &str,
+) -> Result<(), BarcaError> {
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, status, started_at, triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, NULLIF(?7, ''), NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''))",
+        libsql::params![run.run_id, run.command, run.files, run.target.unwrap_or(""), accepted_at,
+            run.trigger.triggered_by.as_str(), run.trigger.scheduled_at.as_deref().unwrap_or(""),
+            run.trigger.schedule_id.as_deref().unwrap_or(""), run.trigger.principal.as_deref().unwrap_or(""),
+            run.trigger.reason.as_deref().unwrap_or(""), run.scope.map(|v| serde_json::to_string(v).expect("run scope is JSON")).unwrap_or_default()],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to record pending run: {e}")))?;
+    Ok(())
 }
 
 /// Create a new run record at the start of execution.
@@ -295,7 +488,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, '')) ON CONFLICT(run_id) DO UPDATE SET status = 'running', started_at = datetime('now'), command = excluded.command, files = excluded.files, target = excluded.target, steps_total = excluded.steps_total, pid = excluded.pid, host = excluded.host, owner = excluded.owner, job = excluded.job, trace = excluded.trace, scope_json = excluded.scope_json WHERE runs.status = 'pending'",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -318,6 +511,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
             },
             run.trigger.principal.clone().unwrap_or_default(),
             run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
         ],
     )
     .await
@@ -337,7 +531,7 @@ pub async fn record_unstarted_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, '')) ON CONFLICT(run_id) DO NOTHING",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, '')) ON CONFLICT(run_id) DO UPDATE SET status = excluded.status, finished_at = excluded.finished_at, elapsed_seconds = excluded.elapsed_seconds, steps_total = excluded.steps_total, outcome_json = excluded.outcome_json WHERE runs.status = 'pending'",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -350,10 +544,43 @@ pub async fn record_unstarted_run(
             outcome_json.to_string(),
             run.trigger.principal.clone().unwrap_or_default(),
             run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
         ],
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to record run: {e}")))?;
+    Ok(())
+}
+
+/// Record an ordinary get completed entirely by cache I/O, before acknowledging its id.
+/// It has no execution ledger or attempts, but retains the planned/cache counts and job.
+pub async fn record_cached_run(
+    db_path: &str,
+    run: NewRun<'_>,
+    elapsed_seconds: f64,
+    outcome_json: &str,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, job, status, steps_total, steps_executed, steps_cached, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 'success', ?6, 0, ?6, datetime('now'), ?7, ?8, NULLIF(?9, ''), NULLIF(?10, ''), ?11, NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''))",
+        [
+            run.run_id.to_string(),
+            run.command.to_string(),
+            run.files.to_string(),
+            run.target.unwrap_or("").to_string(),
+            run.job.unwrap_or("all").to_string(),
+            run.steps_total.unwrap_or(0).to_string(),
+            elapsed_seconds.to_string(),
+            run.trigger.triggered_by.as_str().to_string(),
+            run.trigger.scheduled_at.clone().unwrap_or_default(),
+            run.trigger.schedule_id.clone().unwrap_or_default(),
+            outcome_json.to_string(),
+            run.trigger.principal.clone().unwrap_or_default(),
+            run.trigger.reason.clone().unwrap_or_default(),
+            run.scope.map(|scope| serde_json::to_string(scope).expect("run scope is JSON")).unwrap_or_default(),
+        ],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to record cached run: {e}")))?;
     Ok(())
 }
 
@@ -369,7 +596,7 @@ pub async fn set_run_outcome(
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
-            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status = 'running' THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status IN ('pending', 'running') THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
             [
                 run_id.to_string(),
                 outcome_json.to_string(),
@@ -446,6 +673,32 @@ pub async fn get_run_outcome(db_path: &str, run_id: &str) -> Result<Option<Strin
     Ok(row
         .and_then(|row| row.get::<String>(0).ok())
         .filter(|s| !s.is_empty()))
+}
+
+/// The exact request scope, absent for history written before scope recording existed.
+pub async fn get_run_scope(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Option<barca_model::run_scope::RunScope>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "scope_json").await? {
+        return Ok(None);
+    }
+    let mut rows = conn
+        .query("SELECT scope_json FROM runs WHERE run_id = ?1", [run_id])
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run scope: {e}")))?;
+    let text = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read run scope: {e}")))?
+        .and_then(|row| row.get::<String>(0).ok());
+    text.map(|text| {
+        serde_json::from_str(&text)
+            .map_err(|e| BarcaError::Db(format!("invalid recorded run scope: {e}")))
+    })
+    .transpose()
 }
 
 /// Finalize a run record with status and stats.
@@ -592,10 +845,14 @@ pub async fn reconcile_run(db_path: &str, run_id: &str) -> Result<RunRecord, Bar
 
 /// Read a durable run by id, including the same interrupted-owner diagnosis as history.
 pub async fn get_run(db_path: &str, run_id: &str) -> Result<Option<RunRecord>, BarcaError> {
-    Ok(read_runs(db_path, Some(run_id), 1, &RunFilter::default())
+    let mut record = read_runs(db_path, Some(run_id), 1, &RunFilter::default())
         .await?
         .into_iter()
-        .next())
+        .next();
+    if let Some(record) = &mut record {
+        record.previous_attempts = previous_attempts(db_path, run_id).await?;
+    }
+    Ok(record)
 }
 
 /// A run's first failed step and its error, read from `idx_mat_failed` ([`read_runs`]).
@@ -684,6 +941,11 @@ async fn read_runs(
     } else {
         "NULL, NULL, NULL, NULL"
     };
+    let attempt_metadata = if has_column(&conn, "runs", "parent_run_id").await? {
+        "parent_run_id, run_attempt, stop_reason"
+    } else {
+        "NULL, NULL, NULL"
+    };
     let retries = if run_id.is_none() || !(names.contains("run_id") && names.contains("attempts")) {
         "NULL"
     } else if has_index(&conn, "idx_mat_attempts").await? {
@@ -706,9 +968,23 @@ async fn read_runs(
             "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'failed')",
         )
     };
+    let skipped = if names.contains("run_id") {
+        "(SELECT COUNT(*) FROM materializations WHERE run_id = runs.run_id AND status = 'skipped')"
+    } else {
+        "NULL"
+    };
+    let skip_reason = if names.contains("skip_reason") {
+        "(SELECT CASE WHEN runs.status = 'skipped' AND COUNT(DISTINCT skip_reason) = 1 THEN MIN(skip_reason) END FROM materializations WHERE run_id = runs.run_id AND status = 'skipped')"
+    } else {
+        "NULL"
+    };
     // The runs the filter keeps: their newest ids, from an index ([`RunFilter`]).
     let shape = super::run_filter::RunsShape::of(&conn).await?;
-    let only = match filter.sql(&shape, &interrupted) {
+    let only = match if run_id.is_some() {
+        None
+    } else {
+        filter.sql(&shape, &interrupted)
+    } {
         Some(w) => format!(
             " AND id IN (SELECT id FROM runs{} WHERE {} ORDER BY id DESC LIMIT ?2)",
             w.index, w.condition
@@ -717,7 +993,7 @@ async fn read_runs(
     };
     let mut rows = conn
         .query(
-            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
+            &format!("SELECT run_id, command, files, target, status, steps_total, steps_executed, steps_cached, started_at, finished_at, elapsed_seconds, {attempts}, {trigger}, {client}, {job}, {failure}, {failed}, {explain}, {retries}, {skipped}, {skip_reason}, {attempt_metadata} FROM runs WHERE (?1 = '' OR run_id = ?1){only} ORDER BY id DESC LIMIT ?2"),
             [run_id.unwrap_or_default().to_string(), limit.to_string()],
         )
         .await
@@ -734,6 +1010,11 @@ async fn read_runs(
         } else {
             row.get::<String>(4).unwrap_or_default()
         };
+        let status = if status == "error" {
+            "failed".into()
+        } else {
+            status
+        };
         records.push(RunRecord {
             run_id,
             command: row.get::<String>(1).unwrap_or_default(),
@@ -743,10 +1024,12 @@ async fn read_runs(
                 if t.is_empty() { None } else { Some(t) }
             },
             status,
+            skip_reason: row.get::<String>(25).ok(),
             steps_total: row.get::<i64>(5).ok(),
             steps_executed: row.get::<i64>(6).unwrap_or(0),
             steps_cached: row.get::<i64>(7).unwrap_or(0),
             steps_failed: row.get::<i64>(18).ok(),
+            steps_skipped: row.get::<i64>(24).ok(),
             attempts: row.get::<i64>(11).ok(),
             started_at: row.get::<String>(8).unwrap_or_default(),
             finished_at: {
@@ -774,6 +1057,10 @@ async fn read_runs(
                 .ok()
                 .and_then(|t| serde_json::from_str(&t).ok()),
             retries: row.get::<i64>(23).ok(),
+            parent_run_id: row.get::<String>(26).ok(),
+            run_attempt: row.get::<i64>(27).ok(),
+            stop_reason: row.get::<String>(28).ok(),
+            previous_attempts: Vec::new(),
         });
     }
     Ok(records)
@@ -821,8 +1108,8 @@ pub struct ActivityRow {
 /// The window's runs that did not succeed, each with its first failed step ([`run_activity`]).
 fn activity_failures_sql(first_failure: &str, trigger: &str, window: &str, text: &str) -> String {
     format!(
-        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), status, {trigger}, {first_failure}, id \
-         FROM runs WHERE {window}{text} AND status NOT IN ('success', 'running')"
+        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, {first_failure}, id \
+         FROM runs WHERE {window}{text} AND status NOT IN ('success', 'skipped', 'pending', 'running')"
     )
 }
 
@@ -895,7 +1182,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, COUNT(*) FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, COUNT(*) FROM runs \
                  WHERE {window}{text} GROUP BY 1, 2, 3 ORDER BY 1"
             ),
             (),
@@ -914,7 +1201,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, elapsed_seconds FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, elapsed_seconds FROM runs \
                  WHERE {window}{text} AND status != 'running' AND elapsed_seconds IS NOT NULL"
             ),
             (),
@@ -1012,8 +1299,13 @@ pub async fn run_activity(
 pub async fn count_runs(db_path: &str) -> Result<usize, BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
+    let query = if has_column(&conn, "runs", "parent_run_id").await? {
+        "SELECT COUNT(*) FROM runs WHERE parent_run_id IS NULL"
+    } else {
+        "SELECT COUNT(*) FROM runs"
+    };
     let mut rows = conn
-        .query("SELECT COUNT(*) FROM runs", ())
+        .query(query, ())
         .await
         .map_err(|e| BarcaError::Db(format!("failed to count runs: {e}")))?;
     let n = rows
@@ -1041,6 +1333,26 @@ pub async fn raise_steps_total(
     )
     .await
     .map_err(|e| BarcaError::Db(format!("failed to update the run's step total: {e}")))?;
+    Ok(())
+}
+
+/// Publish the current attempt's cache decisions before dispatch. This is an absolute
+/// count: replaying a phase cannot add it twice, and artifact recovery may lower it.
+/// Executed counts remain owned by the recorder's successful-row transaction.
+pub async fn set_cached_progress(
+    db_path: &str,
+    run_id: &str,
+    cached: usize,
+    total: usize,
+) -> Result<(), BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    conn.execute(
+        "UPDATE runs SET steps_cached = ?1, steps_total = MAX(COALESCE(steps_total, 0), ?2, steps_executed + ?1) WHERE run_id = ?3 AND status = 'running'",
+        libsql::params![cached as i64, total as i64, run_id],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record cached progress: {e}")))?;
     Ok(())
 }
 
@@ -1143,9 +1455,77 @@ pub(crate) async fn insert_posted_run(
     .await
 }
 
+/// Original worker-fatal causes, retained independently of the final materialization.
+pub async fn set_worker_failures(
+    conn: &libsql::Connection,
+    run_id: &str,
+    failures: &[barca_model::run_explain::WorkerFailure],
+) -> Result<(), BarcaError> {
+    if failures.is_empty() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE runs SET worker_failures = ?2 WHERE run_id = ?1",
+        [run_id, &serde_json::to_string(failures).unwrap()],
+    )
+    .await
+    .map_err(|e| BarcaError::Db(format!("failed to record worker failures: {e}")))?;
+    Ok(())
+}
+
+/// Empty for older databases and runs without a recorded worker-fatal error.
+pub async fn get_worker_failures(
+    db_path: &str,
+    run_id: &str,
+) -> Result<Vec<barca_model::run_explain::WorkerFailure>, BarcaError> {
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "runs", "worker_failures").await? {
+        return Ok(Vec::new());
+    }
+    let mut rows = conn
+        .query(
+            "SELECT worker_failures FROM runs WHERE run_id = ?1",
+            [run_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    let row = rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to read worker failures: {e}")))?;
+    Ok(row
+        .and_then(|r| r.get::<String>(0).ok())
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn cached_progress_replaces_counts_and_never_changes_a_terminal_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        create_run(&path, "r", "run", "[]", None, Some(3))
+            .await
+            .unwrap();
+        for cached in [2, 2, 1] {
+            set_cached_progress(&path, "r", cached, 3).await.unwrap();
+            let run = get_run(&path, "r").await.unwrap().unwrap();
+            assert_eq!(run.steps_cached, cached as i64);
+            assert_eq!(run.steps_executed, 0);
+            assert_eq!(run.steps_total, Some(3));
+        }
+        finish_run(&path, "r", "success", 2, 1, 1.0).await.unwrap();
+        set_cached_progress(&path, "r", 99, 100).await.unwrap();
+        let run = get_run(&path, "r").await.unwrap().unwrap();
+        assert_eq!(
+            (run.steps_cached, run.steps_executed, run.steps_total),
+            (1, 2, Some(3))
+        );
+    }
 
     #[tokio::test]
     async fn a_run_records_its_trigger_and_a_served_run_its_outcome() {
@@ -1164,6 +1544,7 @@ mod tests {
                 job: Some("p.py:a"),
                 trigger: &trigger,
                 traced: false,
+                scope: None,
             },
         )
         .await
@@ -1201,6 +1582,7 @@ mod tests {
                 job: None,
                 trigger: &barca_model::trigger::Trigger::api(),
                 traced: false,
+                scope: None,
             },
             "cancelled",
             r#"{"status":"cancelled"}"#,
@@ -1301,6 +1683,65 @@ mod tests {
             details.push(row.get::<String>(3).unwrap());
         }
         details
+    }
+
+    #[tokio::test]
+    async fn legacy_errors_are_failed_in_history_filters_and_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        seed_runs(
+            &path,
+            &[
+                ("legacy", "error", Some("api"), "2026-10-22 08:00:00"),
+                ("new", "failed", Some("api"), "2026-10-22 08:01:00"),
+                ("ok", "success", Some("api"), "2026-10-22 08:02:00"),
+            ],
+        )
+        .await;
+        let filter = RunFilter {
+            statuses: vec!["failed".into()],
+            ..Default::default()
+        };
+        let runs = get_runs_filtered(&path, 10, &filter).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|r| r.status == "failed"));
+        assert_eq!(
+            get_run(&path, "legacy").await.unwrap().unwrap().status,
+            "failed"
+        );
+        assert_eq!(listed(&path, 10, &filter).await.1, 2);
+        let facts = run_activity(&path, "2026-10-22 08:00:00", &RunFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            facts.counts.iter().filter(|r| r.status == "failed").count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .counts
+                .iter()
+                .find(|r| r.status == "failed")
+                .unwrap()
+                .runs,
+            2
+        );
+        assert!(facts.failures.iter().all(|r| r.status == "failed"));
+        let (_db, conn) = open_conn(&path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT status FROM runs WHERE run_id = 'legacy'", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "error"
+        );
     }
 
     #[tokio::test]

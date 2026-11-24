@@ -105,6 +105,46 @@ pub async fn explain_dag_with_keys(
     ),
     BarcaError,
 > {
+    explain_dag_with_hashes(
+        dag,
+        cfg,
+        target_names,
+        policy,
+        command_label,
+        partition,
+        rules,
+        file_args,
+        None,
+        None,
+    )
+    .await
+}
+
+/// The same prediction, optionally retaining each selected step's expected hash and the
+/// planned phase count for an ordinary cache-hit result.
+/// A latest-success reader compares its row with this evidence: an older matching result
+/// can make ordinary get fresh even while the latest success is stale after a code revert.
+#[allow(clippy::too_many_arguments)]
+pub async fn explain_dag_with_hashes(
+    dag: &Dag,
+    cfg: &barca_model::config::ResolvedConfig,
+    target_names: &[String],
+    policy: CachePolicy,
+    command_label: &str,
+    partition: Option<&barca_compile::selection::PartitionSelection>,
+    rules: &crate::freshness::RunRules,
+    file_args: &[String],
+    hashes: Option<&mut HashMap<String, String>>,
+    phases: Option<&mut usize>,
+) -> Result<
+    (
+        ExplainResult,
+        crate::cache::ExpandedMembership,
+        crate::cache::ExpandedMembership,
+        HeldNodes,
+    ),
+    BarcaError,
+> {
     let t0 = std::time::Instant::now();
     let mut targets = resolve_targets(dag, target_names, command_label)?;
     // The `Manual` nodes a real run would read as they are, and the cone it would plan.
@@ -127,6 +167,9 @@ pub async fn explain_dag_with_keys(
         Some(selection) => Some(selection.apply(dag, &mut exec_plan, &target_ids)?),
         None => None,
     };
+    if let Some(phases) = phases {
+        *phases = exec_plan.phases.len();
+    }
     if let CachePolicy::RefreshSelective { names, .. } = &policy {
         validate_refresh_names(
             dag,
@@ -304,6 +347,9 @@ pub async fn explain_dag_with_keys(
     } else {
         Vec::new()
     };
+    if let Some(hashes) = hashes {
+        *hashes = state.run_hashes().clone();
+    }
     let (members, will_run) = state.into_key_sets();
     Ok((
         ExplainResult {
@@ -418,7 +464,9 @@ async fn predict_steps(
     phase_ref: &Phase,
 ) -> Result<Vec<barca_compile::planner::StreamStep>, BarcaError> {
     let mut pruned;
-    let phase_ref = if ctx.user_pins.is_empty() {
+    // Status inspects every node in its scope, including inputs a run would stop reading
+    // at a pin. An unscoped prediction likewise has no target cone to prune against.
+    let phase_ref = if ctx.user_pins.is_empty() || ctx.held.is_some() || ctx.targets.is_empty() {
         phase_ref
     } else {
         pruned = phase_ref.clone();
@@ -677,7 +725,11 @@ async fn predict_steps(
                 ctx.all_outputs.insert(step.step_id.display(), oref);
                 if !matches!(
                     held,
-                    Some(crate::cache::Held::Manual { .. } | crate::cache::Held::Pinned)
+                    Some(
+                        crate::cache::Held::Manual { .. }
+                            | crate::cache::Held::Pinned
+                            | crate::cache::Held::Paused
+                    )
                 ) {
                     ctx.cached_steps.remember(step);
                 }

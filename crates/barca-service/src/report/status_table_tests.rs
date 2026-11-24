@@ -52,6 +52,7 @@ fn node(state: &str, run_hash: Option<&str>) -> NodeStatus {
 /// As in `barca_analysis::status`'s tests.
 fn failed(mut n: NodeStatus, error: &str) -> NodeStatus {
     n.last_materialization = Some(LastMaterialization {
+        skip_reason: None,
         content_hash: None,
         status: "failed".into(),
         created_at: "2026-10-22 06:00:00".into(),

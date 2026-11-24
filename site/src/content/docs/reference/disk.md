@@ -6,7 +6,7 @@ editUrl: https://github.com/barca-orc/barca/edit/main/crates/barca-cli/docs/disk
 
 <!-- Generated from crates/barca-cli/docs/disk.md (barca docs disk). Edit that file, then regenerate: BARCA_UPDATE_SNAPSHOTS=1 cargo test -p barca site_pages_tests:: (or scripts/update-cli-snapshots.sh). -->
 
-`.barca/` has a size limit, and barca deletes old artifacts to stay under it. Below: what the
+`.barca/` has an eviction target, and barca deletes eligible artifacts to work toward it. Below: what the
 limit counts, what is evicted first and what never is, and how the metadata database keeps to
 its own share. `barca gc` runs the same eviction on demand.
 
@@ -38,7 +38,7 @@ max_size = "20GB"        # or "500MB", "20GiB", a number of bytes, "10%" of the 
 
 At the end of `barca get` and `barca run` (after results are recorded and uploads have
 finished), after every run under `barca serve`, and once a minute under `barca serve`. When
-`.barca/` is over the limit, barca deletes files in this order until it is at or below **80%** of
+`.barca/` is over the limit, barca aims to delete files in this order down to **80%** of
 the limit:
 
 | Order | What | Which first | Costs when needed again |
@@ -47,6 +47,51 @@ the limit:
 | 2 | Superseded results: a node (a partition key, for a partitioned asset) whose newest successful result is another one | oldest first | a recompute, only if the code and inputs return to that exact state |
 | 3 | Local copies the artifact store holds (its upload was confirmed with a digest) | least recently read first | a download |
 | 4 | Current results | least recently read first | a recompute |
+
+## Busy servers, overshoot and sizing
+
+`max_size` is an eviction target, not an admission limit or a hard disk cap. Runs are not
+delayed because the cache is over it. User code can write unknown amounts, and active readers,
+writes, pending uploads, manual results and metadata can require more space than the target.
+There is no fixed upper bound on overshoot. Keep filesystem free-space alerts and reserve room
+for user temporary files and metadata backups outside the cache budget.
+
+Each over-target periodic pass revisits all generations, including results superseded by an
+older server or deploy. A five-second deletion budget can leave work for the next pass; it
+continues oldest-first. A prior pass that could not free anything is not reused as evidence
+that nothing can be freed now. A busy server may evict unprotected current results once its
+active plans are known; it does not wait for the queue to empty. Other-process runs and unknown
+plans keep the conservative restrictions below. Staging files owned by live processes stay.
+
+After a completed eviction pass that remains over `max_size`, stderr warns immediately,
+including passes that evicted nothing. `barca gc --json` adds `pressure`, and `GET /health`
+exposes the last completed eviction pass as `cache.pressure` (null before one is needed).
+The numeric fields can be polled as monitoring gauges:
+
+- `measured_at`: Unix seconds when the pass was planned; a health observation can be older
+  than its size measurement. These are observations, not reserved space or a live disk total.
+- `budget_bytes`, `overshoot_bytes`, `target_shortfall_bytes`: remaining budgeted bytes, bytes
+  above `max_size`, and bytes above the 80% target. Overshoot is zero with the limit off.
+- `evicted_files`, `evicted_bytes`: progress in this pass; predicted for a dry run.
+- `protected_bytes`, `protected_by_reason`: disjoint bytes excluded from this plan. Reasons
+  are `read_write_or_pin` (command/run hashes, explicit pins and pending uploads),
+  `active_nodes`, `manual_without_store`, `unknown_manual_policy`, `restricted`,
+  `active_staging`, `active_unreferenced`, and `metadata_unowned_or_grace` (metadata, unowned
+  files, live staging and files within their safety grace period). Backups are excluded.
+- `evictable_bytes`: bytes eligible when planning, less the bytes removed. `pending_bytes`
+  is the selected part not removed because of the time budget, new protections or failures.
+  A later pass checks protections again; these numbers do not authorize deleting a file.
+- `restricted`: why only the conservative tiers were considered, or null.
+
+Size for the peak overlapping generations of the recomputed cone, not one generation of one
+partition. For example, a 4 GiB cone read by an old run while two new generations are produced
+can need about 12 GiB of artifacts, plus unaffected cached data, metadata, staging and spill.
+To retain that working set below the 80% target, start with its measured peak divided by 0.8,
+then reserve separate space for backups and temporary files. This is a sizing estimate, not a
+guarantee: different partitions can have very different sizes, and repeated deploys or slow
+readers can extend the overlap. Lower run concurrency reduces simultaneous generations;
+`max_size` itself never throttles admission. `barca gc --dry-run --json` explains current
+protection without stopping the server or taking its metadata lock from a second process.
 
 ## What is never evicted
 
@@ -97,11 +142,54 @@ share stays over it. It says what it did on stderr:
 [barca] metadata 39.2 GB over its 1.1 GB share of the limit: now 848 MB; cleared 566986 component records and 16826 run reports, removed 0 old results and 0 old runs
 ```
 
-The file shrinks through `VACUUM`, which holds the database's lock while it rewrites the live data
-(runs that start meanwhile wait) and which runs only when no run is alive, as do orders 3 and 4: they delete history, so they run only if a
-`VACUUM` of what orders 1 and 2 cleared was not enough. On a server that is never idle the file
-keeps its size and reuses the freed space until a moment with no run, and eviction still counts
-the whole file.
+### Automatic trim keeps the used size under the share; the file shrinks on `barca gc`
+
+Inside `barca serve` (the check after a run and the minute checkpoint), a trim never runs `VACUUM`
+or a checkpoint under the metadata lock: both hold it while the file is rewritten, and a reader on
+the log can make them wait. Such a pass works to the **used size**, the pages that hold data (the file
+less its free pages), not to the file's length. The pages its deletes free are reused by later
+writes, so the used size comes under the share while the file keeps its length. Only `barca gc`
+rewrites the file (`VACUUM`, not while a run is alive) and shortens it. The write-ahead log is not
+counted: only a checkpoint shrinks it, and deleting history cannot.
+
+A CLI command (`barca get`, `barca run`) keeps what it did before: its check may wait for the
+lock, and compacts with a `VACUUM` when no run is alive, which lets it delete less history.
+
+**On a server that is never idle, automatic trim does not remove history** (orders 3 and 4: old
+results, old runs and their logs). Those tiers run only when no run is `running` or queued, of any
+owner (a `running` row left by another process or host counts), because a pass with a budget cannot
+tell which rows such a run, a pin or a store-backed consumer still reads. Orders 1 and 2 (component
+records, run reports) run as before. Run `barca gc` in a quiet window. Safe online history removal
+is planned for 0.46.2.
+
+A pass inside the server also does not wait for locks: it takes the process's metadata lock and the
+cross-process lock for at most 250 ms each, and when it cannot it stops (`busy`). The deadline
+starts before any lock is taken. Each pass reports the longest hold of the lock it took, waits
+included (`longest_hold_ms`).
+
+### When it stays over its share
+
+A pass that ends over its share says why, on stderr and in `disk_usage.metadata_trim` of
+`barca status --json` and of the server's status:
+
+| `reason` | Meaning |
+|---|---|
+| `live_run` | The data (`used_after_bytes`) is over the share and a run is running or queued (`run_id` names one), so no history was removed. `barca gc` in a quiet window removes it. |
+| `nothing_eligible` | The data is over the share and the pass cleared no component records, run reports, old results or old runs under the current retention (the last 100 outcomes, the last 1000 runs; fixed in this release). What is left is the current working set and the history retention keeps. |
+| `vacuum_deferred` | The data fits the share (`used_after_bytes` is at or below `allowance_bytes`) but the file is longer (`after_bytes` is above it), because it only shrinks through a `VACUUM`. Run `barca gc` when a pause is acceptable. |
+| `busy` | The pass could not get the metadata lock within 250 ms and stopped; it tries again in a minute. |
+| `needs_gc` | The database lacks an index the online pass reads through (an older format), or the pass failed. It is skipped and remembered, with the same backoff, never an error of every command; `barca gc` migrates it. A failed check for running runs counts as a running run (`live_run`, `run_id` `unknown`). |
+| `null` | The file is within its share, **or** the data is over it and the pass cleared records and ran out of its time, so a later pass goes on. `null` does not say the file is within its share if `after_bytes` is above `allowance_bytes`: read `used_after_bytes` too. |
+
+No other cause is reported: a reader holding the log and a working set larger than the share show
+as `nothing_eligible` (or `vacuum_deferred` for the file's length).
+
+A pass that freed nothing (cleared no record and did not shrink the file) is not repeated at once.
+The next waits a minute, then 2, 4, 8, 16 and at most 30 minutes (`zero_progress_passes`,
+`next_attempt`). The wait ends sooner when the file and its log grow by a tenth, when 200 more runs
+have finished in the server after a `nothing_eligible` or `live_run`, or when `barca gc` runs.
+Deciding to skip reads no database and takes no lock. The backoff and the last outcome are kept in
+`.barca/gc-state.json` and survive a survey, `barca gc` and `barca gc --dry-run`.
 
 ## After `barca state reset` or `barca state restore`
 

@@ -105,6 +105,16 @@ impl barca_service::ledger::LedgerTransport for Server {
         self.ledger_post("/ledger/lookup", request)
     }
 
+    fn refresh<'a>(
+        &'a self,
+        request: &'a barca_service::ledger::RefreshRequest,
+    ) -> barca_service::ledger::BoxFuture<
+        'a,
+        Result<barca_service::ledger::RefreshAccepted, barca_service::ledger::LedgerError>,
+    > {
+        self.ledger_post("/ledger/refresh", request)
+    }
+
     fn post_run<'a>(
         &'a self,
         post: &'a barca_service::ledger::LedgerPost,

@@ -1,6 +1,6 @@
 [package]
 name = "barca-compile"
-version = "0.46.0"
+version = "0.46.4"
 edition = "2024"
 description = "Planning layer — a graph in, an execution plan out: targets, selection, the planner, partition expansion, plan warnings"
 

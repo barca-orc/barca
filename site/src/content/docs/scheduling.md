@@ -7,6 +7,10 @@ A node declared with `freshness=Schedule("<cron>")` runs on that cron schedule w
 `barca serve` is running. The scheduler is part of the server and is on unless you pass
 `--no-schedule`. `barca get` and `barca run` never fire schedules.
 
+`GET /schedule` reports `next_fire`, `last_fired`, `last_skipped`, `late_since`, and
+`paused_until` as RFC 3339 UTC strings (or `null`). Pause and resume responses use the
+same timestamp format, including when scheduling is disabled.
+
 ## Run a function every 10 minutes
 
 ```python
@@ -284,11 +288,18 @@ systemd unit:
 [Service]
 ExecStart=/usr/local/bin/barca serve /srv/pipelines/job.py --timezone utc
 Restart=always
+KillMode=mixed
+TimeoutStopSec=90s
 WorkingDirectory=/srv/pipelines
 
 [Install]
 WantedBy=multi-user.target
 ```
+
+`KillMode=mixed` sends the initial SIGTERM only to the main server process, allowing it to
+drain its workers and transfer helper. The default `control-group` signals those children
+immediately and interrupts their work. systemd still kills remaining processes when the main
+process exits or `TimeoutStopSec` expires.
 
 `systemctl stop` sends SIGTERM. Barca then drains: it starts no queued run (new runs are still
 accepted and wait in its run queue, kept in the metadata DB), stops firing schedules, lets the

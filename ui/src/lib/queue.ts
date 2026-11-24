@@ -89,9 +89,9 @@ export function waitingRows(capacity: CapacitySnapshot | null | undefined): Wait
   }))
 }
 
-/** `3 queued`, or `nothing queued`. */
+/** `3 pending`, or `nothing pending`. */
 export function queuedLabel(count: number): string {
-  return count === 0 ? 'nothing queued' : `${count} queued`
+  return count === 0 ? 'nothing pending' : `${count} pending`
 }
 
 /**
@@ -136,6 +136,7 @@ export function waitingForLabel(waitingFor: QueueEntry['waiting_for']): string |
 
 /** One run of the queue list: a running one (first) or a waiting one, in order. */
 interface QueueRow {
+  control: QueueEntry['control']
   runId: string
   /** `running` for a run that executes now, `#1` for the next run to start. */
   state: 'running' | 'waiting'
@@ -181,6 +182,7 @@ export function queueRows(
   const row = (entry: QueueEntry, state: QueueRow['state'], since: string): QueueRow => {
     const seconds = secondsSince(since, nowMs)
     return {
+      control: entry.control,
       runId: entry.run_id,
       state,
       position: state === 'running' ? 'running' : entry.position === null ? '–' : `#${entry.position}`,
@@ -257,9 +259,9 @@ export function queueSummary(view: QueueView, nowMs: number): string | null {
   return parts.join(' · ') || null
 }
 
-/** The header chip's note on the queue from `/health`: `3 queued`, `3 queued · paused`; null when empty and open. */
+/** The header chip's note on the queue from `/health`: `3 pending`, `3 pending · paused`; null when empty and open. */
 export function healthQueueLabel(queue: HealthQueue | undefined): string | null {
   if (!queue) return null
   if (queue.queued === 0) return queue.paused ? 'queue paused' : null
-  return queue.paused ? `${queue.queued} queued · paused` : `${queue.queued} queued`
+  return queue.paused ? `${queue.queued} pending · paused` : `${queue.queued} pending`
 }

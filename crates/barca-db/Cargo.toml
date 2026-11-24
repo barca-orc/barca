@@ -1,6 +1,6 @@
 [package]
 name = "barca-db"
-version = "0.46.0"
+version = "0.46.4"
 edition = "2024"
 description = "Metadata database layer — `.barca/metadata.db`: its schema, its writes and the rows' owners"
 
@@ -18,6 +18,7 @@ tempfile = { workspace = true }
 # Optional: TypeScript binding generation (enable with --features ts). Kept out
 # of the production binary; used only to regenerate ui/src/lib/generated/.
 ts-rs = { workspace = true, optional = true }
+semver = "1.0.28"
 
 [features]
 # Generate TS type bindings for the frontend. Off by default.

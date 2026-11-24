@@ -22,8 +22,8 @@ describe('run status', () => {
     expect(parseRunStatus('ran')).toBe('success')
     expect(parseRunStatus('nope')).toBeNull()
   })
-  it('labels pending as queued and keeps unknown statuses as given', () => {
-    expect(runLabel('pending')).toBe('queued')
+  it('labels pending consistently and keeps unknown statuses as given', () => {
+    expect(runLabel('pending')).toBe('pending')
     expect(runLabel('complete')).toBe('success')
     expect(runLabel('weird')).toBe('weird')
   })

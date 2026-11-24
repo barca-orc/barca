@@ -62,6 +62,7 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
     let mut due_costs = Vec::new();
     // The steps that run because they had no cache hit: their history says why (#925).
     let mut missed = barca_decide::plan_reasons::Missed::default();
+    let mut warned_cached = std::collections::HashSet::new();
     for (stream_idx, step) in in_dependency_order(dag, phase_ref) {
         let uncached_steps = &mut uncached[stream_idx];
         if step.kind == barca_model::NodeKind::Sensor {
@@ -170,14 +171,29 @@ pub(super) async fn decide_phase(ctx: DecidePhase<'_>) -> Result<Phase, BarcaErr
                     Some(
                         barca_decide::cache::Held::Manual { .. }
                             | barca_decide::cache::Held::Pinned
+                            | barca_decide::cache::Held::Paused
                     )
                 ) {
                     cached_steps.remember(step);
                 }
             }
             Decision::Partitioned {
-                cached, missing, ..
+                cached,
+                missing,
+                stale_root,
+                ..
             } => {
+                if let Some(root) = stale_root
+                    && warned_cached.insert(step.step_id.base_id().to_string())
+                {
+                    note(
+                        pb,
+                        &format!(
+                            "[barca] warning: {}",
+                            stale_warning(step.step_id.base_id(), &root, false)
+                        ),
+                    );
+                }
                 let any_cached = !cached.is_empty();
                 for (pdisplay, oref) in cached {
                     all_outputs.insert(pdisplay.clone(), oref);
@@ -235,10 +251,33 @@ pub(crate) fn note(pb: &Option<indicatif::ProgressBar>, msg: &str) {
     barca_model::lines::Lines::current().note(pb.as_ref(), msg);
 }
 
+// A server starts new worker pools for successive polls. Deduplicate in the host,
+// not in a worker, so a node warns only once during this CLI/server process.
+fn sensor_warning(node_id: &str, artifact: &serde_json::Value) -> Option<String> {
+    static WARNED: std::sync::LazyLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::LazyLock::new(Default::default);
+    if artifact
+        .get("sensor_explicit_value")
+        .and_then(|v| v.as_bool())
+        != Some(true)
+        || !WARNED.lock().unwrap().insert(node_id.to_owned())
+    {
+        return None;
+    }
+    Some(format!(
+        "[barca] warning: sensor {node_id} returned (True, value): this always counts as changed; \
+         return the value alone to compare it, or (True, None) for an explicit change without data"
+    ))
+}
+
 pub(super) struct DispatchPhase<'a> {
     pub(super) filtered_phase: &'a Phase,
     /// The batched calls of this phase (RFC-0013), as [`plan_calls`] made them.
     pub(super) calls: Vec<(String, Vec<String>)>,
+    /// The run's call counter and the batch of each key: calls made at load for keys the plan
+    /// gave none are numbered from it and added to it.
+    pub(super) next_call: &'a mut u64,
+    pub(super) batches: &'a mut HashMap<String, String>,
     pub(super) provided: &'a HashMap<String, dispatch::ProvidedInput>,
     pub(super) pool: &'a mut barca_engine::io_loop::WorkerPool,
     /// The run's Datadog exporter, when that integration is on.
@@ -255,11 +294,44 @@ pub(super) struct DispatchPhase<'a> {
     pub(super) total_estimated: f64,
     pub(super) elapsed_so_far: f64,
     pub(super) completed_steps: usize,
+    pub(super) cached_steps: usize,
     pub(super) total_steps: usize,
     pub(super) event_tx: &'a Option<UnboundedSender<barca_model::RunEvent>>,
     pub(super) logs_buffer: &'a mut barca_db::run_logs::Recorder,
     pub(super) step_durations: &'a mut HashMap<String, (f64, f64)>,
     pub(super) cancel: &'a CancellationToken,
+}
+
+/// Keys of a batched node the plan put in no call: they were given one each, which the
+/// plan should have done. Say so, and record each call as the key's batch.
+fn warn_unplanned_calls(
+    coord: &barca_engine::coordinator::Coordinator,
+    next_call: &mut u64,
+    batches: &mut HashMap<String, String>,
+    pb: &Option<indicatif::ProgressBar>,
+) {
+    let made = coord.unassigned_calls();
+    if made.is_empty() {
+        return;
+    }
+    *next_call += made.len() as u64;
+    let mut per_node: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (call, key) in made {
+        *per_node
+            .entry(barca_model::StepId::parse(key).base_id().to_string())
+            .or_default() += 1;
+        batches.insert(key.clone(), call.clone());
+    }
+    for (node, keys) in per_node {
+        note(
+            pb,
+            &format!(
+                "[barca] warning: {keys} key{} of {node} were planned into no batched call; \
+                 each runs in a call of its own",
+                if keys == 1 { "" } else { "s" }
+            ),
+        );
+    }
 }
 
 pub(super) async fn dispatch_phase(
@@ -275,6 +347,8 @@ pub(super) async fn dispatch_phase(
         filtered_phase,
         provided,
         calls,
+        next_call,
+        batches,
         pool,
         datadog,
         cost_model,
@@ -289,6 +363,7 @@ pub(super) async fn dispatch_phase(
         total_estimated,
         mut elapsed_so_far,
         mut completed_steps,
+        cached_steps,
         mut total_steps,
         event_tx,
         logs_buffer,
@@ -297,7 +372,20 @@ pub(super) async fn dispatch_phase(
     } = ctx;
     let mut coord = barca_engine::coordinator::Coordinator::new();
     coord.assign_calls(calls);
+    // A batched node's function takes a list of keys: every key of one that is loaded runs in
+    // a call, the plan's or, if it gave a key none, one of its own.
+    let batched: std::collections::HashSet<String> = filtered_phase
+        .streams
+        .iter()
+        .flat_map(|s| &s.steps)
+        .filter(|st| !st.partition_keys.is_empty())
+        .map(|st| st.step_id.base_id())
+        .filter(|base| dag.get_node(base).is_some_and(|n| n.decl.batch.is_some()))
+        .map(str::to_string)
+        .collect();
+    coord.require_calls(batched, *next_call);
     let loaded = coord.load_phase(filtered_phase, provided);
+    warn_unplanned_calls(&coord, next_call, batches, pb);
     coord.sensor_previous(&decide_state.sensor_previous);
     let expected: usize = filtered_phase
         .streams
@@ -349,6 +437,9 @@ pub(super) async fn dispatch_phase(
                             node_id,
                         )),
                 );
+            }
+            if let Some(warning) = sensor_warning(node_id, artifact) {
+                note(pb, &warning);
             }
             // A sink that failed failed the step (the worker reports it as the step's error).
             // A dataset sink's size warning: a partition column with too many values.
@@ -442,8 +533,9 @@ pub(super) async fn dispatch_phase(
                 bar.set_position(completed_steps as u64);
                 let remaining = if total_estimated > 0.0 {
                     (total_estimated - elapsed_so_far).max(0.0)
-                } else if completed_steps > 0 {
-                    let avg = elapsed_so_far / completed_steps as f64;
+                } else if completed_steps > cached_steps {
+                    // Cache hits advance progress but contribute no execution time.
+                    let avg = elapsed_so_far / (completed_steps - cached_steps) as f64;
                     avg * total_steps.saturating_sub(completed_steps) as f64
                 } else {
                     0.0

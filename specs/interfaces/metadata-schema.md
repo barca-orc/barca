@@ -1,7 +1,7 @@
 # Metadata schema compatibility
 
 Scope: metadata format compatibility, not the full table/DDL contract.
-Status: implemented. Specification version: 1 (database versions are described below).
+Status: implemented. Specification version: 2 (database versions are described below).
 Conformance: `crates/barca-db/src/db/schema/ddl.rs`, `state_validate.rs`, and the tests in
 `db/schema.rs` and `db/snapshots.rs`. See [boundary inventory](../README.md).
 
@@ -11,7 +11,8 @@ recreating it. Rust owns this boundary; no new CLI or Python configuration is
 introduced. The local driver is bundled libSQL with its local core enabled. Existing
 SQLite-format metadata remains readable. Compatibility is checked through a read-only
 connection before opening a writer, so an unusable database is left untouched even when
-the driver checkpoints on close. Reused prepared statements reset before rebinding.
+the driver checkpoints on close. Reused prepared lookup statements reset as each lookup ends, including a hit that returns
+before SQLite reaches the end of its result set.
 
 ## Version 1 and legacy databases
 
@@ -43,7 +44,11 @@ restored, downgraded or reset. Upgrade to a compatible Barca release to open the
 
 Format 1 adds `freshness_proofs(id TEXT PRIMARY KEY, generation INTEGER NOT NULL,
 snapshot TEXT NOT NULL)` through the registered additive table migration. IDs include a
-private payload version, artifact-layout hash and logical node ID; snapshots are JSON.
+private payload version, refresh-invalidation revision, artifact-layout hash and logical node ID;
+snapshots are JSON. The `freshness_revision` key in `metadata_info` stores a decimal counter
+incremented in the same transaction as a refresh invalidates any results. That transaction clears existing
+proofs. A late publisher retains its old revision in its proof IDs, so later readers cannot
+accept it as current even when no materialization was appended.
 Generation is the maximum materialization ID validated by that proof. Old generations are
 removed when a successful run publishes new proofs. Missing or malformed payloads cause
 normal cache validation, never loss of history. The table is disposable acceleration data;
@@ -71,8 +76,11 @@ inspection routes beside the writers instead: through read-only connections to t
 place, which take neither that lock nor the process-wide guard, so a read never waits for a run's
 writes and never holds one up. This relies on WAL mode, in which SQLite lets readers in any
 process see the last commit while one writer appends; a reader's query is its own transaction,
-so a checkpoint (`wal_checkpoint(TRUNCATE)`, under the lock) waits at most for one query and is
-tried again for up to 2 seconds while one is in progress. Only a database this release reads as
+so checkpoints can progress between queries. Explicit transactions used for consistent
+inspection snapshots cannot yield to other work. Live read-view transactions have a
+30-second reader budget; an interrupted full node-age scan releases its connection and
+rebuilds against a private database image. Explicit truncation tries return busy immediately
+and restore the caller's busy timeout; their caller may retry within its deadline. Only a database this release reads as
 it is, format 1 with every addition present and in WAL mode, is read in place, including
 under `--read-only`; any other goes through a private copy, made on the blocking pool and
 migrated instead of the original. Read-only connections can create `-wal` and `-shm`
@@ -88,6 +96,19 @@ header check before every open, the metadata backup's digest and copy, a private
 through one descriptor per file that stays open for the life of the process.
 
 ## Backups, restore and older binaries
+
+Metadata backups use SQLite's online backup interface in 64-page batches, releasing the
+source reader between steps. After three detected restarts, the remaining copy finishes
+in one SQLite step outside Barca's metadata lock. That step can delay checkpoints;
+cancellation and deadlines are checked between calls. Completed copies preserve source
+permissions and contain a consistent committed image.
+
+Writable servers attempt a PASSIVE checkpoint every minute and TRUNCATE when the WAL
+exceeds 64 MiB, with a 100 ms busy timeout. `GET /health` exposes the last sample under
+`metadata_wal`, including its time, remaining bytes, threshold, frames and blocker. An
+external reader can prevent truncation until its transaction ends. Conformance covers
+external readers, writer contention, reusable lookup statements and checkpoints between
+backup batches in `db/wal.rs`, and backup consistency in `db/mod.rs`.
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).
 A backup restored by `barca state restore` is checked before migration or
@@ -127,6 +148,10 @@ column. It records a byte mismatch when inserting a recompute with the same node
 hash; legacy rows default to 0. See [materialization-digests.md](materialization-digests.md).
 
 ### Additions within format 1
+
+- `runs.scope_json` (TEXT, nullable, 0.47.0): the execution request's scope, recorded with
+  its initial history row and retained after queue deletion. Older rows remain null; replay
+  must refuse to infer their missing options. This is additive within format 1.
 
 Format 1 is additive: a release may add a nullable column or a table to it without a new
 version number. A format-1 database written by an earlier release that lacks one gets the
@@ -279,6 +304,13 @@ every database from before 0.29.2 (#629):
   in the queue once, counted in `spec.kill_requeues`, and interrupted the next time. Older
   binaries read `draining` as `queued`. Only `barca serve` writes it; readers of a database without it find the
   queue empty, and older binaries ignore it.
+  Admission now commits a `runs` row with status `pending` in the same transaction as its
+  queue entry. The pending row has no execution owner or finish time; `started_at` is the
+  acceptance time until execution replaces it with its start. Starting claims that same row,
+  and pre-execution cancellation or refusal records a terminal outcome there. Requeueing
+  archives execution evidence and restores a pending row under the original request id;
+  requeueing an already-pending request creates no attempt. History filters, counts and
+  activity therefore include accepted work even without a running server.
 - `schedule_ticks (schedule_id, scheduled_at, action, skipped_for, run_id, started_at,
   finished_at, run_status, queue_wait_seconds, rebuilt, up_to_date, failed, not_reached,
   targets)` (0.44.0, #960, [health](../behavior/health.md), "What a tick records"), primary key
@@ -357,8 +389,13 @@ which have none are deleted, and all but the last 1000 runs are deleted with the
 naming a file on disk, a node's latest success and later rows, and a node's newest `bytes_changed`
 row stay. A `materializations.run_id` can therefore name a run that is gone, and a run's rows can be
 gone while its `runs` row stays. Nothing a cache decision needs is lost: a deleted row costs a
-recompute. `VACUUM`, the only way the file shrinks, comes before any row is deleted and needs no
-run alive. Eviction counts the database and its log as at most this share, so a large file never evicts
+recompute. Inside `barca serve` a trim pass (the check after a run, the minute checkpoint) works to the used size (the file less its free pages), without `VACUUM` or a checkpoint
+under the lock; the file keeps its length. It deletes old results and old runs only when no run is
+`running` or queued (any owner); otherwise it says `live_run`. It waits at most 250 ms for each
+lock and stops with `busy`. `VACUUM`, the only way the file shrinks, runs only under `barca gc`
+(no budget), with no run alive. `disk_usage.metadata_trim` reports `busy`, `needs_gc`,
+`live_run`, `nothing_eligible`, `vacuum_deferred` or null. A CLI command trims as before. A pass that freed nothing backs off from 1 to 30
+minutes. Eviction counts the database and its log as at most this share, so a large file never evicts
 artifacts that fit. Connections set `journal_size_limit` to 64 MiB, so a checkpoint hands back a large log.
 Conformance: the tests in `metadata_size.rs`.
 
@@ -368,3 +405,74 @@ this release (these, or `bytes_changed`) gains them when it is opened for writin
 transaction, rolled back on error, with every row preserved and the version left at 1. A
 database that already has them is only read. Conformance: the schema tests in
 `crates/barca-store/src/gc/tests.rs` and `db/schema/ddl.rs`.
+
+## Task skip history (#811)
+
+Format 1 adds nullable `materializations.skip_reason` and `schedule_ticks.skipped` columns.
+Read-only readers accept older databases without them; the writer adds them idempotently.
+A `materializations` row with `status = skipped` records an executed task attempt, with
+no run hash, output, artifact or observation. Cache/current-success queries must continue
+requiring `status = success`. Such history is not a produced materialization. Tick counts
+retain skipped outcomes after the bounded per-target list is trimmed.
+## Requeued execution evidence
+
+Format 1 adds nullable `runs.parent_run_id`, `runs.run_attempt` and `runs.stop_reason`,
+indexed by `(parent_run_id, run_attempt)`. On requeue, one transaction moves the stopped
+execution's existing run row, logs and materializations to a linked attempt ID and marks the
+original queue entry queued. Updating the existing row preserves every diagnostic column,
+including outcome, plan reasons, cancellation and worker diagnostics. Materialization
+hashes and creation times do not change. Complete spool lines are persisted before reuse.
+Repeated recovery without a new run row creates no extra attempt.
+
+The queue retains the original run ID, ordering and acceptance timestamp. Each subsequent
+execution records fresh results under that original ID. Archived executions are excluded
+from logical run lists, activity and schedule counts. History retention selects logical
+parents; deleting a parent removes its archived run rows and logs together. Ordinary cache
+retention still applies to materializations. Older snapshots without these columns read as
+having no archived attempts. Startup uses predecessor queue ownership to finish running
+records without depending on host/PID liveness, preserving the existing killed-drain retry
+limit. Conformance: run_queue tests, queue_routes tests, and `test_serve_queue.py` restart and
+local follower cases.
+
+Successful materialization `created_at` values written by step persistence include fractional
+seconds (`YYYY-MM-DD HH:MM:SS.nnnnnnnnn`, UTC) to distinguish refresh acceptance within a
+second. Readers accept legacy whole-second values too. No column or schema migration is needed.
+
+## Last writer version
+
+`metadata_info (key TEXT PRIMARY KEY, value TEXT NOT NULL)` is an additive format-1 table.
+`last_writer_version` records the barca package version of the last metadata write, including
+schema initialization/migration. Connection-local triggers update it with successful row
+writes, in the same transaction, including when a server keeps its connection open. Reads
+leave it untouched. Preexisting databases gain the table at the next schema initialization.
+Older releases that predate this feature cannot update the marker.
+
+Opening metadata last written by a newer semantic version prints a stderr warning naming
+both versions. This is advisory; schema compatibility still decides admission. The warning
+is deduplicated within a process. Missing or unrecognized writer versions do not block access.
+Conformance: `python/tests/test_version_warnings.py` and the writer transaction tests in
+`crates/barca-db/src/db/schema/writer.rs`.
+## Worker-fatal diagnostics
+
+Format 1 adds nullable `runs.worker_failures` JSON through the additive column migration.
+It records each affected step's original error, its terminal retry error if any, and whether
+it recovered. The terminal ledger writes it in the same transaction as the run outcome.
+It is independent of successful materializations; no failure is fabricated for a recovered
+step. Old databases and runs read as no recorded diagnostic. Run-history deletion removes it
+with the run, and backup/restore includes it as ordinary metadata.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
+
+## Refresh invalidation
+
+Format 1 adds nullable `materializations.refresh_invalidated_by` (TEXT), the run that first
+superseded a pre-acceptance successful row. Ordinary cache lookups exclude non-null rows. Ledger posts may replace them, while
+retaining the previous digest for non-determinism diagnostics. Historical inspection and explicit pins retain
+access to the rows. A transaction marks only the selected identities with `created_at` before
+the refresh's original acceptance time, normalizing legacy whole-second timestamps; retries
+leave later successes eligible. The marker is independent of run retention and survives
+backup/restore. Older snapshots gain the nullable column through additive migration.
+Conformance: `refresh_invalidations_survive_reopen_and_agree_across_lookup_paths` and
+`python/tests/test_refresh_failure_retry.py`.

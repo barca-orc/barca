@@ -13,8 +13,10 @@ fn bytes<T: serde::Serialize>(value: &T) -> String {
 #[test]
 fn health_is_the_body_the_route_built_by_hand() {
     let health = ServerHealth {
+        scheduler_liveness: None,
         api_version: 1,
         cache: Some(CacheSize {
+            pressure: None,
             limit_bytes: 20,
             size_bytes: 10,
         }),
@@ -65,7 +67,7 @@ fn health_is_the_body_the_route_built_by_hand() {
         "scheduler_enabled": true,
         "metadata_error": null,
         "metadata_wal": null,
-        "cache": {"size_bytes": 10, "limit_bytes": 20},
+        "cache": {"pressure": null,"size_bytes": 10, "limit_bytes": 20},
     });
     assert_eq!(bytes(&health), by_hand.to_string());
     let draining = ServerHealth {
@@ -80,20 +82,21 @@ fn health_is_the_body_the_route_built_by_hand() {
 #[test]
 fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
     let job = ScheduleJob {
+        last_task_skip_reason: None,
         cron: "0 5 * * *".into(),
         failing: false,
         failures: 1,
         id: "p.py:daily".into(),
         kind: crate::NodeKind::Asset,
-        last_fired: Some(1_700_000_000),
+        last_fired: Some("2023-11-14T22:13:20Z".into()),
         last_run: Some("run-1".into()),
         last_run_id: Some("run-1".into()),
-        last_skipped: Some(1_700_000_100),
+        last_skipped: Some("2023-11-14T22:15:00Z".into()),
         last_status: Some("success".into()),
         late: true,
-        late_since: Some(1_700_000_200),
+        late_since: Some("2023-11-14T22:16:40Z".into()),
         max_failures: 5,
-        next_fire: Some(1_700_086_400),
+        next_fire: Some("2023-11-15T22:13:20Z".into()),
         paused: true,
         paused_until: None,
         queue_bound: false,
@@ -110,17 +113,17 @@ fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
         "id": "p.py:daily",
         "cron": "0 5 * * *",
         "kind": "asset",
-        "next_fire": 1_700_086_400,
-        "last_fired": 1_700_000_000,
+        "next_fire": "2023-11-15T22:13:20Z",
+        "last_fired": "2023-11-14T22:13:20Z",
         "last_run_id": "run-1",
         "last_run": "run-1",
         "last_status": "success",
         "late": true,
-        "late_since": 1_700_000_200,
+        "late_since": "2023-11-14T22:16:40Z",
         "typical_queue_wait_seconds": 3,
         "typical_run_seconds": 40,
         "queue_bound": false,
-        "last_skipped": 1_700_000_100,
+        "last_skipped": "2023-11-14T22:15:00Z",
         "skipped_for": "run-0",
         "skip_reason": "in_flight",
         "paused": true,
@@ -142,9 +145,10 @@ fn a_schedule_entry_is_the_body_the_route_built_by_hand() {
     let pause = SchedulePauseAnswer::Pause {
         id: "p.py:daily".into(),
         paused: true,
-        paused_until: Some(5),
+        paused_until: Some("1970-01-01T00:00:05Z".into()),
     };
-    let by_hand = json!({"id": "p.py:daily", "paused": true, "paused_until": 5});
+    let by_hand =
+        json!({"id": "p.py:daily", "paused": true, "paused_until": "1970-01-01T00:00:05Z"});
     assert_eq!(bytes(&pause), by_hand.to_string());
     assert_eq!(
         serde_json::from_value::<SchedulePauseAnswer>(by_hand).unwrap(),
@@ -163,7 +167,7 @@ fn pauses_and_pins_are_the_bodies_the_routes_built_by_hand() {
     }];
     let schedules = vec![crate::pauses::PausedSchedule {
         id: "p.py:daily".into(),
-        paused_at: 11,
+        paused_at: "1970-01-01T00:00:11Z".into(),
         until: None,
     }];
     let listed = Pauses::of(paused.clone(), schedules.clone());
@@ -229,6 +233,10 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
         bytes(&RunCancelling::of("run-1")),
         json!({ "run_id": "run-1", "status": "cancelling" }).to_string()
     );
+    assert_eq!(
+        bytes(&RunCancelling::cancelled("run-1")),
+        json!({ "run_id": "run-1", "status": "cancelled" }).to_string()
+    );
     let logs = RunLogs {
         logs: Vec::new(),
         run_id: "run-1".into(),
@@ -238,15 +246,14 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
         bytes(&logs),
         json!({ "run_id": "run-1", "status": "running", "logs": [] }).to_string()
     );
-    // The words a run's status takes are the ones served today, whatever is decided of them
-    // (#943).
+    // Every host uses the same run-status vocabulary (#943).
     let words: Vec<String> = [
         RunViewStatus::Pending,
         RunViewStatus::Running,
         RunViewStatus::Success,
         RunViewStatus::Failed,
         RunViewStatus::Cancelled,
-        RunViewStatus::Error,
+        RunViewStatus::Skipped,
         RunViewStatus::Interrupted,
     ]
     .iter()
@@ -260,7 +267,7 @@ fn the_run_answers_are_the_bodies_the_routes_built_by_hand() {
             "success",
             "failed",
             "cancelled",
-            "error",
+            "skipped",
             "interrupted"
         ]
     );

@@ -237,3 +237,52 @@ def test_sink_failures_fail_the_run_without_agent_mode(project):
     assert proc.returncode == 1, proc.stderr
     assert json.loads(proc.stdout.strip().splitlines()[-1])["status"] == "failed"
     assert "SinkError: sink /dev/null/cannot/write/here.json" in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("cascade", [False, True])
+@pytest.mark.parametrize("pool", [1, 4])
+def test_partitioned_no_cascade_warns_once_and_reaches_fan_in(tmp_path, cascade, pool, monkeypatch):
+    monkeypatch.setenv("BARCA_POOL_SIZE", str(pool))
+    (tmp_path / "pipeline.py").write_text("""
+from barca import asset, collect, partitions
+
+@asset()
+def src() -> int:
+    return 1
+
+@asset(inputs={"s": src}, partitions={"key": partitions(["a", "b"])})
+def mid(key: str, s: int) -> int:
+    return s
+
+@asset(inputs={"rows": collect(mid)})
+def leaf(rows: list) -> int:
+    return sum(rows)
+""")
+    final(barca(tmp_path, "get", "leaf", "pipeline.py"))
+    flags = [] if cascade else ["--no-cascade"]
+    dry = final(
+        barca(
+            tmp_path,
+            "get",
+            "leaf",
+            "pipeline.py",
+            "--refresh",
+            "src",
+            *flags,
+            "--dry-run",
+            "--json",
+        )
+    )
+    by = {step["id"].split(":")[-1]: step for step in dry["steps"]}
+    for node in ("mid", "leaf"):
+        assert bool(by[node].get("warning")) is not cascade
+    proc = barca(tmp_path, "get", "leaf", "pipeline.py", "--refresh", "src", *flags)
+    out = final(proc)
+    if cascade:
+        assert out["steps_executed"] == 4
+        assert "served from cache but depends on refreshed" not in proc.stderr
+    else:
+        assert out["steps_executed"] == 1
+        for node in ("mid", "leaf"):
+            warning = f"'{node}' was served from cache but depends on refreshed 'src'"
+            assert proc.stderr.count(warning) == 1, proc.stderr

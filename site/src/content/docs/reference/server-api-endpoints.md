@@ -66,7 +66,7 @@ client prints it as it would print the local command's.
 | `GET`  | `/assets/{name}/partitions` | A partitioned node's keys with a recorded attempt, each with its latest (`?status=failed`, `?q=`, `?limit=`, `?offset=`) and the `rows` it wrote (`null` when not counted), and its failed keys' errors grouped. Experimental. |
 | `GET`  | `/assets/{name}/partitions/grid` | Every key of a partitioned node in one compact body: the dimensions and their values, each key's state (fresh, stale, never run, failed, or blocked behind the same key of a failed input), its latest attempt's time, duration, size, rows (`rows`, `null` where not counted) and run, how many keys last wrote no rows (`counts.empty`), and the failed keys' errors grouped. Decided across the node's chain, the partitioned nodes it shares its keys with. Experimental. `barca status NODE --grid --json` prints it, and `--keys` lists it key by key. |
 | `GET`  | `/assets/{name}/partitions/key?key=` | One key (`?key=day=2026-01-01,region=apac`, `?sample=`): its state in each node of the chain, whether a run computes it (`needs_run`), its latest attempts (each with its `rows`), and the shape and first rows of its result and of what it read (the same key of each input in the chain). `404` for a key the node does not have. Experimental. `barca status NODE --key KEY --json` prints it. |
-| `GET`  | `/assets/{name}/partitions/keys` | One page of the keys of a partitioned node that match a query, filtered, ordered and counted by the server: `?state=failed,blocked`, `?needs_run=1` (the keys a run computes), `?value=region=apac,emea` (repeat for another dimension), `?range=day=2026-01-01..2026-01-31`, `?error=0` (an index into `errors`), `?q=` (text over the key), `?sort=key\|state\|attempted\|elapsed\|size\|rows`, `?limit=` (default 100, at most 1000) and `?offset=`. Every filter given must hold. The body has the page of `keys` (each with its `values`, `state`, latest attempt and grouped `error`), `total` and `needs_run` of what matches, `counts` of every key, `truncated`, `offset` and `selection`: the keys that match as `POST /runs` takes them in `partition`, `null` past 5,000 scattered keys unless the query is `needs_run` with dimension filters only. `400` for a filter the node does not have. Experimental. `barca status NODE --keys` with the same filters prints it. |
+| `GET`  | `/assets/{name}/partitions/keys` | One page of the keys of a partitioned node that match a query, filtered, ordered and counted by the server: `?state=failed,blocked`, `?needs_run=1` (the keys a run computes), `?empty=1` (latest attempt succeeded with zero recorded rows; unknown counts excluded), `?value=region=apac,emea` (repeat for another dimension), `?range=day=2026-01-01..2026-01-31`, `?error=0` (an index into `errors`), `?q=` (text over the key), `?sort=key\|state\|attempted\|elapsed\|size\|rows`, `?limit=` (default 100, at most 1000) and `?offset=`. Every filter given must hold. The body has the page of `keys` (each with its `values`, `state`, latest attempt and grouped `error`), `total` and `needs_run` of what matches, `counts` of every key, `truncated`, `offset` and `selection`: the keys that match as `POST /runs` takes them in `partition`, `null` past 5,000 scattered keys unless the query is `needs_run` with dimension filters only. `400` for a filter the node does not have. Experimental. `barca status NODE --keys` with the same filters prints it. |
 | `GET`  | `/assets/{name}/partitions/overview` | The keys of a partitioned node in one picture: `counts` by state and `needs_run`, `issues` (each error of the failed keys, then the blocked, stale and never-run keys, with how many keys, where they are in each dimension and their `selection`), and `rows`: the grid along its longest dimension (`along`), one string of state characters per combination of the other dimensions' values. `?limit=` bounds the rows; without it as many as fit 200,000 cells (`rows_total`, `truncated`). What the web UI's key explorer draws. Experimental. `barca status NODE --overview --json` prints it. |
 | `GET`  | `/assets/{name}/versions` | The asset's recent successful materializations (one per run hash, newest first, `?limit=N`, default 20) and its pin, as `barca pin <name> --versions --json`. Experimental. |
 | `POST` | `/assets/{name}/pin` | Pin the asset to `{"run_hash": "..."}` (or a unique prefix) or `{"previous": true}`, with an optional `"reason"`, as `barca pin`; `pinned_by` is the request's token name. `403` read-only. Experimental ([Pinning and Rollback](/reference/cli/pin/)). |
@@ -118,8 +118,8 @@ GET /health
   "queue": { "running": 0, "queued": 0, "paused": false, "max_runs": 16, "capacity": null } }
 ```
 
-`status` is `ok`, or `draining` from the first SIGTERM or SIGINT until the server exits (see
-[the drain](#stopping-the-drain)); the response is `200` either way. `queue` is the run queue as
+`status` is `ok`, `degraded` for a stalled or unexpectedly exited scheduler, or `draining` from the first SIGTERM or SIGINT until the server exits (see
+[the drain](#stopping-the-drain)); the response is `200` in each case. `queue` is the run queue as
 `GET /queue` reports it, `started_at` when this server started, and `capabilities` the optional
 protocol features it supports (`event_resume`: run event streams resume from `Last-Event-ID`).
 With `--auth token`, `/health` needs a bearer token like every other API route.
@@ -137,8 +137,23 @@ gains `cache: {size_bytes, limit_bytes, evicted_files, evicted_bytes}` when the 
 found `.barca/` over its limit.
 
 `scheduler` is `true` when this server fires `Schedule(...)` nodes: on by default, `false` with
-`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` once
-the scheduler stopped on an error; `metadata_error` then says why.
+`--no-schedule` or `--read-only`. `scheduler_enabled` (from 0.28) is the same, and `false` while
+stopped on a metadata error. It returns to true after a successful restart.
+
+A writable scheduler publishes the experimental `scheduler_liveness` object on
+`GET /health`. Request `GET /schedule?include_liveness=true` for the same object
+beside the `jobs` array. The default `GET /schedule` response is the jobs array.
+`heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
+the loop publishes its heartbeat every 20 seconds. Subtract the operation start from the
+current time to measure how long `operation` has waited. The normal wait for the next
+cron second leaves `operation` null.
+`last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
+Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
+restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
+startup). Retries start one second after an unexpected exit, double up to sixty
+seconds, and reset to one second after ten minutes of uptime. `restart_count` and
+`last_exit_reason` survive task restarts within the process. Draining takes precedence.
+Servers without a local scheduler omit liveness on health and return null in the schedule envelope.
 
 `metadata_wal` is the last periodic checkpoint on the writable server, or null before
 the first sample. Every minute it runs PASSIVE and attempts TRUNCATE when the WAL exceeded

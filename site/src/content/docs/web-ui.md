@@ -108,6 +108,18 @@ A pinned asset shows `pinned` beside its version ([Pinning and Rollback](/refere
 
 ## Runs: why they ran, what failed, and running it again
 
+**Run** brings the asset DAG up to date: it computes stale inputs and reads current results
+from cache. A named task executes each time; that does not force its upstream assets to
+recompute. `Manual` upstreams are read as they are. Hard refresh (`--refresh-all` in the CLI,
+`refresh_all: true` in the API) explicitly recomputes everything in the cone, including
+`Manual` nodes; it is not needed to make a plain run fresh.
+
+The node panel and page toolbar offer **Including Manual** (unchecked by default) and a
+separate **Hard refresh…** action. Including Manual brings those nodes up to date using the
+cache. Hard refresh asks for confirmation and names the Manual nodes it would recompute.
+Both keep paused upstreams and pinned assets held. A paused input with no readable result
+fails the run; it is not silently computed. A paused target needs its own confirmation.
+
 The Runs page lists the queue (running runs first, then the waiting ones with how long they have
 waited; it folds to one line) above the run history. While runs wait, the sidebar shows the queue
 on every page: how many run and wait, and the oldest wait.
@@ -129,7 +141,7 @@ Its actions:
 
 - **Re-run failed**: the failed steps and everything downstream of them, the same target
   again, so the steps that succeeded are served from cache.
-- **Re-run all**: the same target with every step recomputed (`--refresh-all`).
+- **Re-run all**: the original scope with every step recomputed (`--refresh-all`), retaining its partition selection, batch settings, Manual/pause overrides and tick rules.
 - **Retry** on one failed step or partition key.
 - **Copy incident summary**: markdown with the run's link, target, trigger, timing and failed
   steps.
@@ -153,7 +165,9 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
   ([Pinning and Rollback](/reference/cli/pin/)).
 - For a partitioned asset, the **key explorer** shows every key at once, coloured by state, with
   each problem as one line (an error and the keys it hit, blocked keys, stale and never-run
-  keys) and a Run button for the keys that are not fresh. See
+  keys) and a Run button for the keys that are not fresh. The **Rows** column shows recorded
+  row counts (zero differs from unknown); **Empty results (0 rows)** filters before pagination
+  and includes successful empty results even when their keys are now stale. See
   [Exploring keys in the web UI](/reference/partitions/#exploring-keys-in-the-web-ui).
 
 ## Connecting to a server with tokens
@@ -161,3 +175,5 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
 When the server runs with `--auth token`, the UI asks for a bootstrap code or an API token on its
 Connect screen, and **API tokens** in the sidebar creates and revokes named tokens. The steps are
 in [Authentication and Tokens](/auth/).
+
+Older runs without a recorded request scope show an explanation instead of enabling replay. Start a new run with explicit targets and options for those records. Step retries use the recorded key and the node’s current kind, including task followers of scheduled sensors.

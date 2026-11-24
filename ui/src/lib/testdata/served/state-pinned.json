@@ -287,13 +287,13 @@
       "run_id": "5c4ed0000600"
     },
     "last_success_at": "2026-11-16 06:00:03",
-    "late_since": 1794895200,
+    "late_since": "2026-11-17T06:00:00Z",
     "measured": null,
     "name": "nightly_export",
-    "next_run": 1794981600,
+    "next_run": "2026-11-18T06:00:00Z",
     "no_estimate": "scheduler_off",
     "partitioned": false,
-    "prev_run": 1794895200,
+    "prev_run": "2026-11-17T06:00:00Z",
     "recheck_at": null,
     "refresh_path": {
       "live": false,
@@ -441,9 +441,9 @@
   },
   {
     "cache": {
-      "detail": "not part of the execution plan",
-      "reason": "not_planned",
-      "state": "unknown"
+      "detail": "3 of 5 partition keys cached",
+      "reason": "partitions_missing",
+      "state": "partial"
     },
     "cause": "failing",
     "consecutive_failures": 1,
@@ -489,6 +489,20 @@
     "next_run": null,
     "no_estimate": "failing",
     "partitioned": true,
+    "partitions": {
+      "behind": 1,
+      "cached": 3,
+      "failed": 1,
+      "failed_keys": [
+        "day=2026-11-16"
+      ],
+      "missing": 2,
+      "missing_keys": [
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
@@ -501,13 +515,13 @@
     "shape": null,
     "signals": [],
     "stale_since": "2026-11-17T02:00:01Z",
-    "typical_run_seconds": 2.5
+    "typical_run_seconds": 12.5
   },
   {
     "cache": {
-      "detail": "not part of the execution plan",
-      "reason": "not_planned",
-      "state": "unknown"
+      "detail": "1 of 5 missing keys wait on 'sales_by_day': the same keys of it failed",
+      "reason": "upstream_failed",
+      "state": "blocked"
     },
     "cause": "failing",
     "consecutive_failures": 0,
@@ -533,6 +547,21 @@
     "next_run": null,
     "no_estimate": "failing",
     "partitioned": true,
+    "partitions": {
+      "behind": 4,
+      "blocked": 1,
+      "blocked_on": "orders.py:sales_by_day",
+      "cached": 0,
+      "missing": 5,
+      "missing_keys": [
+        "day=2026-11-13",
+        "day=2026-11-14",
+        "day=2026-11-15",
+        "day=2026-11-16",
+        "day=2026-11-17"
+      ],
+      "total": 5
+    },
     "prev_run": null,
     "recheck_at": null,
     "refresh_path": null,
@@ -659,10 +688,10 @@
     "late_since": null,
     "measured": null,
     "name": "orders_feed",
-    "next_run": 1794927600,
+    "next_run": "2026-11-17T15:00:00Z",
     "no_estimate": null,
     "partitioned": false,
-    "prev_run": 1794926700,
+    "prev_run": "2026-11-17T14:45:00Z",
     "recheck_at": "2026-11-17T15:00:00Z",
     "refresh_path": {
       "live": true,
@@ -900,10 +929,10 @@
     "late_since": null,
     "measured": false,
     "name": "revenue_hourly",
-    "next_run": 1794927600,
+    "next_run": "2026-11-17T15:00:00Z",
     "no_estimate": "not_promised",
     "partitioned": false,
-    "prev_run": 1794924000,
+    "prev_run": "2026-11-17T14:00:00Z",
     "recheck_at": "2026-11-17T15:00:00Z",
     "refresh_path": {
       "live": true,

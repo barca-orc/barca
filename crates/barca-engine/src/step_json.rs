@@ -58,7 +58,8 @@ pub(crate) fn build_step_json(item: &Item, coord: &Coordinator) -> serde_json::V
 
     // A key of a batched call (RFC-0013): which inputs come from the same key of a partitioned
     // upstream, so the call passes them as a dict of key to value (or a lazy table).
-    let aligned: Vec<&String> = if coord.call_id(item.id).is_some() {
+    let batched = coord.takes_keys(item.id);
+    let aligned: Vec<&String> = if batched {
         let mut a: Vec<&String> = item
             .spec
             .upstream_inputs
@@ -105,8 +106,11 @@ pub(crate) fn build_step_json(item: &Item, coord: &Coordinator) -> serde_json::V
             .and_then(|g| coord.group(g).result_dir.as_ref())
             .map(|dir| dir.join(item.id.0.to_string())),
     });
-    if coord.call_id(item.id).is_some() {
+    if batched {
         step["aligned_inputs"] = serde_json::json!(aligned);
+        // Sent with the call that has it. The worker reads this when the step arrives
+        // without one: its function takes a list of keys, so it makes a call of this key.
+        step["batched"] = serde_json::json!(true);
     }
     step
 }

@@ -189,8 +189,8 @@ server's ledger use normal validation. Batching controls function calls independ
 
 ## Disk use
 
-`.barca/` has a size limit (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
-evicts down to it after every run; what counts, what is evicted in which order and how the
+`.barca/` has an eviction target (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
+works toward it after every run; what counts, what is evicted in which order and how the
 metadata database keeps to its share are in `barca docs disk`.
 
 ## Environments
@@ -238,6 +238,82 @@ BARCA_REQUIRE_ENV=1 barca history --env prod   # what a box that requires --env 
 The project root, the `.barca/` directory, several barca processes in one project, what a run
 records while it goes and after it is killed, and what an upgrade recomputes are in
 `barca docs layout`.
+
+## Read completed results without running
+
+`barca get total pipeline.py --cached-only` reads the latest successful materialization
+recorded in the selected environment, even when stale. It does not import pipeline source,
+execute sensors/assets/tasks, enqueue or record a run, publish results, retry pending uploads,
+or consult a server's remote ledger. Ordinary `get` is unchanged.
+
+Lookup is disk, then the configured artifact store, then a typed miss. Use
+`barca get total pipeline.py --cached-only=local` for disk only: no store calls, including
+metadata probes. `--local` still selects this machine; `--server` asks the server to perform
+these same tiers on its own records, disk and store. The cache-only tier is independent of
+where the command runs. `barca.get("total", "pipeline.py", cached_only=True)` returns the
+value; `cached_only="local"` chooses the strict tier.
+
+JSON contains `outcomes` for every selected node/key and `final_output` in the requested
+output mode. A hit reports `node`, `partition` (null when unpartitioned), `run_hash`, `format`,
+`size_bytes`, `path`, `fresh`, and `source` (`disk` or `store`). Freshness uses static source
+and recorded inputs, not live sensor values. Failed/in-progress attempts never replace the
+latest success. A miss reports `status: "miss"` and `reason`: `never_run`, `evicted`, or
+`not_fetched` when local-only excluded a recorded store copy. Any miss fails the whole call:
+exit 1, stderr kind `cache_miss`, and Python `barca.CacheMiss` with `outcomes` and `missing`.
+No automatic fallback starts work. Authorization, transport, filesystem, size and hash errors
+are infra failures (exit 3), never misses. An absent object in a reachable store is evicted.
+
+`--partition` selects only those keys, including explicit keys with no recorded success.
+Literal domains can discover never-run keys; dynamic expressions are not evaluated. Without
+complete explicit coordinates, dynamic domains use only recorded keys. An undiscoverable
+empty domain requires explicit coordinates. A selection never starts work to discover keys.
+
+Reads retain a completed inode in process-owned staging while validating and reading it;
+GC protects that active read for the process lifetime, including reads longer than five minutes.
+Across filesystems, a private copy from one open source handle replaces the hard link. Path output names an immutable
+local cache reference under `.barca/sql-cache/`, subject to GC after its five-minute read grace;
+it is not a permanent lease. `path_scope: "server"` identifies paths on the server, which a
+remote caller may not access. Use `-o value` for remote JSON values or `-o url` for a signed
+cloud object URL. URL output never uploads missing objects and cannot be combined with
+`--cached-only=local`, since signing can contact storage. Both tiers update last-read times;
+fetched files and retained references count toward the cache's disk budget.
+
+Cache-only conflicts with refresh, dry-run, batch, queue and allow-paused flags. It does not
+honor pins as an alternative version: its answer is always the latest success. Content digests
+in the answer, bounded remote binary access and results recorded only by another machine
+remain outside this first version.
+
+Cached value access accepts JSON/parquet/CSV and pickle representations made only of plain
+Python data. Pickle globals, custom classes, reducers, extension/persistent references and
+reconstruction hooks are refused before unpickling, with infra reason
+`cached_value_unsupported`. This includes library-class pickles that need reconstruction;
+use an artifact path or a data format such as parquet. Path access still returns the verified
+artifact. No fallback imports project source or runs a normal get. Ordinary get's pickle
+reader is unchanged.
+### Refreshes across a server restart
+
+`--refresh-all` and `--refresh` require a matching successful materialization recorded at or
+after the request was accepted. The acceptance time survives a drain/restart: completed
+assets and partition keys are reused, including results another run computed after acceptance.
+A new request gets a new acceptance time. Older results or changed run hashes still compute;
+selective cascade and cutoff rules are unchanged. A fully cached step satisfied by that
+boundary has reason `refreshed_by_this_run`. Tasks outside ticks can repeat, including side
+effects; this is not an exactly-once guarantee. See `barca docs serve-ops`.
+
+
+### Failed refreshes and cache-aware retries
+
+Before a refresh executes, successful results older than its acceptance time in the planned
+refresh scope become ineligible for ordinary cache reuse. This includes downstream steps
+that a failure prevents from running. A cache-aware retry therefore computes the missing
+results from the refreshed inputs instead of reviving pre-refresh successes, even after a
+restart or another failed retry. New successes remain reusable.
+
+Partition selection, cutoff boundaries, held nodes and explicit pins still constrain the
+scope. `--no-cascade` and consumers outside the requested cone remain unchanged. Historical
+rows stay available for inspection and explicit pins. Against a remote ledger, the server
+must acknowledge invalidation before computation starts; upgrade an older server that does
+not support it. Ordinary cache reads do not need this handshake.
 
 See also: `barca docs disk`, `barca docs layout`, `barca docs remote`, `barca docs types`,
 `barca docs partitions`, `barca docs status`, `barca docs server-mode`, `barca docs contract`.

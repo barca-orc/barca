@@ -407,8 +407,39 @@ fn extract_type_annotations(
 /// Map a type annotation expression to a supported [`ValueType`].
 fn parse_value_type_expr(expr: &Expr) -> Option<ValueType> {
     match expr {
-        Expr::StringLiteral(s) => parse_type_path(&s.value.to_string()),
+        Expr::StringLiteral(s) => {
+            let parsed = ruff_python_parser::parse_expression(s.value.to_str()).ok()?;
+            parse_value_type_expr(&parsed.syntax().body)
+        }
+        Expr::BinOp(bin) if bin.op == ast::Operator::BitOr => {
+            if matches!(bin.left.as_ref(), Expr::NoneLiteral(_)) {
+                parse_value_type_expr(&bin.right)
+            } else if matches!(bin.right.as_ref(), Expr::NoneLiteral(_)) {
+                parse_value_type_expr(&bin.left)
+            } else {
+                None
+            }
+        }
         Expr::Subscript(sub) => {
+            let name = dotted_expr(&sub.value)?;
+            if matches!(name.as_str(), "Optional" | "typing.Optional") {
+                return parse_value_type_expr(&sub.slice);
+            }
+            if matches!(name.as_str(), "Union" | "typing.Union") {
+                let Expr::Tuple(types) = sub.slice.as_ref() else {
+                    return None;
+                };
+                let mut values = types
+                    .elts
+                    .iter()
+                    .filter(|t| !matches!(t, Expr::NoneLiteral(_)));
+                let value = values.next()?;
+                return if values.next().is_none() {
+                    parse_value_type_expr(value)
+                } else {
+                    None
+                };
+            }
             // list[pl.DataFrame] from collect() fan-in params.
             if is_list_annotation(sub.value.as_ref()) {
                 parse_value_type_expr(&sub.slice)
@@ -450,7 +481,7 @@ fn classify_type(module: &str, name: &str) -> Option<ValueType> {
         ("pl" | "polars", "DataFrame") => Some(ValueType::Polars),
         ("pl" | "polars", "LazyFrame") => Some(ValueType::PolarsLazy),
         ("pd" | "pandas", "DataFrame") => Some(ValueType::Pandas),
-        ("pyarrow", "Table") => Some(ValueType::PyArrow),
+        ("pa" | "pyarrow", "Table") => Some(ValueType::PyArrow),
         ("ds" | "pads" | "pyarrow.dataset" | "pa.dataset", "Dataset") => {
             Some(ValueType::PyArrowDataset)
         }
@@ -1538,6 +1569,40 @@ def collected(parts: list[pl.DataFrame]) -> pl.DataFrame:
 
         assert_eq!(nodes[2].return_type, Some(ValueType::Polars));
         assert_eq!(nodes[2].param_types.get("parts"), Some(&ValueType::Polars));
+    }
+
+    #[test]
+    fn optional_annotations_keep_the_inner_reader_without_guessing_unions() {
+        for annotation in [
+            "list[ds.Dataset] | None",
+            "None | list[ds.Dataset]",
+            "Optional[list[ds.Dataset]]",
+            "typing.Optional[list[ds.Dataset]]",
+            "Union[list[ds.Dataset], None]",
+            "typing.Union[None, list[ds.Dataset]]",
+            "list[Optional[ds.Dataset]]",
+            "dict[str, ds.Dataset | None]",
+            "\"list[ds.Dataset] | None\"",
+        ] {
+            let parsed = ruff_python_parser::parse_expression(annotation).unwrap();
+            assert_eq!(
+                parse_value_type_expr(&parsed.syntax().body),
+                Some(ValueType::PyArrowDataset),
+                "{annotation}"
+            );
+        }
+        for annotation in [
+            "ds.Dataset | pd.DataFrame",
+            "Union[ds.Dataset, pd.DataFrame, None]",
+            "ds.Dataset | int | None",
+        ] {
+            let parsed = ruff_python_parser::parse_expression(annotation).unwrap();
+            assert_eq!(
+                parse_value_type_expr(&parsed.syntax().body),
+                None,
+                "{annotation}"
+            );
+        }
     }
 
     #[test]

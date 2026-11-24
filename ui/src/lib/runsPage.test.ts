@@ -102,7 +102,7 @@ describe('run list telemetry', () => {
 
   it('labels a bar with what the server says of its hour, and ticks the axis', () => {
     // `activity.hours` of `GET /runs`: 24 hours of UTC, counted by the server.
-    const counts = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+    const counts = { success: 0, failed: 0, pending: 0, cancelled: 0, interrupted: 0, running: 0 }
     const triggers = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
     const start = Date.parse('2026-10-28T13:00:00Z')
     const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')

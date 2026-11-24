@@ -65,7 +65,7 @@ class Materializations:
             if steps is None:
                 view = get(self.port, f"/runs/{run_id}?all=true")
                 steps = [(s["node_id"].rsplit(":", 1)[1], s["status"]) for s in view["steps"]]
-                if view["status"] not in LIVE:
+                if view["run"]["status"] not in LIVE:
                     self.finished[run_id] = steps
             counts.update(node for node, s in steps if s == status)
         return dict(counts)
@@ -279,7 +279,7 @@ class Serve:
         """`GET /runs/{id}` once the run has ended."""
         return self.wait(
             f"run {run_id} to end",
-            lambda: (r := self.get(f"/runs/{run_id}"))["status"] not in LIVE and r,
+            lambda: (r := self.get(f"/runs/{run_id}"))["run"]["status"] not in LIVE and r,
         )
 
 

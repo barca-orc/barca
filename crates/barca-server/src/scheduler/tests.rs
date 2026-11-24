@@ -124,7 +124,7 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
     config.resolved.db_path = dir.path().join("metadata.db").to_string_lossy().into();
     let state = AppState::new(config);
     let held = db::db_guard().await;
-    let task = tokio::spawn(run_scheduler(state.clone()));
+    let task = spawn(state.clone());
     // The initial selected graph is published before scheduler DB admission.
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
         while state.reads.sources.loaded.lock().await.is_none() {
@@ -149,6 +149,41 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
             .len(),
         2
     );
+    let health = || crate::state_routes::health(axum::extract::State(state.clone()));
+    tokio::time::timeout(std::time::Duration::from_secs(5), async {
+        while health()
+            .await
+            .scheduler_liveness
+            .as_ref()
+            .unwrap()
+            .operation
+            .as_deref()
+            != Some("init_db")
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("scheduler did not reach init_db");
+    // Hold through a startup deadline. A busy ledger is retried by this task.
+    tokio::time::timeout(std::time::Duration::from_secs(8), async {
+        loop {
+            let h = health().await;
+            let live = h.scheduler_liveness.as_ref().unwrap();
+            assert!(h.scheduler_enabled);
+            assert_eq!(live.restart_count, 0);
+            if live
+                .reason
+                .as_deref()
+                .is_some_and(|r| r.contains("retrying init_db"))
+            {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("scheduler retried startup metadata");
     drop(held);
     let repaired = tokio::time::timeout(std::time::Duration::from_secs(5), async {
         loop {
@@ -166,6 +201,10 @@ async fn startup_db_admission_cannot_acknowledge_a_source_generation_it_did_not_
         }
     })
     .await;
+    assert_eq!(
+        health().await.status,
+        barca_service::served::HealthStatus::Ok
+    );
     task.abort();
     let _ = task.await;
     repaired.expect("startup swallowed the repaired source generation");
@@ -384,7 +423,6 @@ fn get_schedule_reports_next_fire_in_the_servers_zone() {
             an_instant(),
             &Default::default()
         ));
-        let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
         assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
         assert_eq!(body[0]["id"], "f.py:daily");
     }
@@ -446,7 +484,7 @@ fn a_run_of_the_node_is_in_flight_only_while_pending_or_running() {
     for (status, in_flight) in [
         (RunStatus::Pending, true),
         (RunStatus::Running, true),
-        (RunStatus::Complete, false),
+        (RunStatus::Success, false),
         (RunStatus::Failed, false),
         (RunStatus::Cancelled, false),
     ] {
@@ -601,7 +639,7 @@ async fn a_skip_is_published_to_get_schedule() {
         an_instant(),
         &Default::default()
     ));
-    assert_eq!(body[0]["last_skipped"], 1_234);
+    assert_eq!(body[0]["last_skipped"], "1970-01-01T00:20:34Z");
     assert_eq!(body[0]["skipped_for"], "api");
     assert_eq!(body[0]["skip_reason"], "in_flight");
     assert_eq!(body[0]["paused"], false);
@@ -686,7 +724,7 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
     assert_eq!(tick_outcome(&st.runs.registry.get("p").unwrap(), &j), None);
     finished(&st, "c", RunStatus::Cancelled, &[]);
     assert_eq!(tick_outcome(&st.runs.registry.get("c").unwrap(), &j), None);
-    finished(&st, "ok", RunStatus::Complete, &[]);
+    finished(&st, "ok", RunStatus::Success, &[]);
     assert_eq!(
         tick_outcome(&st.runs.registry.get("ok").unwrap(), &j),
         Some(vec![])
@@ -741,7 +779,7 @@ async fn consecutive_failed_ticks_add_up_and_a_success_clears_them() {
         book.failures["f.py:s"].failed_nodes,
         vec!["f.py:report".to_string()]
     );
-    finished(&st, "c", RunStatus::Complete, &[]);
+    finished(&st, "c", RunStatus::Success, &[]);
     book.last_handle.insert("f.py:s".into(), "c".into());
     assert!(count_outcomes(&st, &jobs, &mut book, None).await);
     assert_eq!(book.failures(&jobs[0]), 0);
@@ -797,7 +835,7 @@ fn plan_tick_skips_for_a_run_started_over_http() {
     assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
 
     // Once it finishes, the next due tick fires.
-    st.runs.registry.get_mut("api").unwrap().status = RunStatus::Complete;
+    st.runs.registry.get_mut("api").unwrap().status = RunStatus::Success;
     let plan = plan_tick(
         &at(5, 0),
         &jobs,
@@ -1453,7 +1491,7 @@ async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
     record_tick(&path, &j, 60, db::TickDecision::Paused, None).await;
     record_tick(&path, &j, 120, db::TickDecision::Skipped, Some("run-x")).await;
     record_tick(&path, &j, 180, db::TickDecision::Failing, None).await;
-    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+    let handle = fire(&st, &j, 240).await.unwrap();
 
     let done = finished_tick(&path, &j).await;
     let rows = ticks(&path, &j).await;
@@ -1478,7 +1516,7 @@ async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
     // so reached none of the tick's targets.
     assert!(done.started_at.is_some() && done.queue_wait_seconds.is_some());
     assert!(done.finished_at >= done.started_at);
-    assert_eq!(done.run_status.as_deref(), Some("error"));
+    assert_eq!(done.run_status.as_deref(), Some("failed"));
     assert_eq!(
         done.targets,
         Some(vec![(j.id.clone(), db::TickTargetOutcome::NotReached)])
@@ -1558,7 +1596,7 @@ async fn queue_wait_runs_from_joining_the_queue_to_the_runs_start() {
     let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
-    let handle = fire(&st, &j, 240, Some(&path)).await.unwrap();
+    let handle = fire(&st, &j, 240).await.unwrap();
     let queued_at = st.runs.registry.get(&handle).unwrap().started_at;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
     let waiting = &ticks(&path, &j).await[0];
@@ -1589,8 +1627,8 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
         .await
         .unwrap();
-    let q = fire(&st, &queued, 240, Some(&path)).await.unwrap();
-    let k = fire(&st, &killed, 240, Some(&path)).await.unwrap();
+    let q = fire(&st, &queued, 240).await.unwrap();
+    let k = fire(&st, &killed, 240).await.unwrap();
     // `killed`'s run had started when the server was killed: its queue row says `running`.
     db::record_tick_started(&path, &killed.id, 240, &k, 241.0, 1.0)
         .await
@@ -1616,7 +1654,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let st = state_at(&path);
     crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
-    assert_eq!(row.run_status.as_deref(), Some("error"));
+    assert_eq!(row.run_status.as_deref(), Some("interrupted"));
     assert_eq!(
         (row.started_at, row.queue_wait_seconds),
         (Some(241.0), Some(1.0))
@@ -1672,4 +1710,679 @@ async fn a_run_nobody_scheduled_writes_no_tick() {
     }
     assert!(st.runs.registry.get(&handle).unwrap().finished_at.is_some());
     assert!(ticks(&path, &j).await.is_empty());
+}
+
+#[tokio::test(start_paused = true)]
+async fn supervisor_reports_exit_and_restart_then_stops_for_drain() {
+    let st = app_state();
+    let (started, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = tokio::spawn(supervise(st.clone(), move |state| {
+        let started = started.clone();
+        async move {
+            let attempt = state.scheduling.progress.snapshot().unwrap().restart_count;
+            started.send(attempt).unwrap();
+            if attempt == 0 {
+                panic!("scheduler test failure");
+            }
+            state.lifecycle.draining.cancelled().await;
+            Ok("draining")
+        }
+    }));
+    assert_eq!(attempts.recv().await, Some(0));
+    let health = || crate::state_routes::health(axum::extract::State(st.clone()));
+    wait_for_backoff(&st).await;
+    assert_eq!(
+        health().await.status,
+        barca_service::served::HealthStatus::Degraded
+    );
+    assert_eq!(attempts.recv().await, Some(1));
+    let h = health().await;
+    assert_eq!(h.status, barca_service::served::HealthStatus::Ok);
+    let live = h.0.scheduler_liveness.unwrap();
+    assert_eq!(live.restart_count, 1);
+    assert!(
+        live.last_exit_reason
+            .unwrap()
+            .contains("scheduler test failure")
+    );
+    st.lifecycle.draining.cancel();
+    supervisor.await.unwrap();
+    assert_eq!(attempts.recv().await, None);
+    assert_eq!(
+        health()
+            .await
+            .scheduler_liveness
+            .as_ref()
+            .unwrap()
+            .restart_count,
+        1
+    );
+}
+
+#[tokio::test]
+async fn restart_after_enqueue_before_cursor_write_preserves_root_and_pause() {
+    let (_dir, st, path) = recording_state().await;
+    st.scheduling.progress.start();
+    let jobs = [
+        job("f.py:daily", NodeKind::Asset, "0 6 * * *"),
+        job("f.py:paused", NodeKind::Asset, "0 6 * * *"),
+    ];
+    let before = utc(2, 5, 0);
+    let due = utc(2, 6, 0);
+    catch_up(&st, &[], &jobs, &Zone::Utc, &before, &path)
+        .await
+        .unwrap();
+    let pause = db::SchedulePause {
+        paused_at: before.timestamp(),
+        until: None,
+    };
+    db::set_schedule_pause(&path, &jobs[1].id, Some(pause), before.timestamp())
+        .await
+        .unwrap();
+    let root = fire(&st, &jobs[0], due.timestamp()).await.unwrap();
+    finished_tick(&path, &jobs[0]).await;
+    // A fresh process has no in-memory claim. Its durable cursor was committed with the root.
+    let st = state_at(&path);
+    st.scheduling.progress.start();
+    let book = catch_up(&st, &[], &jobs, &Zone::Utc, &utc(2, 7, 0), &path)
+        .await
+        .unwrap();
+    assert!(book.last_handle.is_empty());
+    assert_eq!(
+        st.scheduling.progress.snapshot().unwrap().last_due_slot,
+        Some(due.timestamp())
+    );
+    let records = ticks(&path, &jobs[0]).await;
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].run_id.as_deref(), Some(root.as_str()));
+    assert_eq!(
+        ticks(&path, &jobs[1]).await[0].action,
+        db::TickDecision::Paused
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn idle_heartbeat_waiting_for_metadata_has_a_three_period_grace() {
+    use barca_service::served::HealthStatus;
+    use std::time::Duration;
+    let state = app_state();
+    let held = db::db_guard().await;
+    state.scheduling.progress.beat();
+    let writer = state.clone();
+    let blocked = tokio::spawn(async move {
+        drop(
+            writer
+                .scheduling
+                .progress
+                .waiting("heartbeat", db::db_guard())
+                .await,
+        );
+        writer.scheduling.progress.beat();
+    });
+    tokio::task::yield_now().await;
+    let health = || crate::state_routes::health(axum::extract::State(state.clone()));
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt;
+    let router = crate::routes::router(state.clone());
+    let response = router
+        .clone()
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let etag = response.headers()[header::ETAG].clone();
+    let first = health().await.0.scheduler_liveness.unwrap();
+    assert_eq!(first.operation.as_deref(), Some("heartbeat"));
+    assert!(first.operation_started_at_ms.is_some());
+    tokio::time::advance(Duration::from_secs(10)).await;
+    let idle = health().await;
+    assert_eq!(idle.status, HealthStatus::Ok);
+    assert_eq!(idle.0.scheduler_liveness.unwrap(), first);
+    let response = router
+        .oneshot(
+            Request::get("/health")
+                .header(header::IF_NONE_MATCH, etag)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    tokio::time::advance(Duration::from_secs(51)).await;
+    assert_eq!(health().await.status, HealthStatus::Degraded);
+    drop(held);
+    blocked.await.unwrap();
+    assert_eq!(health().await.status, HealthStatus::Ok);
+}
+
+async fn wait_for_backoff(state: &AppState) {
+    for _ in 0..100 {
+        if state
+            .scheduling
+            .progress
+            .snapshot()
+            .is_some_and(|s| s.reason.is_some())
+        {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("scheduler did not enter restart backoff");
+}
+
+#[tokio::test(start_paused = true)]
+async fn drain_during_backoff_starts_no_replacement() {
+    let state = app_state();
+    let task = tokio::spawn(supervise(state.clone(), |_| async { Err("exited".into()) }));
+    wait_for_backoff(&state).await;
+    state.lifecycle.draining.cancel();
+    task.await.unwrap();
+    let view = state.scheduling.progress.snapshot().unwrap();
+    assert_eq!(view.restart_count, 0);
+    assert_eq!(view.last_exit_reason.as_deref(), Some("exited"));
+}
+
+#[tokio::test(start_paused = true)]
+async fn backoff_resets_after_a_long_lived_attempt() {
+    use tokio::time::{Duration, Instant};
+    let st = app_state();
+    let (started, mut attempts) = tokio::sync::mpsc::unbounded_channel();
+    let supervisor = tokio::spawn(supervise(st.clone(), move |state| {
+        let started = started.clone();
+        async move {
+            let attempt = state.scheduling.progress.snapshot().unwrap().restart_count;
+            started.send(Instant::now()).unwrap();
+            if attempt == 2 {
+                tokio::time::sleep(Duration::from_secs(600)).await;
+            }
+            if attempt == 3 {
+                return Ok("idle");
+            }
+            Err("exited".into())
+        }
+    }));
+    let first = attempts.recv().await.unwrap();
+    let second = attempts.recv().await.unwrap();
+    let third = attempts.recv().await.unwrap();
+    let fourth = attempts.recv().await.unwrap();
+    assert_eq!(second - first, Duration::from_secs(1));
+    assert_eq!(third - second, Duration::from_secs(2));
+    assert_eq!(fourth - third, Duration::from_secs(601));
+    supervisor.await.unwrap();
+}
+
+#[tokio::test]
+async fn idle_scheduler_keeps_health_etag_across_loop_iterations() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use std::time::Duration;
+    use tower::ServiceExt;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("pipeline.py");
+    std::fs::write(&source, "from barca import task, Schedule\n@task(freshness=Schedule('0 5 1 1 *'))\ndef yearly(): pass\n").unwrap();
+    let mut cfg = app_state().config.as_ref().clone();
+    cfg.files = vec![source.display().to_string()];
+    cfg.resolved.db_path = dir.path().join("metadata.db").display().to_string();
+    let state = AppState::new(cfg);
+    let task = spawn(state.clone());
+    let router = crate::routes::router(state.clone());
+    tokio::time::timeout(Duration::from_secs(5), async {
+        while state.scheduling.jobs.read().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("scheduler did not publish the yearly job");
+    let first = router
+        .clone()
+        .oneshot(Request::get("/health").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let tag = first.headers()[header::ETAG].clone();
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+    // Bookkeeping may be visible mid-iteration. Poll until the loop is idle again.
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let response = router
+                .clone()
+                .oneshot(
+                    Request::get("/health")
+                        .header(header::IF_NONE_MATCH, tag.clone())
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            if response.status() == StatusCode::NOT_MODIFIED {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("idle loop changed the health ETag");
+    state.lifecycle.draining.cancel();
+    task.await.unwrap();
+}
+
+#[tokio::test]
+async fn a_live_metadata_hold_preserves_slots_and_loop_heartbeat() {
+    use std::time::Duration;
+    let (dir, st, path) = recording_state().await;
+    let source = dir.path().join("pipeline.py");
+    std::fs::write(&source,"from barca import task, Schedule\n@task(freshness=Schedule('* * * * * *'))\ndef probe(): pass\n").unwrap();
+    let mut config = (*st.config).clone();
+    config.files = vec![source.display().to_string()];
+    let st = AppState::new(config);
+    let _ = crate::queue_routes::pause(axum::extract::State(st.clone()))
+        .await
+        .unwrap();
+    let scheduler = spawn(st.clone());
+    tokio::time::timeout(Duration::from_secs(10), async {
+        while st.scheduling.jobs.read().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    // The actual file lock isolates this hold from other tests' databases.
+    let held = std::fs::File::open(format!("{path}.lock")).unwrap();
+    held.try_lock().unwrap();
+    let first = Utc::now().timestamp() + 1;
+    let initial_beat = st
+        .scheduling
+        .progress
+        .snapshot()
+        .unwrap()
+        .heartbeat_at_ms
+        .unwrap();
+    let mut heartbeat_timeout = false;
+    // Span the persisted heartbeat as well as multiple every-second cron slots.
+    tokio::time::timeout(Duration::from_secs(25), async {
+        loop {
+            let live = st.scheduling.progress.snapshot().unwrap();
+            heartbeat_timeout |=
+                live.reason.as_deref() == Some("scheduler timed out waiting for heartbeat");
+            if heartbeat_timeout && live.heartbeat_at_ms.unwrap() > initial_beat {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let last = Utc::now().timestamp() - 1;
+    assert!(last - first >= 3);
+    drop(held);
+    tokio::time::timeout(Duration::from_secs(12), async {
+        while st.runs.registry.is_empty() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let runs: Vec<_> = st
+        .runs
+        .registry
+        .iter()
+        .map(|r| {
+            barca_service::time::parse_rfc3339(r.trigger.scheduled_at.as_deref().unwrap()).unwrap()
+        })
+        .collect();
+    assert_eq!(runs.len(), 1);
+    assert!(
+        runs[0] >= last,
+        "missed slots coalesce at the latest eligible slot"
+    );
+    scheduler.abort();
+}
+
+#[tokio::test(start_paused = true)]
+async fn failed_admission_retries_once_and_replay_respects_a_pause() {
+    let (_dir, st, path) = recording_state().await;
+    let jobs = [job("p.py:probe", NodeKind::Task, "*/2 * * * * *")];
+    let mut book = Bookkeeping::default();
+    let gate = st.runs.queue.admit.lock().await;
+    let cursor = evaluate_through(&st, &jobs, &mut book, &Zone::Utc, 99, 100, Some(&path)).await;
+    assert_eq!(cursor, 100);
+    assert_eq!(book.retries[&jobs[0].id].0, 100);
+    assert!(
+        st.scheduling
+            .progress
+            .snapshot()
+            .unwrap()
+            .reason
+            .unwrap()
+            .contains("trigger")
+    );
+    assert!(db::get_schedule_state(&path).await.unwrap().is_empty());
+    drop(gate);
+    for wall in [100, 100, 101] {
+        evaluate_through(&st, &jobs, &mut book, &Zone::Utc, 100, wall, Some(&path)).await;
+    }
+    assert_eq!(
+        db::get_schedule_state(&path).await.unwrap()[&jobs[0].id],
+        100
+    );
+    assert_eq!(book.last_fired[&jobs[0].id], 100);
+    assert_eq!(st.runs.registry.len(), 1);
+    let pauses = crate::schedule_view::pauses(&st).await.unwrap();
+    pauses.write().unwrap().insert(
+        jobs[0].id.clone(),
+        db::SchedulePause {
+            paused_at: 102,
+            until: Some(106),
+        },
+    );
+    evaluate_through(&st, &jobs, &mut book, &Zone::Utc, 101, 104, Some(&path)).await;
+    assert_eq!(st.runs.registry.len(), 1);
+    assert_eq!(
+        ticks(&path, &jobs[0])
+            .await
+            .iter()
+            .map(|t| (t.scheduled_at, t.action))
+            .collect::<Vec<_>>(),
+        vec![
+            (104, db::TickDecision::Paused),
+            (100, db::TickDecision::Fired)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn delayed_wakeup_between_cron_seconds_replays_the_open_closed_interval() {
+    let (_dir, state, path) = recording_state().await;
+    let jobs = [job("p.py:probe", NodeKind::Task, "*/2 * * * * *")];
+    let mut book = Bookkeeping::default();
+    // Neither wakeup lands on a matching cron second. Only the latest elapsed slot fires.
+    let cursor =
+        evaluate_through(&state, &jobs, &mut book, &Zone::Utc, 101, 105, Some(&path)).await;
+    assert_eq!(cursor, 105);
+    assert_eq!(
+        evaluate_through(
+            &state,
+            &jobs,
+            &mut book,
+            &Zone::Utc,
+            cursor,
+            105,
+            Some(&path)
+        )
+        .await,
+        105
+    );
+    assert_eq!(
+        ticks(&path, &jobs[0])
+            .await
+            .into_iter()
+            .map(|t| t.scheduled_at)
+            .collect::<Vec<_>>(),
+        vec![104]
+    );
+    assert_eq!(state.runs.registry.len(), 1);
+    assert_eq!(
+        state.scheduling.progress.snapshot().unwrap().last_due_slot,
+        Some(104)
+    );
+    assert_eq!(
+        db::get_schedule_state(&path).await.unwrap()[&jobs[0].id],
+        104
+    );
+}
+
+#[tokio::test]
+async fn long_replay_coalesces_and_checks_already_admitted_coverage() {
+    let (_dir, state, path) = recording_state().await;
+    state.runs.queue.set_paused(Some(1));
+    let mut first = job("p.py:first", NodeKind::Asset, "0 * * * * *");
+    first.followers.push("p.py:second".into());
+    let jobs = [first, job("p.py:second", NodeKind::Asset, "1 * * * * *")];
+    let mut book = Bookkeeping::default();
+    evaluate_through(&state, &jobs, &mut book, &Zone::Utc, 0, 28802, Some(&path)).await;
+    assert_eq!(state.runs.registry.len(), 1);
+    assert_eq!(book.last_fired[&jobs[0].id], 28800);
+    assert_eq!(book.last_skip[&jobs[1].id].0, 28801);
+    assert_eq!(book.last_skip[&jobs[1].id].1, "in_flight");
+}
+
+#[tokio::test]
+async fn cancelled_and_evicted_handles_do_not_hide_the_next_failure() {
+    let st = app_state();
+    let jobs = [job("p.py:probe", NodeKind::Task, "* * * * *")];
+    let mut book = Bookkeeping::default();
+    finished(&st, "cancelled", RunStatus::Cancelled, &[]);
+    finished(&st, "failed", RunStatus::Failed, &["p.py:probe"]);
+    for handle in ["cancelled", "evicted", "failed"] {
+        book.accepted(&jobs[0], handle.into());
+    }
+    assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+    assert_eq!(book.failures(&jobs[0]), 1);
+    assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
+}
+
+#[tokio::test]
+async fn lasting_admission_error_only_retries_the_affected_job() {
+    let (_dir, st, path) = recording_state().await;
+    st.runs.queue.set_paused(Some(1));
+    let jobs = [
+        job("p.py:bad", NodeKind::Task, "*/2 * * * * *"),
+        job("p.py:good", NodeKind::Task, "41 * * * * *"),
+    ];
+    {
+        let _guard = db::db_guard().await;
+        let (_db, conn) = db::open_conn(&path).await.unwrap();
+        conn.execute("CREATE TRIGGER reject_one BEFORE INSERT ON run_queue WHEN instr(NEW.spec,'p.py:bad') > 0 BEGIN SELECT RAISE(ABORT,'rejected job'); END",()).await.unwrap();
+    }
+    let mut book = Bookkeeping::default();
+    let mut cursor = 99;
+    for wall in 100..=102 {
+        cursor =
+            evaluate_through(&st, &jobs, &mut book, &Zone::Utc, cursor, wall, Some(&path)).await;
+        let health = crate::state_routes::health(axum::extract::State(st.clone())).await;
+        if wall == 102 {
+            assert_eq!(health.status, barca_service::served::HealthStatus::Ok);
+            continue;
+        }
+        assert_eq!(health.status, barca_service::served::HealthStatus::Degraded);
+        assert!(
+            health
+                .scheduler_liveness
+                .as_ref()
+                .unwrap()
+                .reason
+                .as_ref()
+                .unwrap()
+                .contains("rejected job")
+        );
+    }
+    assert_eq!(book.retries.get(&jobs[0].id), Some(&(102, 0)));
+    assert_eq!(book.last_fired[&jobs[0].id], 100);
+    assert_eq!(book.last_fired[&jobs[1].id], 101);
+    {
+        let _guard = db::db_guard().await;
+        let (_db, conn) = db::open_conn(&path).await.unwrap();
+        conn.execute("DROP TRIGGER reject_one", ()).await.unwrap();
+    }
+    evaluate_through(&st, &jobs, &mut book, &Zone::Utc, cursor, 109, Some(&path)).await;
+    assert_eq!(book.last_fired[&jobs[0].id], 108);
+    assert_eq!(st.runs.registry.len(), 2);
+    assert!(st.scheduling.progress.snapshot().unwrap().reason.is_none());
+}
+
+#[tokio::test]
+async fn backwards_clock_clamps_live_and_restart_cursors() {
+    let (_dir, st, path) = recording_state().await;
+    let jobs = [job("p.py:probe", NodeKind::Task, "*/2 * * * * *")];
+    db::upsert_schedule_state(&path, &jobs[0].id, 300)
+        .await
+        .unwrap();
+    let mut book = catch_up(
+        &st,
+        &[],
+        &jobs,
+        &Zone::Utc,
+        &Zone::Utc.timestamp(200),
+        &path,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        db::get_schedule_state(&path).await.unwrap()[&jobs[0].id],
+        200
+    );
+    let last = evaluate_through(&st, &jobs, &mut book, &Zone::Utc, 200, 100, Some(&path)).await;
+    assert_eq!(last, 100);
+    assert_eq!(
+        db::get_schedule_state(&path).await.unwrap()[&jobs[0].id],
+        100
+    );
+    evaluate_through(&st, &jobs, &mut book, &Zone::Utc, last, 102, Some(&path)).await;
+    assert_eq!(book.last_fired[&jobs[0].id], 102);
+    assert_eq!(st.runs.registry.len(), 1);
+}
+
+#[tokio::test]
+async fn edited_cron_discards_its_old_slot_and_admission_error() {
+    let (_dir, state, path) = recording_state().await;
+    let old = [job("p.py:probe", NodeKind::Task, "40 * * * * *")];
+    let fresh = [job("p.py:probe", NodeKind::Task, "41 * * * * *")];
+    let id = &old[0].id;
+    let mut book = Bookkeeping::default();
+    state.scheduling.progress.beat();
+    book.retries.insert(id.clone(), (100, 1));
+    state
+        .scheduling
+        .progress
+        .admission_failure(id, "old admission".into());
+    discard_changed_retries(&state, &mut book, &old, &old);
+    assert_eq!(book.retries.get(id), Some(&(100, 1)));
+    discard_changed_retries(&state, &mut book, &old, &fresh);
+    assert!(!book.retries.contains_key(id));
+    assert!(
+        state
+            .scheduling
+            .progress
+            .snapshot()
+            .unwrap()
+            .reason
+            .is_none()
+    );
+
+    // Also exercise a stale retry reaching the planner after a schedule edit.
+    book.retries.insert(id.clone(), (100, 1));
+    state
+        .scheduling
+        .progress
+        .admission_failure(id, "old admission".into());
+    evaluate_through(&state, &fresh, &mut book, &Zone::Utc, 100, 100, Some(&path)).await;
+    assert!(!book.retries.contains_key(id));
+    assert!(
+        state
+            .scheduling
+            .progress
+            .snapshot()
+            .unwrap()
+            .reason
+            .is_none()
+    );
+    evaluate_through(&state, &fresh, &mut book, &Zone::Utc, 100, 101, Some(&path)).await;
+    assert_eq!(book.last_fired[id], 101);
+    assert_eq!(state.runs.registry.len(), 1);
+}
+
+#[tokio::test]
+async fn json_compression_preserves_conditional_gets() {
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode, header},
+    };
+    use tower::ServiceExt;
+    let router = crate::routes::router(app_state());
+    let response = router
+        .clone()
+        .oneshot(
+            Request::get("/health")
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()[header::CONTENT_ENCODING], "gzip");
+    assert!(
+        response.headers()[header::VARY]
+            .to_str()
+            .unwrap()
+            .contains("accept-encoding")
+    );
+    let tag = response.headers()[header::ETAG].clone();
+    assert!(tag.to_str().unwrap().starts_with("W/"));
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..2], &[0x1f, 0x8b]);
+    let response = router
+        .oneshot(
+            Request::get("/health")
+                .header(header::IF_NONE_MATCH, tag)
+                .header(header::ACCEPT_ENCODING, "gzip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+    assert!(
+        axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[tokio::test]
+async fn explicit_task_skips_preserve_failure_streak_and_next_tick_runs() {
+    let st = app_state();
+    let jobs = vec![job("f.py:copy", NodeKind::Task, "* * * * *")];
+    let mut book = Bookkeeping::default();
+    finished(&st, "failed-before", RunStatus::Failed, &["f.py:copy"]);
+    book.last_handle
+        .insert(jobs[0].id.clone(), "failed-before".into());
+    assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+    assert_eq!(book.failures(&jobs[0]), 1);
+    for n in 0..5 {
+        let handle = format!("skip-{n}");
+        finished(&st, &handle, RunStatus::Skipped, &[]);
+        book.last_handle.insert(jobs[0].id.clone(), handle);
+        assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
+        assert_eq!(book.failures(&jobs[0]), 1);
+    }
+    finished(&st, "mixed", RunStatus::Success, &[]);
+    st.runs.registry.get_mut("mixed").unwrap().outcome = Some(
+        barca_service::outcome::Outcome::from_text(
+            r#"{"status":"success","steps":[{"id":"f.py:copy[key=a]","status":"skipped","skip_reason":"locked"},{"id":"f.py:other","status":"ran"}]}"#
+        ).unwrap()
+    );
+    assert_eq!(
+        tick_outcome(&st.runs.registry.get("mixed").unwrap(), &jobs[0]),
+        None
+    );
+    st.runs.registry.get_mut("mixed").unwrap().status = RunStatus::Failed;
+    assert!(
+        tick_outcome(&st.runs.registry.get("mixed").unwrap(), &jobs[0])
+            .is_some_and(|failed| !failed.is_empty())
+    );
+    let plan = plan_tick(&at(5, 0), &jobs, |_| false, |_| None, |j| book.failures(j));
+    assert_eq!(fired_ids(&plan), vec!["f.py:copy"]);
+    finished(&st, "next-success", RunStatus::Success, &[]);
+    book.last_handle
+        .insert(jobs[0].id.clone(), "next-success".into());
+    assert!(count_outcomes(&st, &jobs, &mut book, None).await);
+    assert_eq!(book.failures(&jobs[0]), 0);
 }

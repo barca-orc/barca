@@ -180,3 +180,63 @@ def test_config_diagnostics_do_not_echo_secret_source_lines(tmp_path):
     proc = cli(tmp_path, "--json", code=3)
     assert "private-source-secret" not in proc.stdout + proc.stderr
     assert "configuration" in proc.stdout
+
+
+def test_doctor_reports_a_degraded_scheduler(tmp_path):
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            health = {
+                "api_version": 1,
+                "status": "degraded",
+                "scheduler": True,
+                "scheduler_enabled": True,
+                "scheduler_liveness": {"reason": "scheduler heartbeat is stale"},
+            }
+            self.send_response(200 if self.path == "/health" else 404)
+            self.end_headers()
+            self.wfile.write(json.dumps(health).encode())
+
+    with HTTPServer(("127.0.0.1", 0), Handler) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            _, result = checks(
+                cli(
+                    tmp_path, "--server", f"http://127.0.0.1:{server.server_port}", "--json", code=3
+                )
+            )
+        finally:
+            server.shutdown()
+            thread.join()
+    for name in ["server_health", "server_scheduler"]:
+        assert result[name]["ok"] is False
+        assert "degraded: scheduler heartbeat is stale" in result[name]["detail"]
+
+
+def test_probe_cannot_skip_an_existing_project_requirement(tmp_path):
+    import stat
+
+    (tmp_path / "pipeline.py").write_text("from barca import asset\n@asset()\ndef a(): return 1\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\ndependencies = ["barca>=99"]\n')
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    fake_binary = fake_bin / "barca"
+    shutil.copy2(_find_binary(), fake_binary)
+    fake_python = fake_bin / "python3"
+    payload = {
+        "python": {"executable": "fake", "version": "3.14", "barca_version": __version__},
+        "stores": [],
+    }
+    for missing in (True, False):
+        if not missing:
+            payload["project_version"] = None
+        fake_python.write_text("#!/bin/sh\nprintf '%s\\n' '" + json.dumps(payload) + "'\n")
+        fake_python.chmod(fake_python.stat().st_mode | stat.S_IXUSR)
+        _, by_name = checks(
+            cli(tmp_path, "--json", code=3, binary=str(fake_binary), BARCA_REMOTE="off")
+        )
+        assert not by_name["python"]["ok"]
+        assert "invalid doctor helper output" in by_name["python"]["detail"]

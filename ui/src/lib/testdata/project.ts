@@ -96,7 +96,7 @@ function found<T>(value: T | undefined, what: string): T {
  * the list-row words `barca-service` gives for exactly those facts.
  */
 export interface RunScenario {
-  run: Pick<RunView, 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & Pick<RunSummary, 'first_failure'>
+  run: Pick<RunView['run'], 'status' | 'target' | 'job' | 'triggered_by' | 'principal' | 'attempts' | 'retries' | 'steps_total' | 'steps_executed' | 'steps_cached' | 'started_at' | 'plan_reasons' | 'cancellation' | 'error'> & { first_failure: { node_id: string; error: string } | null }
   nodes: RunNodeSummary[]
   explanation: RunExplanation
   line: RunLine
@@ -138,7 +138,7 @@ export function root(id: string): RollupRoot {
 
 /** The run list row of run `id`. */
 export function runRow(id: string): RunSummary {
-  return found(RUNS.runs.find((r) => r.id === id), `run ${id}`)
+  return found(RUNS.runs.find((r) => r.run_id === id), `run ${id}`)
 }
 
 /** The detail of run `id` (one of `RUN_IDS`). */

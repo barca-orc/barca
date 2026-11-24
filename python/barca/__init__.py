@@ -12,12 +12,13 @@ from typing import TYPE_CHECKING, Any, Literal, TypeVar, overload
 
 from barca._batch import Failed
 from barca._branches import BranchResultError, ParallelError, parallel, parallel_map
+from barca._skip import Skip
 
 if TYPE_CHECKING:
-    from barca.api import BarcaError, get, history, plan, run, signed_url, sql, stats
+    from barca.api import BarcaError, CacheMiss, get, history, plan, run, signed_url, sql, stats
     from barca.client import Client, Run
 
-__version__ = "0.46.0"
+__version__ = "0.46.4"
 
 __all__ = [
     "group",
@@ -35,6 +36,7 @@ __all__ = [
     "batches",
     "batches_by",
     "Failed",
+    "Skip",
     "collect",
     "asset_ref",
     "parallel",
@@ -50,6 +52,7 @@ __all__ = [
     "sql",
     "signed_url",
     "BarcaError",
+    "CacheMiss",
     "Client",
     "Run",
 ]
@@ -309,6 +312,9 @@ def task[F: Callable[..., Any]](
     may appear anywhere in the graph and may depend on assets, sensors, or other
     tasks, but must not be an input to an asset or sensor.
 
+    Raise `Skip(reason)` from the task body to record a skipped attempt without a result
+    or retry. Scheduled skips neither increment nor reset the failure streak.
+
     A `@task(freshness=Schedule("<cron>"))` is the simplest way to run something
     on a timer: leave `barca serve` running and it fires on each cron tick (see
     the Scheduling guide). See `asset` for `env`, `weight`, `retries` and
@@ -432,6 +438,7 @@ def duckdb_connection() -> Any:
 # `barca.client` bring in urllib, http.client and ssl, about half of a worker's start-up (#560).
 _LAZY = {
     "BarcaError": "barca.api",
+    "CacheMiss": "barca.api",
     "get": "barca.api",
     "history": "barca.api",
     "plan": "barca.api",

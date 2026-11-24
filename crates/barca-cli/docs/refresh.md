@@ -45,6 +45,9 @@ command would run without running it.
   upstream hashes, not output contents, so a cached downstream asset still matches and the
   refreshed data never reaches it. Barca prints
   `warning: 'mid' was served from cache but depends on refreshed 'src' ...` when this happens.
+  Partitioned consumers report this once per node when any cached keys depend on the
+  refresh, and the warning propagates through cached consumers to downstream fan-ins.
+  Dry-run reports carry the same warning.
   `--no-cascade` without `--refresh` is a usage error (exit 2).
 - With `--partition`, only the selected keys of every partitioned node with that dimension are
   planned, upstream and downstream, so `--refresh` of any of them recomputes only those keys. A
@@ -90,6 +93,23 @@ it in that target's cone re-runs.
 
 Never delete files under `.barca/` to force a recompute: `--refresh` also keeps the metadata DB
 consistent. To look at a cached result, use `barca sql` (`barca docs sql`).
+
+### Run options in the web UI
+
+A plain **Run** brings the asset DAG up to date. **Including Manual**, unchecked by default,
+also brings Manual assets up to date and runs Manual upstream tasks. Current asset results
+still use the cache; tasks execute when included.
+**Hard refresh** is the explicit `--refresh-all` operation: it recomputes the whole cone,
+including Manual nodes, regardless of the cache. Its confirmation lists the Manual nodes in
+scope. It is not needed to make a plain run fresh.
+
+Server requests hold paused upstreams, including during hard refresh. A paused input without
+a readable result fails the run instead of computing it. Confirming a run of a paused target
+allows that target only; other paused inputs stay held. Paused targets in whole-file/project
+runs are skipped. Assets pinned with `barca pin` remain pinned under every option.
+
+The HTTP request uses `include_manual: true` for Including Manual and `refresh_all: true` for
+hard refresh. Dry runs and requests recovered after a server restart use the same rules.
 
 ### A `Manual` upstream is read as it is
 
@@ -177,5 +197,15 @@ its `detail` says so. `summary` counts steps, one per partition key.
 A dry run makes the same decisions a real run makes (it calls the same code), and the test suite
 checks that `will_run` equals the real run's `steps_executed` across cold, warm, `--refresh`,
 `--refresh --no-cascade` and `--refresh-all` runs.
+
+## Restarted and queued requests
+
+A refresh is satisfied by a successful result with the current run hash recorded at or after
+the request was accepted. The original acceptance time survives server retries. This applies
+per asset and per partition key, including results another run computed while this request
+waited. Fully cached steps satisfied this way have reason `refreshed_by_this_run`; earlier
+results and changed hashes still run. Selective cascade and cutoff rules remain unchanged.
+Tasks outside scheduled ticks can repeat after a restart, including completed side effects;
+refresh does not promise exactly-once task execution. See `barca docs serve-ops`.
 
 See also: `barca docs cache`, `barca docs partitions`, `barca docs status`, `barca docs hashing`.

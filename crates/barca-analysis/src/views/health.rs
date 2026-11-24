@@ -504,6 +504,7 @@ impl LastCheck {
             TickTargetOutcome::Rebuilt => "rebuilt",
             TickTargetOutcome::UpToDate => "up to date",
             TickTargetOutcome::Failed => "failed",
+            TickTargetOutcome::Skipped => "skipped",
             TickTargetOutcome::NotReached => "not reached",
         }
     }
@@ -554,6 +555,8 @@ pub struct Checks {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum LastAttempt {
+    /// The latest task invocation explicitly skipped without a result.
+    Skipped,
     /// No execution is recorded for it (`last_materialization` is `null`).
     #[default]
     NeverRun,
@@ -569,6 +572,12 @@ impl LastAttempt {
     pub fn of(node: &NodeStatus) -> Self {
         if last_attempt_failed(node) {
             LastAttempt::Failed
+        } else if node
+            .last_materialization
+            .as_ref()
+            .is_some_and(|m| m.status == "skipped")
+        {
+            LastAttempt::Skipped
         } else if node.last_materialization.is_none() {
             LastAttempt::NeverRun
         } else {
@@ -596,6 +605,6 @@ pub(crate) fn keys_failed(node: &NodeStatus) -> bool {
 /// When `created_at` (UTC `YYYY-MM-DD HH:MM:SS`, as materializations record it) was, unix
 /// seconds. A time that cannot be read is the end of time: newer than any check.
 pub(crate) fn recorded_at(created_at: &str) -> i64 {
-    chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S")
+    chrono::NaiveDateTime::parse_from_str(created_at, "%Y-%m-%d %H:%M:%S%.f")
         .map_or(i64::MAX, |at| at.and_utc().timestamp())
 }

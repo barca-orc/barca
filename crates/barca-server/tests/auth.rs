@@ -85,6 +85,7 @@ async fn every_api_path_and_method_authenticates_before_dispatch_or_etag() {
             "/state",
             "/ledger/lookup",
             "/ledger/runs",
+            "/ledger/refresh",
             "/runs/missing/events",
             "/events/missing",
             "/queue",
@@ -364,20 +365,73 @@ async fn a_run_records_its_requesting_token_and_reason_and_who_cancelled_it() {
         .to_string();
     let path = format!("/runs/{run_id}");
     let queued = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
-    assert_eq!(queued["principal"], "token:ci-bot");
-    assert_eq!(queued["trigger_reason"], "backfill");
+    assert_eq!(queued["run"]["principal"], "token:ci-bot");
+    assert_eq!(queued["run"]["trigger_reason"], "backfill");
     let cancel = call(&router, "DELETE", &path, Some(&token), None).await;
     assert_eq!(cancel.status(), StatusCode::OK);
     let run = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
     validate("RunView", &run);
-    assert_eq!(run["status"], "cancelled");
-    assert_eq!(run["principal"], "token:ci-bot");
-    assert_eq!(run["trigger_reason"], "backfill");
+    assert_eq!(run["run"]["status"], "cancelled");
+    assert_eq!(run["run"]["principal"], "token:ci-bot");
+    assert_eq!(run["run"]["trigger_reason"], "backfill");
     assert_eq!(
-        run["cancellation"],
+        run["run"]["cancellation"],
         json!({"by": "request", "principal": "token:ci-bot", "started": false, "waiting_behind": [], "same_as": null})
     );
     let list = json_body(call(&router, "GET", "/runs", Some(&token), None).await).await;
     assert_eq!(list["runs"][0]["cancellation"]["started"], false);
     assert_eq!(list["runs"][0]["principal"], "token:ci-bot");
+}
+
+#[tokio::test]
+async fn foreign_hosts_are_refused_before_authentication_or_route_dispatch() {
+    for mode in [AuthMode::Off, AuthMode::Token] {
+        let root = tempfile::tempdir().unwrap();
+        let router = fixture(root.path(), mode, true);
+        for method in ["GET", "HEAD", "POST", "DELETE", "OPTIONS"] {
+            for path in ["/health", "/ui/", "/auth/status", "/runs", "/missing"] {
+                let response = router
+                    .clone()
+                    .oneshot(
+                        Request::builder()
+                            .method(method)
+                            .uri(path)
+                            .header(header::HOST, "evil.example")
+                            .body(Body::empty())
+                            .unwrap(),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(response.status(), StatusCode::FORBIDDEN, "{method} {path}");
+            }
+        }
+        for duplicate in [false, true] {
+            let mut request = Request::builder()
+                .uri("http://evil.example/health")
+                .version(axum::http::Version::HTTP_2);
+            if duplicate {
+                request = request.header(header::HOST, "localhost");
+            }
+            let response = router
+                .clone()
+                .oneshot(request.body(Body::empty()).unwrap())
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+        let response = router
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .header(header::HOST, "localhost")
+                    .header(header::HOST, "evil.example")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert!(!root.path().join("metadata.db").exists());
+    }
 }

@@ -34,6 +34,7 @@ pub(crate) const CREATE: &str = "CREATE TABLE IF NOT EXISTS schedule_ticks (
     failed INTEGER,
     not_reached INTEGER,
     targets TEXT,
+    skipped INTEGER,
     PRIMARY KEY (schedule_id, scheduled_at)
 ) WITHOUT ROWID";
 
@@ -87,6 +88,8 @@ pub enum TickTargetOutcome {
     Rebuilt,
     /// Its step was a cache hit.
     UpToDate,
+    /// The task explicitly declined work.
+    Skipped,
     /// Its step failed.
     Failed,
     /// The run ended before it decided the target: a failure upstream, a cancellation, a run
@@ -99,6 +102,7 @@ impl TickTargetOutcome {
         match self {
             TickTargetOutcome::Rebuilt => "rebuilt",
             TickTargetOutcome::UpToDate => "up_to_date",
+            TickTargetOutcome::Skipped => "skipped",
             TickTargetOutcome::Failed => "failed",
             TickTargetOutcome::NotReached => "not_reached",
         }
@@ -126,6 +130,8 @@ pub struct TickCounts {
     pub up_to_date: u32,
     pub failed: u32,
     pub not_reached: u32,
+    #[serde(default, skip_serializing_if = "is_zero_count")]
+    pub skipped: u32,
 }
 
 impl TickCounts {
@@ -137,6 +143,7 @@ impl TickCounts {
                 TickTargetOutcome::UpToDate => counts.up_to_date += 1,
                 TickTargetOutcome::Failed => counts.failed += 1,
                 TickTargetOutcome::NotReached => counts.not_reached += 1,
+                TickTargetOutcome::Skipped => counts.skipped += 1,
             }
         }
         counts
@@ -216,8 +223,21 @@ fn text(value: Option<&str>) -> libsql::Value {
 pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
-    with_tx(&conn, "BEGIN IMMEDIATE", "tick record", async {
-        conn.execute(
+    with_tx(
+        &conn,
+        "BEGIN IMMEDIATE",
+        "tick record",
+        record_tick_on(&conn, tick),
+    )
+    .await
+}
+
+/// Write the decision inside the caller's transaction (scheduled queue admission).
+pub async fn record_tick_on(
+    conn: &libsql::Connection,
+    tick: NewTick<'_>,
+) -> Result<(), BarcaError> {
+    conn.execute(
             "INSERT OR REPLACE INTO schedule_ticks (schedule_id, scheduled_at, action, skipped_for, run_id)
              VALUES (?1, ?2, ?3, ?4, ?5)",
             libsql::params![
@@ -230,7 +250,7 @@ pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaEr
         )
         .await
         .map_err(failed("recording a tick"))?;
-        conn.execute(
+    conn.execute(
             "DELETE FROM schedule_ticks WHERE schedule_id = ?1 AND (scheduled_at < ?2 OR scheduled_at <= (
                  SELECT scheduled_at FROM schedule_ticks WHERE schedule_id = ?1
                  ORDER BY scheduled_at DESC LIMIT 1 OFFSET ?3))",
@@ -242,9 +262,7 @@ pub async fn record_tick(db_path: &str, tick: NewTick<'_>) -> Result<(), BarcaEr
         )
         .await
         .map_err(failed("trimming"))?;
-        Ok(())
-    })
-    .await
+    Ok(())
 }
 
 /// Remove every tick older than [`TICK_MAX_AGE_SECONDS`] before `now`, of any schedule: the
@@ -313,7 +331,7 @@ pub async fn record_tick_finished(
         let changed = conn
             .execute(
                 "UPDATE schedule_ticks SET finished_at = ?4, run_status = ?5, rebuilt = ?6,
-                     up_to_date = ?7, failed = ?8, not_reached = ?9, targets = ?10
+                     up_to_date = ?7, failed = ?8, not_reached = ?9, targets = ?10, skipped = ?11
                  WHERE schedule_id = ?1 AND scheduled_at = ?2 AND run_id = ?3",
                 libsql::params![
                     schedule_id,
@@ -326,6 +344,7 @@ pub async fn record_tick_finished(
                     counts.failed,
                     counts.not_reached,
                     list,
+                    counts.skipped,
                 ],
             )
             .await
@@ -358,6 +377,7 @@ fn record_of(row: &libsql::Row) -> Option<TickRecord> {
             up_to_date,
             failed,
             not_reached,
+            skipped: count(14).unwrap_or(0),
         }),
         _ => None,
     };
@@ -369,7 +389,13 @@ fn record_of(row: &libsql::Row) -> Option<TickRecord> {
         run_id: row.get::<String>(4).ok(),
         started_at: row.get::<f64>(5).ok(),
         finished_at: row.get::<f64>(6).ok(),
-        run_status: row.get::<String>(7).ok(),
+        run_status: row.get::<String>(7).ok().map(|status| {
+            if status == "error" {
+                "failed".into()
+            } else {
+                status
+            }
+        }),
         queue_wait_seconds: row.get::<f64>(8).ok(),
         counts,
         targets: row
@@ -395,10 +421,15 @@ pub async fn ticks_for_schedule(
     if !has_table(&conn).await? {
         return Ok(Vec::new());
     }
+    let skipped = if schema::has_column(&conn, "schedule_ticks", "skipped").await? {
+        "skipped"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {COLUMNS} FROM schedule_ticks WHERE schedule_id = ?1
+                "SELECT {COLUMNS}, {skipped} FROM schedule_ticks WHERE schedule_id = ?1
                  ORDER BY scheduled_at DESC LIMIT ?2"
             ),
             libsql::params![schedule_id, i64::try_from(limit).unwrap_or(i64::MAX)],
@@ -447,10 +478,15 @@ pub async fn recent_ticks(
         .map_err(failed("counting the ticks"))?
         .is_some()
     {}
+    let skipped = if schema::has_column(&conn, "schedule_ticks", "skipped").await? {
+        "skipped"
+    } else {
+        "NULL"
+    };
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {COLUMNS} FROM schedule_ticks
+                "SELECT {COLUMNS}, {skipped} FROM schedule_ticks
                  ORDER BY scheduled_at DESC, schedule_id LIMIT ?1"
             ),
             libsql::params![i64::try_from(limit).unwrap_or(i64::MAX)],
@@ -587,6 +623,7 @@ pub async fn latest_ticks(db_path: &str) -> Result<LatestTicks, BarcaError> {
                         .entry(node.clone())
                         .or_default()
                         .push((row.get::<String>(0).unwrap_or_default(), finished_at)),
+                    TickTargetOutcome::Skipped => {}
                     TickTargetOutcome::Rebuilt | TickTargetOutcome::UpToDate => {
                         settled.insert(node.clone());
                     }
@@ -709,6 +746,10 @@ pub async fn tick_timings(db_path: &str) -> Result<HashMap<String, TickTimings>,
     Ok(out)
 }
 
+fn is_zero_count(value: &u32) -> bool {
+    *value == 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -737,6 +778,43 @@ mod tests {
     }
 
     const JOB: &str = "pipeline.py:inbox";
+
+    #[tokio::test]
+    async fn explicit_skips_keep_counts_when_target_details_are_trimmed() {
+        let (_dir, db) = fresh().await;
+        for slot in 0..=TICKS_WITH_TARGETS {
+            let run = format!("skip-{slot}");
+            record_tick(&db, tick(JOB, slot, TickDecision::Fired, None, Some(&run)))
+                .await
+                .unwrap();
+            record_tick_finished(
+                &db,
+                JOB,
+                slot,
+                &run,
+                slot as f64 + 0.1,
+                "skipped",
+                &[(JOB.to_string(), TickTargetOutcome::Skipped)],
+            )
+            .await
+            .unwrap();
+        }
+        let rows = ticks_for_schedule(&db, JOB, 100).await.unwrap();
+        assert!(rows.last().unwrap().targets.is_none());
+        for row in rows {
+            assert_eq!(row.run_status.as_deref(), Some("skipped"));
+            let counts = row.counts.unwrap();
+            assert_eq!(
+                (
+                    counts.skipped,
+                    counts.rebuilt,
+                    counts.failed,
+                    counts.not_reached
+                ),
+                (1, 0, 0, 0)
+            );
+        }
+    }
 
     #[tokio::test]
     async fn every_schedules_ticks_are_read_newest_first_with_their_count() {
@@ -860,7 +938,8 @@ mod tests {
                 rebuilt: 1,
                 up_to_date: 1,
                 failed: 1,
-                not_reached: 1
+                not_reached: 1,
+                skipped: 0,
             })
         );
         assert_eq!(done.targets.as_ref(), Some(&targets));

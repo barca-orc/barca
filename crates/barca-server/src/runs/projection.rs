@@ -58,7 +58,8 @@ pub(super) fn live_status(status: RunStatus) -> LiveStatus {
     match status {
         RunStatus::Pending => LiveStatus::Pending,
         RunStatus::Running => LiveStatus::Running,
-        RunStatus::Complete => LiveStatus::Complete,
+        RunStatus::Success => LiveStatus::Complete,
+        RunStatus::Skipped => LiveStatus::Skipped,
         RunStatus::Failed => LiveStatus::Failed,
         RunStatus::Cancelled => LiveStatus::Cancelled,
     }

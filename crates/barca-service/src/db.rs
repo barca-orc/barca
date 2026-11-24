@@ -7,6 +7,7 @@
 //! defined here is [`open_metadata`], which every such operation starts with.
 
 pub use barca_db::db::{WAL_THRESHOLD_BYTES, WalCheckpoint, maintain_wal};
+pub use barca_db::db::{get_run_scope, run_has_step};
 pub use barca_db::open::open_metadata;
 
 /// This environment's metadata DB for a command that only reads it: its configuration with
@@ -113,9 +114,9 @@ pub use barca_db::db::{
 
 // The scheduler's durable state: last ticks, schedule pauses, failure streaks.
 pub use barca_db::db::{
-    ScheduleFailures, SchedulePause, get_schedule_failures, get_schedule_pauses,
-    get_schedule_state, max_materialization_id, set_schedule_failures, set_schedule_pause,
-    succeeded_since, upsert_schedule_state,
+    ScheduleFailures, SchedulePause, clamp_schedule_cursors, get_schedule_failures,
+    get_schedule_pauses, get_schedule_state, max_materialization_id, set_schedule_failures,
+    set_schedule_pause, succeeded_since, upsert_schedule_state,
 };
 
 // The tick record (#960): what each due tick of a schedule decided and how its run ended. The
@@ -133,7 +134,7 @@ pub use barca_db::db::{
 // them (a dependency's `cfg(test)` items do not reach its dependents).
 #[doc(hidden)]
 pub use barca_db::db::{
-    create_run, db_guard, finish_run, insert_logs, is_read_view, persist_outputs,
+    create_run, db_guard, finish_run, insert_logs, is_read_view, open_conn, persist_outputs,
 };
 
 /// What a command does with the metadata DB as it ends: the connections this process kept
@@ -162,3 +163,6 @@ pub fn trace_lock_holds() {
         );
     }
 }
+
+// Linked server execution records, read by local log followers.
+pub use barca_db::db::runs::{RunAttempt, previous_attempts};

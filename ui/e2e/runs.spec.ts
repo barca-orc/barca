@@ -2,7 +2,7 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 import { isStartRun, seedRuns, startRun, waitForRun } from './helpers/seed'
 
 const API = process.env.BARCA_E2E_API ?? 'http://127.0.0.1:8274'
-type HistoryRun = { id: string; target: string | null; status: string }
+type HistoryRun = { run_id: string; target: string | null; status: string }
 
 async function history(request: APIRequestContext): Promise<HistoryRun[]> {
   const response = await request.get(`${API}/runs`)
@@ -11,25 +11,25 @@ async function history(request: APIRequestContext): Promise<HistoryRun[]> {
 }
 
 async function finishedRun(request: APIRequestContext, target: string, verb: 'run' | 'get' = 'run') {
-  const before = new Set((await history(request)).map((run) => run.id))
+  const before = new Set((await history(request)).map((run) => run.run_id))
   await waitForRun(request, await startRun(request, target, verb))
-  const run = (await history(request)).find((entry) => !before.has(entry.id) && entry.target === target)
+  const run = (await history(request)).find((entry) => !before.has(entry.run_id) && entry.target === target)
   expect(run, `durable history entry for ${target}`).toBeDefined()
   return run!
 }
 
 test.describe('run history', () => {
   test('lists real prior runs and opens durable logs and steps after reload', async ({ page, request }) => {
-    const before = new Set((await history(request)).map((run) => run.id))
+    const before = new Set((await history(request)).map((run) => run.run_id))
     await seedRuns(request, 'say_hello', 2)
-    const seeded = (await history(request)).filter((run) => !before.has(run.id) && run.target === 'say_hello')
+    const seeded = (await history(request)).filter((run) => !before.has(run.run_id) && run.target === 'say_hello')
     expect(seeded).toHaveLength(2)
 
     await page.goto('/ui/#/runs')
-    const runLink = page.getByRole('button', { name: seeded[0].id, exact: true })
+    const runLink = page.getByRole('button', { name: seeded[0].run_id, exact: true })
     await expect(runLink).toBeVisible()
     await runLink.click()
-    await expect(page).toHaveURL(new RegExp(`#/runs\\?run=${seeded[0].id}`))
+    await expect(page).toHaveURL(new RegExp(`#/runs\\?run=${seeded[0].run_id}`))
     const details = page.getByRole('complementary', { name: 'Run details' })
     await expect(details).toContainText('say_hello')
     await expect(details).toContainText('success')
@@ -43,7 +43,7 @@ test.describe('run history', () => {
   })
 
   test('graph asset trigger exposes a live run and refreshes its inspectable details', async ({ page, request }) => {
-    const before = new Set((await history(request)).map((run) => run.id))
+    const before = new Set((await history(request)).map((run) => run.run_id))
     await page.goto('/ui/#/graph')
     await page.locator('.react-flow__node[data-id="pipeline.py:history_asset"]').click()
     const started = page.waitForResponse((response) => isStartRun(response.request(), 'get', 'pipeline.py:history_asset'))
@@ -54,18 +54,18 @@ test.describe('run history', () => {
     await expect(page).toHaveURL(/#\/runs\?run=/)
     const details = page.getByRole('complementary', { name: 'Run details' })
     await expect(details).toContainText('history_asset')
-    await expect(details).toContainText(/queued|running/)
+    await expect(details).toContainText(/pending|running/)
     await expect(details).toContainText('history asset started', { timeout: 30_000 })
     await expect(details).toContainText('history asset finished', { timeout: 30_000 })
     await expect(details).toContainText('success')
     await expect(details.getByRole('heading', { name: 'Steps', exact: true })).toBeVisible()
     await expect(details.locator('.barca-run-nodes')).toContainText('history_asset')
 
-    const created = (await history(request)).find((run) => !before.has(run.id) && run.target === 'pipeline.py:history_asset')
+    const created = (await history(request)).find((run) => !before.has(run.run_id) && run.target === 'pipeline.py:history_asset')
     expect(created).toBeDefined()
     await page.goto('/ui/#/runs')
-    await expect(page.getByRole('button', { name: created!.id, exact: true })).toBeVisible()
-    await page.goto(`/ui/#/runs?run=${created!.id}`)
+    await expect(page.getByRole('button', { name: created!.run_id, exact: true })).toBeVisible()
+    await page.goto(`/ui/#/runs?run=${created!.run_id}`)
     await page.reload()
     await expect(details).toContainText('history asset finished')
     await expect(details).toContainText('success')
@@ -73,7 +73,7 @@ test.describe('run history', () => {
 
   test('a cached asset trigger still creates a durable inspectable run', async ({ page, request }) => {
     await finishedRun(request, 'pipeline.py:numbers', 'get')
-    const before = new Set((await history(request)).map((run) => run.id))
+    const before = new Set((await history(request)).map((run) => run.run_id))
     await page.goto('/ui/#/graph')
     await page.locator('.react-flow__node[data-id="pipeline.py:numbers"]').click()
     const started = page.waitForResponse((response) => isStartRun(response.request(), 'get', 'pipeline.py:numbers'))
@@ -86,10 +86,10 @@ test.describe('run history', () => {
     await expect(details.locator('.barca-run-nodes')).toContainText('numbers')
     await expect(details.locator('.barca-run-nodes')).toContainText('cached')
     await expect(details.locator('.barca-fact').filter({ hasText: /^Steps0 ok · 1 cached/ })).toHaveCount(1)
-    const created = (await history(request)).find((run) => !before.has(run.id) && run.target === 'pipeline.py:numbers')
+    const created = (await history(request)).find((run) => !before.has(run.run_id) && run.target === 'pipeline.py:numbers')
     expect(created).toBeDefined()
-    await expect(page.getByRole('button', { name: created!.id, exact: true })).toBeVisible()
-    await page.goto(`/ui/#/runs?run=${created!.id}`)
+    await expect(page.getByRole('button', { name: created!.run_id, exact: true })).toBeVisible()
+    await page.goto(`/ui/#/runs?run=${created!.run_id}`)
     await page.reload()
     await expect(details.locator('.barca-run-nodes')).toContainText('cached')
     await expect(details).toContainText('success')
@@ -100,7 +100,7 @@ test.describe('run history', () => {
   test('failed runs retain their error and logged output', async ({ page, request }) => {
     const run = await finishedRun(request, 'history_failure')
     expect(run.status).toBe('failed')
-    await page.goto(`/ui/#/runs?run=${run.id}`)
+    await page.goto(`/ui/#/runs?run=${run.run_id}`)
     const details = page.getByRole('complementary', { name: 'Run details' })
     await expect(details).toContainText('failed')
     await expect(details).toContainText('history failure detail')
@@ -118,15 +118,15 @@ test('the default view hides schedule runs, and every filter asks the server', a
   const HOUR = 3_600_000
   const thisHour = Math.floor(Date.now() / HOUR) * HOUR
   const stamp = (ms: number) => new Date(ms).toISOString().replace('.000Z', 'Z')
-  const row = { handle: null, command: 'get', files: [], scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null, first_failure: null }
+  const row = { command: 'get', files: [], scheduled_at: null, schedule_id: null, finished_at: null, elapsed_seconds: 1, steps_cached: 0, error: null, failure: null }
   const line = (steps: string, failure: string | null = null) => ({ steps, steps_detail: 'Steps are keys: a partitioned node counts one per key', failure, failure_detail: failure })
   const all = [
-    { ...row, id: 'r2', run_id: 'r2', target: 'orders', status: 'failed', triggered_by: 'manual', started_at: stamp(thisHour - HOUR + 60_000), steps_total: 2, steps_executed: 1, line: line('0 ok · 1 failed · 0 cached', "stopped at orders · KeyError: 'currency'") },
+    { ...row, run_id: 'r2', target: 'orders', status: 'failed', triggered_by: 'manual', started_at: stamp(thisHour - HOUR + 60_000), steps_total: 2, steps_executed: 1, line: line('0 ok · 1 failed · 0 cached', "stopped at orders · KeyError: 'currency'") },
     // Recorded before barca stored what started a run: never hidden with the schedule's.
-    { ...row, id: 'r0', run_id: 'r0', target: 'legacy_report', status: 'success', triggered_by: null, started_at: stamp(thisHour - 2 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
-    { ...row, id: 'r1', run_id: 'r1', target: 'poll_inbox', status: 'success', triggered_by: 'schedule', started_at: stamp(thisHour - 3 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
+    { ...row, run_id: 'r0', target: 'legacy_report', status: 'success', triggered_by: null, started_at: stamp(thisHour - 2 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
+    { ...row, run_id: 'r1', target: 'poll_inbox', status: 'success', triggered_by: 'schedule', started_at: stamp(thisHour - 3 * HOUR + 60_000), steps_total: 1, steps_executed: 1, line: line('1 ok · 0 cached') },
   ]
-  const none = { success: 0, failed: 0, error: 0, cancelled: 0, interrupted: 0, running: 0 }
+  const none = { success: 0, failed: 0, pending: 0, skipped: 0, cancelled: 0, interrupted: 0, running: 0 }
   const nobody = { schedule: 0, api: 0, manual: 0, client: 0, unknown: 0 }
   const entry = (at: number, runs: number, bad: number, schedule: number) => ({
     at: stamp(at), until: stamp(at + HOUR), runs, ok: runs - bad, not_successful: bad, in_progress: 0,
@@ -145,7 +145,7 @@ test('the default view hides schedule runs, and every filter asks the server', a
     const keeps = (run: typeof all[number]) =>
       !(hide && run.triggered_by === 'schedule') &&
       (query.get('status') !== 'not_successful' || run.status === 'failed') &&
-      (!search || `${run.id} ${run.target}`.includes(search))
+      (!search || `${run.run_id} ${run.target}`.includes(search))
     const counted = all.filter(keeps)
     const runs = counted.filter((run) => within(Date.parse(run.started_at)))
     // The ticks are counted, not listed: 61 in the hour of `r2`, while the schedule's runs show.
@@ -175,7 +175,7 @@ test('the default view hides schedule runs, and every filter asks the server', a
   await expect(failed).toContainText("stopped at orders · KeyError: 'currency'")
   await expect(page.getByRole('row', { name: /r0/ })).toBeVisible()
   await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
-  expect(last().get('not_triggered_by')).toBe('schedule')
+  await expect.poll(() => last().get('not_triggered_by')).toBe('schedule')
   expect(asked.every((query) => query.get('triggered_by') === null)).toBe(true)
   await expect(page.getByRole('button', { name: 'Hide schedule runs' })).toHaveAttribute('aria-pressed', 'true')
   // What that hid is said, with its failures, as the server counted it.
@@ -193,8 +193,8 @@ test('the default view hides schedule runs, and every filter asks the server', a
   await bar.click()
   await expect(page.getByRole('row', { name: /r0/ })).toHaveCount(0)
   await expect(failed).toBeVisible()
-  expect(last().get('since')).toBe(stamp(thisHour - HOUR))
-  expect(last().get('until')).toBe(stamp(thisHour))
+  await expect.poll(() => last().get('since')).toBe(stamp(thisHour - HOUR))
+  await expect.poll(() => last().get('until')).toBe(stamp(thisHour))
   await expect(page).toHaveURL(/since=.*until=/)
   await expect(page.locator('.barca-count')).toHaveText(/^1/)
   await bar.click()
@@ -204,21 +204,23 @@ test('the default view hides schedule runs, and every filter asks the server', a
   await hidden.getByRole('button', { name: 'Show schedule runs' }).click()
   await expect(page.getByRole('row', { name: /r1/ })).toBeVisible()
   await expect(page).toHaveURL(/schedule=show/)
-  expect(last().get('not_triggered_by')).toBeNull()
+  await expect.poll(() => last().get('not_triggered_by')).toBeNull()
   await expect(page.locator('.barca-count')).toHaveText(/^64/)
   await expect(hidden).toHaveCount(0)
   await expect(page.locator('.barca-run-more')).toContainText('Showing 3 runs of 64')
 
-  // The status chip and the search are the server's too.
+  // The status chip and the search are the server's too. Missing rows can be the loading
+  // state, so wait for the observed query as well as the rows in the server's answer.
   await page.getByRole('button', { name: 'Not successful', exact: true }).click()
   await expect(page.getByRole('row', { name: /r1/ })).toHaveCount(0)
-  expect(last().get('status')).toBe('not_successful')
+  await expect.poll(() => last().get('status')).toBe('not_successful')
+  await expect(failed).toBeVisible()
   await expect(page.locator('.barca-count')).toHaveText(/^1/)
   await page.getByRole('button', { name: 'All', exact: true }).click()
   await page.getByRole('textbox', { name: /Search every run/ }).fill('legacy')
   await expect(page.getByRole('row', { name: /r0/ })).toBeVisible()
   await expect(page.getByRole('row', { name: /r2/ })).toHaveCount(0)
-  expect(last().get('search')).toBe('legacy')
+  await expect.poll(() => last().get('search')).toBe('legacy')
   await page.getByRole('textbox', { name: /Search every run/ }).fill('no_such_run')
   await expect(page.getByText('No run matches.')).toBeVisible()
   await page.getByRole('button', { name: 'Clear filters' }).click()
@@ -231,21 +233,21 @@ test('a status chip and the search list the runs the server keeps', async ({ pag
   const bad = await finishedRun(request, 'history_failure')
   const good = await finishedRun(request, 'say_hello')
   await page.goto('/ui/#/runs')
-  await expect(page.getByRole('button', { name: good.id, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: good.run_id, exact: true })).toBeVisible()
   const asks = (name: string, value: string) => page.waitForResponse((response) => new URL(response.url()).searchParams.get(name) === value && response.url().includes('/runs?'))
   const failedOnly = asks('status', 'not_successful')
   await page.getByRole('button', { name: 'Not successful', exact: true }).click()
   const answer = await (await failedOnly).json()
-  await expect(page.getByRole('button', { name: bad.id, exact: true })).toBeVisible()
-  await expect(page.getByRole('button', { name: good.id, exact: true })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: bad.run_id, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: good.run_id, exact: true })).toHaveCount(0)
   // The header's count is the server's, of every run the filter keeps.
   await expect(page.locator('.barca-count')).toHaveText(new RegExp(`^${answer.total.toLocaleString()}`))
   await page.getByRole('button', { name: 'All', exact: true }).click()
-  const searched = asks('search', good.id)
-  await page.getByRole('textbox', { name: /Search every run/ }).fill(good.id)
+  const searched = asks('search', good.run_id)
+  await page.getByRole('textbox', { name: /Search every run/ }).fill(good.run_id)
   expect((await (await searched).json()).total).toBe(1)
   await expect(page.locator('.barca-run-table tbody tr')).toHaveCount(1)
-  await expect(page.getByRole('button', { name: good.id, exact: true })).toBeVisible()
+  await expect(page.getByRole('button', { name: good.run_id, exact: true })).toBeVisible()
 })
 
 // A deep queue (the fixture's runs finish too fast to make one): the running run is listed first,
@@ -261,7 +263,7 @@ test('a deep queue lists its running run first and leaves the history the page',
   } }))
   await page.goto('/ui/#/runs')
   const queue = page.getByRole('region', { name: 'Queue' })
-  const rows = queue.getByRole('table', { name: 'Queued runs' }).locator('tbody tr')
+  const rows = queue.getByRole('table', { name: 'Pending runs' }).locator('tbody tr')
   await expect(rows).toHaveCount(19)
   await expect(rows.first()).toContainText('running')
   await expect(rows.first()).toContainText('live')
@@ -273,10 +275,10 @@ test('a deep queue lists its running run first and leaves the history the page',
   // Every page says the queue in brief, and it opens Runs.
   await expect(page.getByRole('link', { name: /^Queue: 1 running · 18 waiting · oldest \d+m$/ })).toBeVisible()
 
-  await queue.getByRole('button', { name: 'Hide the queued runs' }).click()
+  await queue.getByRole('button', { name: 'Hide the pending runs' }).click()
   await expect(rows).toHaveCount(0)
   await expect(queue).toContainText(/oldest waiting \d+m · next pipeline\.py:t1/)
-  await queue.getByRole('button', { name: 'Show the queued runs' }).click()
+  await queue.getByRole('button', { name: 'Show the pending runs' }).click()
   await expect(rows).toHaveCount(19)
 })
 
@@ -291,9 +293,9 @@ test('a run of 30,000 log lines and 1,000 keys renders only what is in view', as
   })
   const started = new Date(Date.now() - 60_000).toISOString()
   await page.route(/\/runs\/big$/, (route) => route.fulfill({ json: {
-    run_id: 'big', status: 'failed', command: 'get', target: null, files: [], triggered_by: 'api', scheduled_at: null, schedule_id: null,
+    run: { run_id: 'big', status: 'failed', command: 'get', target: null, files: [], triggered_by: 'api', scheduled_at: null, schedule_id: null,
     started_at: started, finished_at: started, elapsed_seconds: 13, steps_total: 7644, steps_executed: 5000, steps_cached: 0,
-    job: 'all', attempts: null, client_run_id: null, failure: null, outcome: null, error: 'invoices: 1,250 keys failed',
+    job: 'all', attempts: null, client_run_id: null, failure: null, outcome: null, error: 'invoices: 1,250 keys failed' },
     explanation: {
       targets: [], requested_by: 'api', attempts: null, steps: '3,750 ok · 1,250 failed · 0 cached', target_outcomes: [], cancellation: null,
       why: { headline: '5,000 steps ran, but this run recorded no reasons (barca records them from 0.43).', groups: [], omitted: 0, partial: false },

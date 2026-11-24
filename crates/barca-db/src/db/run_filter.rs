@@ -54,6 +54,7 @@ fn in_list<'a>(values: impl Iterator<Item = &'a str>) -> String {
 /// What of `runs` and its indexes a database has: a snapshot an older barca wrote may lack
 /// the newer columns, and is read without migrating it.
 pub(super) struct RunsShape {
+    pub parent: bool,
     pub trigger: bool,
     pub job: bool,
     pub search_index: bool,
@@ -62,6 +63,7 @@ pub(super) struct RunsShape {
 impl RunsShape {
     pub(super) async fn of(conn: &libsql::Connection) -> Result<Self, BarcaError> {
         Ok(RunsShape {
+            parent: has_column(conn, "runs", "parent_run_id").await?,
             trigger: has_column(conn, "runs", "triggered_by").await?,
             job: has_column(conn, "runs", "job").await?,
             search_index: has_index(conn, "idx_runs_search").await?,
@@ -147,12 +149,17 @@ impl RunFilter {
         }
         let gone = in_list(interrupted.iter().map(String::as_str));
         let mut any = Vec::new();
-        let plain: Vec<&str> = self
+        let mut plain: Vec<&str> = self
             .statuses
             .iter()
             .map(String::as_str)
             .filter(|s| *s != "running")
             .collect();
+        // `error` is the pre-0.47 spelling of an infrastructure/request failure. Match
+        // legacy rows with the indexed status column, without rewriting old databases.
+        if plain.contains(&"failed") && !plain.contains(&"error") {
+            plain.push("error");
+        }
         if !plain.is_empty() {
             any.push(format!("status IN ({})", in_list(plain.iter().copied())));
         }
@@ -173,6 +180,9 @@ impl RunFilter {
     /// it can use one. `None`: every run.
     pub(super) fn sql(&self, shape: &RunsShape, interrupted: &[String]) -> Option<RunsWhere> {
         let mut all = Vec::new();
+        if shape.parent {
+            all.push("id NOT IN (SELECT id FROM runs WHERE parent_run_id IS NOT NULL)".to_string());
+        }
         let mut indexed = false;
         if let Some(window) = self.window_sql() {
             all.push(window);
@@ -234,7 +244,10 @@ impl RunFilter {
         }
         Some(RunsWhere {
             condition: all.join(" AND "),
-            index: if !indexed && shape.search_index {
+            index: if !indexed
+                && shape.search_index
+                && (self.search.is_some() || self.names.is_some())
+            {
                 " INDEXED BY idx_runs_search"
             } else {
                 ""
@@ -254,6 +267,7 @@ mod tests {
     use super::*;
 
     const SHAPE: RunsShape = RunsShape {
+        parent: false,
         trigger: true,
         job: true,
         search_index: true,
@@ -283,6 +297,7 @@ mod tests {
         );
         // A database from before triggers were recorded: nothing to leave out.
         let old = RunsShape {
+            parent: false,
             trigger: false,
             job: true,
             search_index: false,
@@ -302,7 +317,7 @@ mod tests {
         );
         assert_eq!(
             sql(&of(&["failed", "interrupted"]), &["r1"]),
-            "|(status IN ('failed','interrupted') OR run_id IN ('r1'))"
+            "|(status IN ('failed','interrupted','error') OR run_id IN ('r1'))"
         );
         assert_eq!(sql(&of(&["running"]), &[]), "|(status = 'running')");
     }

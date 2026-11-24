@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use crate::guards::refuse_if_read_only;
 use crate::replay::RunChannel;
 use crate::respond::{json_text, stdout_of};
-use crate::run_model::{RunState, RunStatus};
+use crate::run_model::RunStatus;
 use crate::state::AppState;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
@@ -119,6 +119,7 @@ async fn create_run(
             ));
         }
     }
+    let rules = request.rules();
     let admitted = crate::runs::admit(
         &state,
         RunSpec {
@@ -132,7 +133,7 @@ async fn create_run(
             partition,
             batch: request.batch.clone(),
             // The run contract runs what `barca get` / `barca run` would run here.
-            rules: barca_service::freshness::RunRules::request(),
+            rules,
             timeout: None,
             kill_requeues: 0,
             queue: request.queue,
@@ -150,6 +151,173 @@ async fn create_run(
             position: admitted.position,
             waiting_for: admitted.waiting_for,
             queue: request.queue.shown(),
+        }),
+    )
+        .into_response())
+}
+
+/// `POST /runs/{run_id}/replay`: retain the recorded scope instead of inferring it
+/// from history's display strings. Old rows deliberately have no inferred fallback.
+pub async fn replay_run(
+    State(state): State<AppState>,
+    principal: Option<Extension<Principal>>,
+    Path(run_id): Path<String>,
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    use barca_service::outcome::{ReplayCache, ReplayRequest};
+    refuse_if_read_only(&state.config)?;
+    let request: ReplayRequest = serde_json::from_slice(&body)
+        .map_err(|e| ApiError::BadRequest(format!("invalid replay request: {e}")))?;
+    let snapshot = state.reads.snapshot_db().await?;
+    db::get_run(&snapshot.path, &run_id)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))?;
+    let mut scope = db::get_run_scope(&snapshot.path, &run_id).await?
+        .ok_or_else(|| ApiError::Conflict("This run has no recorded request scope. Start a new run with explicit targets and options.".into()))?;
+    if let Some(step_id) = &request.step {
+        // A caller can only narrow to a step actually recorded in this execution.
+        if !db::run_has_step(&snapshot.path, &run_id, step_id).await? {
+            return Err(ApiError::BadRequest(format!(
+                "step '{step_id}' was not recorded in run '{run_id}'"
+            )));
+        }
+        let step = barca_service::StepId::parse(step_id);
+        let dag = state.reads.loaded_dag().await?;
+        let kind = barca_service::queries::list_assets_from_dag(&dag)
+            .into_iter()
+            .find(|node| node.id == step.base_id())
+            .map(|node| node.kind)
+            .ok_or_else(|| {
+                ApiError::BadRequest(format!("step '{}' is no longer deployed", step.base_id()))
+            })?;
+        scope.command = if kind == barca_service::NodeKind::Task {
+            "run"
+        } else {
+            "get"
+        }
+        .into();
+        scope.targets = vec![step.base_id().to_owned()];
+        // Narrowing a tick selects this step as its root. Other tasks still follow tick
+        // freshness, but the explicitly retried task must execute even with unchanged inputs.
+        if scope.tick.is_some() {
+            scope.tick = Some(step.base_id().to_owned());
+        }
+        if !step.partition.0.is_empty() {
+            let original = scope
+                .partition
+                .as_deref()
+                .map(barca_service::selection::PartitionSelection::parse)
+                .transpose()
+                .map_err(ApiError::BadRequest)?
+                .unwrap_or_default();
+            scope.partition = Some(
+                original
+                    .narrowed_to(&step.partition)
+                    .map_err(ApiError::BadRequest)?
+                    .to_json()
+                    .to_string(),
+            );
+        }
+    }
+    let command = match scope.command.as_str() {
+        "get" => RunCommand::Get,
+        "run" => RunCommand::Run,
+        other => {
+            return Err(ApiError::Conflict(format!(
+                "cannot replay command '{other}'"
+            )));
+        }
+    };
+    let files = check_files(&state, &scope.files)?;
+    let partition = scope
+        .partition
+        .as_deref()
+        .map(barca_service::selection::PartitionSelection::parse)
+        .transpose()
+        .map_err(ApiError::BadRequest)?;
+    barca_service::batch::BatchOverride::parse(&scope.batch).map_err(ApiError::BadRequest)?;
+    // Scheduled scopes can contain both the sensor and task followers.
+    let verb = if scope.tick.is_some() {
+        ""
+    } else {
+        command.as_str()
+    };
+    let mut nodes = Vec::new();
+    for target in &scope.targets {
+        nodes.push(check_target(&state, target, verb).await?);
+    }
+    if scope.targets.is_empty() {
+        check_any_asset(&state).await?;
+    }
+    if scope.tick.is_none() && !scope.allow_paused_targets {
+        let paused = barca_service::pauses::list(&state.config.resolved.db_path).await?;
+        if let Some(id) = nodes.iter().find(|id| paused.iter().any(|p| &p.id == *id)) {
+            return Err(ApiError::run(
+                barca_service::pauses::refused(id),
+                context(command, &files),
+            ));
+        }
+    }
+    let since = barca_service::time::now_secs_f64();
+    let policy = match request.cache {
+        ReplayCache::Cached => CachePolicy::CacheAware,
+        ReplayCache::RefreshAll => CachePolicy::RefreshAll { since },
+        ReplayCache::Original if scope.refresh_all => CachePolicy::RefreshAll { since },
+        ReplayCache::Original if !scope.refresh.is_empty() => CachePolicy::RefreshSelective {
+            names: scope.refresh,
+            cascade: scope.cascade,
+            since,
+        },
+        ReplayCache::Original => CachePolicy::CacheAware,
+    };
+    let queue = match scope.queue.as_str() {
+        "next" => barca_service::outcome::QueuePlace::Next,
+        "last" => barca_service::outcome::QueuePlace::Last,
+        other => {
+            return Err(ApiError::Conflict(format!(
+                "cannot replay queue placement '{other}'"
+            )));
+        }
+    };
+    let admitted = super::admit(
+        &state,
+        RunSpec {
+            command,
+            targets: scope.targets,
+            nodes,
+            files,
+            policy,
+            trigger: api_trigger(
+                principal.map(|p| p.0.0),
+                Some(format!("Replay of {run_id}")),
+            ),
+            values: scope.values,
+            partition,
+            batch: scope.batch,
+            rules: barca_service::freshness::RunRules {
+                pin_manual: scope.pin_manual,
+                hold_paused: scope.hold_paused,
+                allow_paused_targets: scope.allow_paused_targets,
+                tick: scope.tick,
+                status: false,
+            },
+            timeout: scope.timeout,
+            kill_requeues: 0,
+            queue,
+        },
+    )
+    .await?;
+    Ok((
+        StatusCode::ACCEPTED,
+        Json(RunHandle {
+            run_id: admitted.run_id,
+            status: match admitted.status {
+                RunStatus::Pending => RunViewStatus::Pending,
+                _ => RunViewStatus::Running,
+            },
+            position: admitted.position,
+            waiting_for: admitted.waiting_for,
+            queue: queue.shown(),
         }),
     )
         .into_response())
@@ -180,7 +348,7 @@ async fn dry_run(
     let snapshot = state.reads.snapshot_db().await?;
     let mut cfg = state.config.resolved.clone();
     cfg.db_path = snapshot.path.clone();
-    let result = barca_service::queries::explain(
+    let result = barca_service::queries::explain_with_rules(
         &cfg,
         &request.targets,
         run_files(state, files),
@@ -189,6 +357,7 @@ async fn dry_run(
         request.command.as_str(),
         partition_of(request)?.as_ref(),
         &batch_of(request)?,
+        &request.rules(),
     )
     .await
     .map_err(|e| ApiError::run(e, context(request.command, files)))?;
@@ -226,7 +395,9 @@ pub async fn run_target(
     refuse_if_read_only(&state.config)?;
     let node = check_target_as(&state, &target, "run", Wording::Route).await?;
     let mut spec = RunSpec::api(RunCommand::Run, vec![target], vec![node]);
-    spec.policy = CachePolicy::RefreshAll;
+    spec.policy = CachePolicy::RefreshAll {
+        since: barca_service::time::now_secs_f64(),
+    };
     spec.trigger = api_trigger(principal.map(|p| p.0.0), None);
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
@@ -244,17 +415,13 @@ pub async fn get_target(
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
-/// `GET /status/{run_id}` (alias) — the live state of a run this server started.
+/// `GET /status/{run_id}` — deprecated alias of the durable run-detail response.
 pub async fn status(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Json<RunState>, ApiError> {
-    state
-        .runs
-        .registry
-        .get(&run_id)
-        .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
+    Query(page): Query<StepsQuery>,
+) -> Result<Json<RunView>, ApiError> {
+    detail(State(state), Path(run_id), Query(page)).await
 }
 
 // ─── cancel ─────────────────────────────────────────────────────────────────
@@ -270,6 +437,7 @@ pub async fn cancel(
 ) -> Result<Json<RunCancelling>, ApiError> {
     refuse_if_read_only(&state.config)?;
     let principal = principal.map(|p| p.0.0);
+    let _transition = state.runs.queue.admit.lock().await;
     if let Some(waiting) = state.runs.queue.take(&run_id) {
         let cancellation = queued_cancellation(&state, &run_id, principal);
         if let Some(mut run) = state.runs.registry.get_mut(&run_id) {
@@ -292,7 +460,7 @@ pub async fn cancel(
             )
             .await;
         }
-        return Ok(Json(RunCancelling::of(run_id)));
+        return Ok(Json(RunCancelling::cancelled(run_id)));
     }
     let finished = match state.runs.registry.get_mut(&run_id) {
         Some(mut run) => match run.status {
@@ -313,7 +481,19 @@ pub async fn cancel(
         None => {
             let snapshot = state.reads.snapshot_db().await?;
             match db::get_run(&snapshot.path, &run_id).await? {
-                Some(record) => record.status,
+                Some(record) => {
+                    let control = barca_service::served::run_control(
+                        &snapshot.path,
+                        &run_id,
+                        &record.status,
+                        false,
+                    )
+                    .await?;
+                    return Err(ApiError::Conflict(format!(
+                        "run '{run_id}': {}",
+                        control.reason.unwrap_or_default()
+                    )));
+                }
                 None => return Err(ApiError::NotFound(format!("run '{run_id}' not found"))),
             }
         }
@@ -426,12 +606,14 @@ pub async fn logs(
             ))
         })?),
     };
-    let snapshot = state.reads.snapshot_db().await?;
+    // Observe completion before taking the snapshot so terminal status cannot accompany
+    // a snapshot taken before the final log writes.
     let live = state.runs.registry.get(&id).map(|r| r.status);
+    let snapshot = state.reads.snapshot_db().await?;
     let record = db::get_run(&snapshot.path, &id).await?;
-    let mut status = match (&record, live) {
-        (Some(record), _) => record.status.clone(),
-        (None, Some(live)) => live_status(live).as_str().to_string(),
+    let status = match (&record, live) {
+        (_, Some(live)) => live_status(live).as_str().to_string(),
+        (Some(record), None) => record.status.clone(),
         (None, None) => {
             return Err(ApiError::NotFound(format!(
                 "run '{id}' was not found on this server
@@ -440,13 +622,8 @@ A run recorded on another machine is \
             )));
         }
     };
-    if let Some(live) = live
-        && matches!(live, RunStatus::Pending | RunStatus::Running)
-    {
-        status = live_status(live).as_str().to_string();
-    }
     let step = query.step.as_deref().filter(|s| !s.is_empty());
-    let lines = if record.is_some() {
+    let lines = if record.is_some() || live.is_some() {
         // Errors read as `barca logs` reports them here.
         barca_service::queries::logs_at(
             &state.config.resolved.db_path,
@@ -534,7 +711,7 @@ pub async fn output(
     Path(run_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let view = view(&state, &run_id).await?;
-    if matches!(view.status.as_str(), "pending" | "running") {
+    if matches!(view.run.status.as_str(), "pending" | "running") {
         return Err(ApiError::Conflict(format!(
             "run '{run_id}' has not finished\nWait for its `run_finished` event, then ask again."
         )));
@@ -552,12 +729,12 @@ pub async fn output(
     let (path, format) = match live {
         Some(oref) => (oref.path, oref.format),
         None => {
-            if view.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
+            if view.run.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
                 return Err(no_output());
             }
-            let target = view.target.clone().filter(|t| !t.contains(','));
+            let target = view.run.target.clone().filter(|t| !t.contains(','));
             let target = target.ok_or_else(no_output)?;
-            let body: Value = serde_json::from_str(view.outcome.as_ref().unwrap().text())
+            let body: Value = serde_json::from_str(view.run.outcome.as_ref().unwrap().text())
                 .map_err(|_| no_output())?;
             let step = body["steps"]
                 .as_array()

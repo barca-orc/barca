@@ -206,7 +206,10 @@ pub struct TargetOutcome {
 impl TargetOutcome {
     /// Whether this target failed: neither `success` nor `blocked`.
     pub fn failed(&self) -> bool {
-        !StepStatus::Success.is(Some(&self.status)) && !StepStatus::Blocked.is(Some(&self.status))
+        !matches!(
+            StepStatus::parse(&self.status),
+            Some(StepStatus::Success | StepStatus::Blocked | StepStatus::Skipped)
+        )
     }
 }
 
@@ -214,6 +217,10 @@ impl TargetOutcome {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct StepReport {
+    /// Present only when this task explicitly raised `barca.Skip`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub skip_reason: Option<String>,
     pub id: String,
     /// `asset`, `task` or `sensor`.
     pub kind: String,

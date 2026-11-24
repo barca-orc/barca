@@ -3,6 +3,8 @@
 and `.../resume`: the JSON is the schedule's `GET /schedule` entry, a paused schedule's ticks do
 not fire, and `barca pause --json` lists it beside the paused nodes."""
 
+from datetime import datetime
+
 import json
 import subprocess
 import time
@@ -100,7 +102,7 @@ def test_a_timed_pause_takes_a_duration_or_a_time_and_ends_by_itself(tmp_path):
         timed = _cli(tmp_path, "pause", "--schedule", "beat", "--until", "2h", *server, "--json")
         assert timed.returncode == 0, timed.stderr
         until = json.loads(timed.stdout)["paused_until"]
-        assert 7190 <= until - now <= 7215, (until, now)
+        assert 7190 <= datetime.fromisoformat(until).timestamp() - now <= 7215, (until, now)
         assert serve.get("/pauses")["schedules"][0]["until"] == until
         far = "2999-01-01T00:00:00Z"
         at = _cli(tmp_path, "pause", "--schedule", "beat", "--until", far, *server, "--pretty")

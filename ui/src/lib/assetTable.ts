@@ -140,7 +140,7 @@ export function buildRows(nodes: NodeState[], nowMs: number, pins: ReadonlyMap<s
         typicalSeconds: n.typical_run_seconds,
         p95: n.durations ? formatSeconds(n.durations.p95_seconds) : null,
         scheduleHeld: n.schedule?.state === "held",
-        nextRunMs: n.schedule?.state === "held" || n.next_run === null ? null : n.next_run * 1000,
+        nextRunMs: n.schedule?.state === "held" || n.next_run === null ? null : parseTime(n.next_run),
         running: n.running?.step === 'running' ? n.running : null,
       }
     })

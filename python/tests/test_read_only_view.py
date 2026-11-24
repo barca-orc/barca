@@ -103,7 +103,7 @@ def first():
         assert reader.get("/state/rollup")["entries"][0]["running"] == 0
     finally:
         (tmp_path / "release").touch()
-    assert writer.finished(accepted["run_id"])["status"] == "success"
+    assert writer.finished(accepted["run_id"])["run"]["status"] == "success"
 
 
 def test_observer_refreshes_its_graph_after_a_source_edit(tmp_path, serve):

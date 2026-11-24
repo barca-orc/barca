@@ -112,6 +112,9 @@ if [ "$build" -eq 1 ]; then
         echo "error: maturin is not installed (uv tool install maturin); skipped the build" >&2
         exit 1
     fi
+    if [ ! -f "$tree/ui/dist/index.html" ]; then
+        echo "UI: not built; this binary has no embedded web UI. Run pnpm --dir ui install && pnpm --dir ui build, then rebuild barca to include it." >&2
+    fi
     echo "building: maturin develop --uv $profile --extras test" >&2
     start=$(date +%s)
     (cd "$tree" && VIRTUAL_ENV="$tree/.venv" PATH="$tree/.venv/bin:$PATH" \

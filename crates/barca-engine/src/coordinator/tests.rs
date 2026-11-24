@@ -596,6 +596,133 @@ fn drain(c: &mut Coordinator) -> Vec<String> {
     out
 }
 
+/// #1100: bin packing can append a second chunk of a chain to the same stream.
+/// Calls span those chunks; incidental stream order must not become a dependency.
+#[test]
+fn batched_calls_do_not_wait_on_other_chunks_in_their_stream() {
+    for chain in [
+        vec![("f:a", None)],
+        vec![("f:a", None), ("f:b", None)],
+        vec![("f:a", None), ("f:b", Some("f:a"))],
+    ] {
+        for batch_size in [1, 2, 3] {
+            let ks = keys(3);
+            let mut phase = partition_stream(&ks[..2], &chain);
+            phase.streams[0]
+                .steps
+                .extend(partition_stream(&ks[2..], &chain).streams.remove(0).steps);
+            let mut c = Coordinator::new();
+            let mut calls = Vec::new();
+            for (node, _) in &chain {
+                for (i, chunk) in ks.chunks(batch_size).enumerate() {
+                    calls.push((
+                        format!("{node}-{i}"),
+                        chunk.iter().map(|k| format!("{node}[k={k}]")).collect(),
+                    ));
+                }
+            }
+            c.assign_calls(calls);
+            c.load_phase(&phase, &HashMap::new());
+            while let Some(id) = c.next_ready() {
+                // Data dependencies still hold even when stream ordering is omitted.
+                for dep in &c.item(id).deps {
+                    if dep.kind == DepKind::Data {
+                        assert!(c.done.contains(&dep.upstream));
+                    }
+                }
+                c.on_item_completed(id);
+            }
+            assert!(
+                c.is_finished(),
+                "stalled: chain={chain:?}, batch_size={batch_size}"
+            );
+            assert_eq!(c.done_count(), 3 * chain.len());
+        }
+    }
+}
+
+/// The function of a batched node takes a list of keys, so a key loaded with no call
+/// assigned to it (the plan gave it none) gets a call of its own, and its node's other keys,
+/// which were assigned one, keep it.
+#[test]
+fn a_batched_key_loaded_without_a_call_gets_a_call_of_its_own() {
+    let ks = keys(3);
+    let mut phase = partition_stream(&ks, &[("f:a", None)]);
+    let mut b = partition_stream(&ks, &[("f:b", Some("f:a")), ("f:plain", None)]);
+    b.streams[0].stream_id = "w1".to_string();
+    phase.streams.push(b.streams.remove(0));
+    let mut c = Coordinator::new();
+    // The plan covered only the first key of `f:b`; `f:a` and `f:plain` are not batched.
+    c.assign_calls(vec![("b1".to_string(), vec!["f:b[k=00000]".to_string()])]);
+    c.require_calls(["f:b".to_string()].into_iter().collect(), 7);
+    c.load_phase(&phase, &HashMap::new());
+
+    let made: Vec<(&str, &str)> = c
+        .unassigned_calls()
+        .iter()
+        .map(|(call, key)| (call.as_str(), key.as_str()))
+        .collect();
+    assert_eq!(made, [("u7", "f:b[k=00001]"), ("u8", "f:b[k=00002]")]);
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00000]")), Some("b1"));
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00001]")), Some("u7"));
+    assert_eq!(c.call_id(id_of(&c, "f:b[k=00002]")), Some("u8"));
+    assert!(!c.same_call(id_of(&c, "f:b[k=00001]"), id_of(&c, "f:b[k=00002]")));
+    for key in &ks {
+        assert_eq!(c.call_id(id_of(&c, &format!("f:a[k={key}]"))), None);
+        assert_eq!(c.call_id(id_of(&c, &format!("f:plain[k={key}]"))), None);
+    }
+    assert!(c.takes_keys(id_of(&c, "f:b[k=00001]")));
+    assert!(!c.takes_keys(id_of(&c, "f:a[k=00001]")));
+
+    // a and unrelated plain keys can run immediately; b waits for its own input.
+    let a = drain(&mut c);
+    assert_eq!(a.len(), 6);
+    for d in &a {
+        let id = id_of(&c, d);
+        c.on_item_completed(id);
+    }
+    let b: Vec<String> = drain(&mut c);
+    assert_eq!(b.len(), 3);
+    for d in &b {
+        assert!(c.call_id(id_of(&c, d)).is_some() || d.starts_with("f:plain"));
+    }
+}
+
+/// A key the plan gave no call that is skipped (its input failed) does not hold anything back,
+/// and one that fails is tried again as the call it is.
+#[test]
+fn an_unplanned_batched_key_fails_and_retries_as_a_one_key_call() {
+    let ks = keys(2);
+    let mut phase = partition_stream(&ks, &[("f:a", None)]);
+    let mut b = partition_stream(&ks, &[("f:b", Some("f:a"))]);
+    for st in &mut b.streams[0].steps {
+        st.retries = 2;
+    }
+    b.streams[0].stream_id = "w1".to_string();
+    phase.streams.push(b.streams.remove(0));
+    let mut c = Coordinator::new();
+    c.require_calls(["f:b".to_string()].into_iter().collect(), 0);
+    c.load_phase(&phase, &HashMap::new());
+    let a = drain(&mut c);
+    let first = id_of(&c, &a[0]);
+    assert_eq!(
+        c.on_item_failed(first, "boom".into(), std::time::Duration::ZERO),
+        FailureAction::Failed
+    );
+    c.on_item_completed(id_of(&c, &a[1]));
+    // The key whose input failed is skipped; the other runs as its call.
+    let b = drain(&mut c);
+    assert_eq!(b, ["f:b[k=00001]"]);
+    let id = id_of(&c, &b[0]);
+    assert_eq!(c.call_id(id), Some("u1"));
+    assert_eq!(
+        c.on_item_failed(id, "x".into(), std::time::Duration::ZERO),
+        FailureAction::RetryNow
+    );
+    assert_eq!(drain(&mut c), ["f:b[k=00001]"]);
+    assert_eq!(c.call_id(id), Some("u1"));
+}
+
 /// RFC-0013: the keys of a call are queued together, once every one of them can run.
 #[test]
 fn a_call_is_released_when_all_its_keys_are_ready() {
@@ -723,10 +850,14 @@ fn partition_chain_edges_grow_linearly_with_keys() {
 /// skips only the keys that read it.
 #[test]
 fn partitions_wait_for_the_whole_previous_step_in_their_stream() {
-    let phase = partition_stream(
+    let mut phase = partition_stream(
         &keys(3),
         &[("f:a", None), ("f:b", Some("f:a")), ("f:c", None)],
     );
+    // c has an ordering-only input: failures of b do not skip c.
+    phase.streams[0].steps[2]
+        .inputs
+        .insert("_after".into(), "f:b".into());
     let mut c = Coordinator::new();
     c.load_phase(&phase, &HashMap::new());
     let a = |k: usize| id_of(&c, &format!("f:a[k={k:05}]"));
@@ -1305,4 +1436,22 @@ fn a_fresh_retry_is_one_attempt_beyond_retries_once() {
         FailureAction::Failed
     );
     assert!(c.is_finished());
+}
+
+#[test]
+fn worker_failure_diagnostics_keep_first_cause_with_bounded_copies() {
+    use barca_model::run_explain::{WORKER_ERROR_BYTES, WORKER_FAILURE_LIMIT};
+    let mut c = Coordinator::new();
+    c.record_worker_failure(ItemId(0), "original");
+    c.record_worker_failure(ItemId(0), "secondary");
+    for n in 1..WORKER_FAILURE_LIMIT + 10 {
+        c.record_worker_failure(ItemId(n as u64), &"x".repeat(WORKER_ERROR_BYTES * 2));
+    }
+    assert_eq!(c.worker_failures().len(), WORKER_FAILURE_LIMIT);
+    assert_eq!(c.worker_failures()[&ItemId(0)], "original");
+    assert!(
+        c.worker_failures()
+            .values()
+            .all(|error| error.len() <= WORKER_ERROR_BYTES)
+    );
 }

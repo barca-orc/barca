@@ -534,8 +534,9 @@ fn the_sweep_removes_the_branch_results_of_dead_runs_only() {
 }
 
 fn sh(script: &str) -> Command {
+    use std::os::unix::process::CommandExt;
     let mut cmd = Command::new("sh");
-    cmd.args(["-c", script]);
+    cmd.args(["-c", script]).process_group(0);
     cmd
 }
 
@@ -821,6 +822,8 @@ fn shutdown_terminates_all_workers_in_one_shared_grace_window() {
                 "barca-shutdown",
             ])
             .arg(&ready);
+            use std::os::unix::process::CommandExt;
+            cmd.process_group(0);
             readiness.push(ready);
             let child = barca_proc::helper_proc::spawn_std(&mut cmd).unwrap();
             pids.push(child.id());
@@ -1123,4 +1126,137 @@ async fn a_step_that_ends_gives_its_weight_back_with_the_next_ask() {
     pool.assign_ready(&mut coord, &cost, &cancel).await;
     assert_eq!(host.calls.lock().unwrap()[2..], ["release 1"]);
     pool.shutdown().await;
+}
+
+/// A batched node's function takes a list of keys, so a key of a call must go to a worker
+/// with its call: a plain item at the head of a lease never takes keys of a call into its
+/// own lease, which is sent without one (the function would get a single key).
+#[cfg(unix)]
+#[tokio::test]
+async fn a_plain_lease_does_not_take_keys_of_a_call() {
+    let mut pool = WorkerPool::start(test_config("plain-lease-call", 1)).unwrap();
+    let mut coord = Coordinator::new();
+    // Cheap steps: the head's lease is sized to take several of the ready items.
+    let mut cost = CostModel::new();
+    for name in ["a", "b[k=0]", "c"] {
+        cost.observe(&format!("p.py:{name}"), 0.0001, 0.0001, 0);
+    }
+    coord.assign_calls(vec![(
+        "b1".to_string(),
+        (0..3).map(|i| format!("p.py:b[k={i}]")).collect(),
+    )]);
+    let plain = |name: &str| barca_model::StepId::unpartitioned(format!("p.py:{name}"));
+    coord.add_item(plain("a"), test_spec("a"), vec![]);
+    for i in 0..3 {
+        let step_id = barca_model::StepId::new(
+            "p.py:b",
+            barca_model::model::PartitionKey(
+                [("k".to_string(), i.to_string())].into_iter().collect(),
+            ),
+        );
+        coord.add_item(step_id, test_spec("b"), vec![]);
+    }
+    coord.add_item(plain("c"), test_spec("c"), vec![]);
+    pool.launch(sh("exec sleep 30"), 0).unwrap();
+    let _client = connect_as(&pool.socket_path.clone(), Some(0)).await;
+    let Some(IoEvent::Connected {
+        worker_id,
+        pid,
+        stream,
+    }) = pool.event_rx.recv().await
+    else {
+        panic!("expected a connection");
+    };
+    assert!(pool.on_connected(worker_id, pid, stream));
+    let cancel = CancellationToken::new();
+
+    pool.assign_ready(&mut coord, &cost, &cancel).await;
+    while pool.workers[&0].leases.front().is_some() {
+        let lease = &pool.workers[&0].leases;
+        let in_call = lease
+            .iter()
+            .filter(|&&i| coord.call_id(i).is_some())
+            .count();
+        assert!(
+            in_call == 0 || in_call == lease.len(),
+            "a lease mixes keys of a call with other steps: {:?}",
+            lease
+                .iter()
+                .map(|&i| coord.item(i).step_id.display())
+                .collect::<Vec<_>>()
+        );
+        let ids: Vec<ItemId> = lease.iter().copied().collect();
+        for id in ids {
+            let name = coord.item(id).step_id.display();
+            pool.take_lease(0, &name, &coord).unwrap();
+            coord.record_output(id, serde_json::json!({}));
+            coord.on_item_completed(id);
+        }
+        pool.assign_ready(&mut coord, &cost, &cancel).await;
+    }
+    pool.shutdown().await;
+}
+
+/// The step of a batched node says so, with or without a call: a worker handed one with no
+/// call makes a call of it, whose function takes a list of keys.
+#[test]
+fn a_batched_nodes_step_says_it_takes_keys_with_or_without_a_call() {
+    let key = |k: &str| {
+        barca_model::StepId::new(
+            "p.py:b",
+            barca_model::model::PartitionKey([("k".to_string(), k.to_string())].into()),
+        )
+    };
+    let mut coord = Coordinator::new();
+    coord.assign_calls(vec![("b1".to_string(), vec!["p.py:b[k=0]".to_string()])]);
+    let planned = coord.add_item(key("0"), test_spec("b"), vec![]);
+    // Loaded with no call, in a coordinator told the node is batched: it makes one.
+    coord.require_calls(["p.py:b".to_string()].into(), 0);
+    let unplanned = coord.add_item(key("1"), test_spec("b"), vec![]);
+    let plain = coord.add_item(
+        barca_model::StepId::unpartitioned("p.py:a"),
+        test_spec("a"),
+        vec![],
+    );
+    for id in [planned, unplanned] {
+        assert_eq!(build_step_json(coord.item(id), &coord)["batched"], true);
+        assert!(coord.call_id(id).is_some());
+    }
+    assert!(
+        build_step_json(coord.item(plain), &coord)
+            .get("batched")
+            .is_none()
+    );
+}
+
+/// SIGCONT must let a stopped leader handle TERM rather than only dying at KILL.
+#[cfg(unix)]
+#[test]
+fn shutdown_resumes_a_stopped_worker_before_term() {
+    use std::io::BufRead;
+    use std::os::unix::process::CommandExt;
+    let mut cmd = Command::new("python3");
+    cmd.args([
+        "-c",
+        "import signal,time; signal.signal(signal.SIGTERM, lambda *_: exit(0)); print('ready', flush=True); time.sleep(60)",
+    ])
+    .process_group(0)
+    .stdout(Stdio::piped());
+    let mut child = barca_proc::helper_proc::spawn_std(&mut cmd).unwrap();
+    let mut line = String::new();
+    std::io::BufReader::new(child.stdout.take().unwrap())
+        .read_line(&mut line)
+        .unwrap();
+    assert_eq!(line.trim(), "ready");
+    unsafe {
+        assert_eq!(libc::kill(child.id() as i32, libc::SIGSTOP), 0);
+        let mut status = 0;
+        assert_eq!(
+            libc::waitpid(child.id() as i32, &mut status, libc::WUNTRACED),
+            child.id() as i32
+        );
+        assert!(libc::WIFSTOPPED(status));
+    }
+    graceful_kill(&mut child);
+    assert_eq!(child.wait().unwrap().code(), Some(0));
 }

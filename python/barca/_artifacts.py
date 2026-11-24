@@ -473,7 +473,9 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
     is downloaded to a staging file that is removed before returning.
     """
     if _storage.is_remote(path):
-        if fmt == "parquet" and frame_type in LAZY_FRAME_TYPES:
+        if fmt == "parquet" and frame_type == "pyarrow_dataset":
+            raise ValueError("Dataset inputs must be fetched to local disk before reading")
+        if fmt == "parquet" and frame_type in ("duckdb", "polars_lazy"):
             return _scan_remote_parquet(str(path), frame_type)
         tmp = _make_temp(_staging_dir(), prefix="fetch-")
         try:
@@ -497,23 +499,31 @@ def deserialize(path: "Path | str", fmt: str, *, frame_type: str | None = None) 
     return _deserialize_local(Path(path), fmt, frame_type=frame_type)
 
 
+def duckdb_remote_path(uri: str) -> str:
+    """Register Barca's range filesystem and return its private URI for DuckDB."""
+    from barca import _range_cache
+
+    fs = _range_cache.range_read_fs(uri)
+    con = _duckdb.connection()
+    name = fs.protocol[0]
+    with _duckdb_register_lock:
+        if _duckdb_registered.get(name) is not fs:
+            if name in _duckdb_registered:
+                con.unregister_filesystem(name)
+            con.register_filesystem(fs)
+            _duckdb_registered[name] = fs
+    return _range_cache.range_read_uri(uri)
+
+
 def _scan_remote_parquet(uri: str, frame_type: str) -> Any:
     """A lazy reader over a remote parquet object, reading byte ranges in place."""
     from barca import _range_cache
 
-    fs = _range_cache.range_read_fs(uri)
     if frame_type == "duckdb":
-        from barca import _duckdb
-
-        con = _duckdb.connection()
-        name = fs.protocol[0]
-        with _duckdb_register_lock:
-            if _duckdb_registered.get(name) is not fs:
-                if name in _duckdb_registered:
-                    con.unregister_filesystem(name)
-                con.register_filesystem(fs)
-                _duckdb_registered[name] = fs
-        return con.read_parquet(_range_cache.range_read_uri(uri))
+        return _duckdb.connection().read_parquet(duckdb_remote_path(uri))
+    if frame_type != "polars_lazy":
+        raise ValueError(f"No remote parquet scanner for {frame_type!r}")
+    fs = _range_cache.range_read_fs(uri)
 
     import polars as pl
     import pyarrow.dataset as ds

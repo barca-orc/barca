@@ -279,6 +279,8 @@ sensor once and let the `Always` nodes below it follow instead.
 
 ## A schedule that missed its slot
 
+After a delayed wakeup, each existing schedule fires at most once for its latest missed cron slot. Pauses, failure limits and runs already in flight still apply. A busy metadata store postpones admission. Other admission errors degrade health and the scheduler retries that job's slot up to three attempts before logging that it gave up. Other jobs keep ticking. Startup also coalesces downtime into one catch-up per existing schedule, and anchors new schedules at startup. A backward clock step resets future cursors to the corrected time.
+
 Where a schedule stands is decided once, on the server, and every surface reads that answer:
 `GET /schedule`, the `schedule` block of `GET /state` and of `barca status --json` (`GET
 /nodes`), and the web UI, which shows the values and compares no times itself.
@@ -391,8 +393,7 @@ the commands need a server, as `barca pause` does (`barca docs incidents`).
 
 Each answers the job's `GET /schedule` entry, which `--json` prints as it is (without `--json`:
 one line, `pipeline.py:daily_report: paused until resumed · cron 0 6 * * * · next fire ...`,
-and a note on stderr). It reports `paused` and `paused_until` (unix
-epoch seconds, `null` for a pause until resumed). `barca pause` with no target lists the paused
+and a note on stderr). It reports `paused` and `paused_until` (RFC 3339 UTC, `null` for a pause until resumed). `barca pause` with no target lists the paused
 schedules under `schedules` beside the paused nodes, and `barca status --problems` lists a
 paused schedule's node. While a job is paused its due ticks are
 skipped: a line on stderr, `skip_reason: "paused"` in `GET /schedule`, and with telemetry on a
@@ -411,10 +412,10 @@ in the tz database. Any other value is a usage error: the server exits 2 and nam
 `barca list` talks to no server and does not know its `--timezone`. Its next fire times (the
 `NEXT FIRE (LOCAL TIME)` column, `next_fire` in JSON) are the next match of the cron expression
 in the local time of the machine `list` runs on. For a server started with another zone, ask the
-server: `GET /schedule` returns `next_fire` as unix epoch seconds, computed in the server's zone.
+server: `GET /schedule` returns `next_fire` as RFC 3339 UTC, computed in the server's zone.
 
 ```bash
-curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "next_fire": 1791522000, "failures": 0, "failing": false, ...}]
+curl -s http://127.0.0.1:8274/schedule         # [{"id": ..., "next_fire": "2026-10-09T05:00:00Z", "failures": 0, "failing": false, ...}]
 ```
 
 ```bash
@@ -469,7 +470,22 @@ error envelope, `reason` `metadata_unusable` and the remediation. `metadata_erro
 `null` once a read succeeds again (after the writer migrated the file, or it was restored).
 
 `GET /health` also has `scheduler_enabled`: `false` with `--no-schedule` or `--read-only`, and
-once the scheduler stopped on an error (it then says why in `metadata_error`).
+while stopped on a metadata error. It returns to true after a successful restart.
+
+A writable scheduler publishes the experimental `scheduler_liveness` object on
+`GET /health`. Request `GET /schedule?include_liveness=true` for the same object
+beside the `jobs` array. The default `GET /schedule` response is the jobs array.
+`heartbeat_at_ms` and `operation_started_at_ms` are absolute Unix milliseconds;
+the loop publishes its heartbeat every 20 seconds. Subtract the operation start from the
+current time to measure how long `operation` has waited. The normal wait for the next
+cron second leaves `operation` null.
+`last_due_slot` and `last_enqueue` are Unix seconds. Values are null until observed.
+Health returns HTTP 200 with `status: degraded` and a liveness `reason` during
+restart backoff or after 60 seconds without a loop heartbeat (120 seconds during
+startup). Retries start one second after an unexpected exit, double up to sixty
+seconds, and reset to one second after ten minutes of uptime. `restart_count` and
+`last_exit_reason` survive task restarts within the process. Draining takes precedence.
+Servers without a local scheduler omit liveness on health and return null in the schedule envelope.
 
 A writable server checks the metadata WAL every minute. `GET /health` reports the last
 measurement under `metadata_wal`: remaining bytes, the threshold (64 MiB), whether the WAL
@@ -613,5 +629,11 @@ and graph-dependent nodes while retaining healthy definitions, even in a file wi
 blocked sibling node. Startup logs and the UI report unloaded sources and affected
 node IDs; `GET /health` exposes the same `load_errors`. With `--watch`, repaired
 configured sources and schedules rejoin automatically. One-shot commands stay strict.
+
+
+A task may raise `barca.Skip("reason")` when external work makes this tick unnecessary.
+It records a skipped attempt without retry, output or freshness advancement. Skips preserve
+consecutive failure counts: they neither increment nor reset them. The next scheduled tick
+runs normally, unless the schedule was already held. See `barca docs tasks`.
 
 See also: `barca docs serve-ops`, `barca docs server-mode`, `barca docs telemetry`, `barca docs assets`.

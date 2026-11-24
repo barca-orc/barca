@@ -73,7 +73,7 @@ def test_history_says_the_same_of_every_run_here_and_through_a_server(tmp_path, 
     writer = serve("--no-schedule")
     started = writer.post("/runs", {"command": "get", "targets": ["report"]})
     wait_until(
-        lambda: writer.get(f"/runs/{started['run_id']}")["status"] == "success",
+        lambda: writer.get(f"/runs/{started['run_id']}")["run"]["status"] == "success",
         "the server's run to finish",
     )
     writer.stop()
@@ -95,7 +95,7 @@ def test_history_says_the_same_of_every_run_here_and_through_a_server(tmp_path, 
 
     # `GET /runs` lists the same runs in the same order, under its own keys.
     listed = reader.get("/runs")
-    assert [r["id"] for r in listed["runs"]] == [r["run_id"] for r in local["runs"]]
+    assert [r["run_id"] for r in listed["runs"]] == [r["run_id"] for r in local["runs"]]
     assert listed["total"] == local["total"]
     shared = ("command", "target", "status", "triggered_by", "steps_total", "steps_executed")
     for row, run in zip(listed["runs"], local["runs"], strict=True):

@@ -77,7 +77,7 @@ pub(super) fn end_of_run_line(
 
 /// The `--agent` line for a step served from cache: `[barca] step:<id> cached`, with its declared
 /// env.
-pub(super) fn cached_step_line(dag: &Dag, display_id: &str) -> String {
+pub fn cached_step_line(dag: &Dag, display_id: &str) -> String {
     format!(
         "[barca] step:{display_id} cached{}",
         env_suffix(dag, display_id)

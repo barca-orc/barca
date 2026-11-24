@@ -1,9 +1,10 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, type StateScope } from '@/lib/api'
 import { POLL_WHOLE_MS, statePollInterval } from '@/lib/running'
 import { useSearchParams } from 'react-router'
 import { useAssets } from './useAssets'
+import { useRollup } from './useRollup'
 import { useGroups } from './useGroups'
 import { useGroupTree } from './useGroupTree'
 import { inPipeline } from '@/lib/pipeline'
@@ -39,9 +40,19 @@ export function useStateScope(): { scope: StateScope | null; waiting: boolean } 
  * `304`s (ETag). No placeholder data: a status table showing invented states would be worse
  * than showing nothing.
  */
-export function useAssetStates() {
+export function useAssetStates(poll = true) {
   const { scope, waiting } = useStateScope()
   const assets = useAssets()
+  const client = useQueryClient()
+  const rollup = useRollup(null)
+  // Offscreen nodes can change which rows a filter/sort would show. Refresh the scope
+  // when the rollup's per-node facts change, but not for its minute-clock alone.
+  const revision = JSON.stringify([...rollup.tree.entries.values()].filter((e) => e.kind === 'node').map((e) => [e.id, e.health, e.causes, e.running]))
+  const previous = useRef(revision)
+  useEffect(() => {
+    if (!poll && previous.current !== revision) void client.invalidateQueries({ queryKey: ['state'] })
+    previous.current = revision
+  }, [revision, poll, client])
   // A pipeline with no nodes is an empty result, not a request the server would refuse.
   const listed = assets.data
   const file = scope && 'file' in scope ? scope.file : null
@@ -50,7 +61,7 @@ export function useAssetStates() {
     queryKey: stateKey(scope),
     queryFn: ({ signal }) => (empty ? Promise.resolve([]) : api.state(scope, signal)),
     enabled: !waiting && (file === null || listed !== undefined),
-    refetchInterval: recovering<NodeState[]>((query) => statePollInterval(query.state.data)),
+    refetchInterval: recovering<NodeState[]>((query) => poll ? statePollInterval(query.state.data) : false),
     retry: false,
   })
 }
@@ -83,4 +94,25 @@ export function useKnownStates(data: readonly NodeState[] | undefined): readonly
     const loaded = client.getQueryCache().findAll({ queryKey: ['state'] }).map((q) => ({ data: q.state.data as NodeState[] | undefined, updatedAt: q.state.dataUpdatedAt }))
     return knownStates(undefined, loaded)
   }, [data, client])
+}
+
+/** Refresh just the table rows on screen, preserving the scope's other loaded rows. */
+export function useVisibleAssetStates(ids: string[]) {
+  const { scope } = useStateScope()
+  const client = useQueryClient()
+  const targets = [...new Set(ids)]
+  const query = useQuery({
+    queryKey: ['visible-state', targets],
+    queryFn: ({ signal }) => api.state({ targets }, signal),
+    enabled: targets.length > 0,
+    refetchInterval: recovering<NodeState[]>((q) => statePollInterval(q.state.data)),
+    retry: false,
+  })
+  const scopeKey = JSON.stringify(scope)
+  useEffect(() => {
+    if (!query.data) return
+    const fresh = new Map(query.data.map((row) => [row.id, row]))
+    client.setQueryData<NodeState[]>(stateKey(JSON.parse(scopeKey)), (old) => old?.map((row) => fresh.get(row.id) ?? row))
+  }, [query.data, query.dataUpdatedAt, client, scopeKey])
+  return query
 }

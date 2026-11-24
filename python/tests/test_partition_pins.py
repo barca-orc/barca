@@ -25,6 +25,48 @@ def unrelated(region: str, rows: dict) -> int:
 """
 
 
+@pytest.mark.parametrize("scoped", [False, True], ids=["whole-project", "targeted"])
+def test_pin_preserves_unrelated_partition_status(tmp_path, scoped):
+    (tmp_path / "pipeline.py").write_text("""
+from barca import asset, partitions
+
+@asset()
+def rates() -> dict:
+    return {"usd": 1}
+
+@asset(partitions={"region": partitions(["emea", "apac"])})
+def sales(region: str) -> dict:
+    return {"region": region}
+""")
+    result = barca(tmp_path, "get", "pipeline.py")
+    assert result.returncode == 0, result.stderr
+
+    def sales_status():
+        result = barca(tmp_path, "status", *(["sales"] if scoped else []), "--json")
+        assert result.returncode == 0, result.stderr
+        rows = json.loads(result.stdout)["nodes"]
+        return next(row for row in rows if row["id"].endswith(":sales"))
+
+    before = sales_status()
+    versions = barca(tmp_path, "pin", "rates", "--versions", "--json")
+    assert versions.returncode == 0, versions.stderr
+    run_hash = json.loads(versions.stdout)["versions"][0]["run_hash"]
+    pinned = barca(tmp_path, "pin", "rates", "--run-hash", run_hash)
+    assert pinned.returncode == 0, pinned.stderr
+    after = sales_status()
+    assert after["cache"] == before["cache"]
+    assert after["partitions"] == before["partitions"]
+
+    from .served import Serve
+
+    with Serve(tmp_path, "--no-schedule", wait="health") as served:
+        status, state = served.request("GET", "/state")
+        assert status == 200, state
+        sales = next(row for row in state if row["id"].endswith(":sales"))
+        assert sales["cache"]["state"] == "cached", sales
+        assert sales["partitions"]["total"] == 2, sales
+
+
 @pytest.fixture(params=[False, True], ids=["static", "runtime"])
 def repair_project(project, request):
     if request.param:

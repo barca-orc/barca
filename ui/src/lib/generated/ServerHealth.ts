@@ -5,6 +5,7 @@ import type { HealthQueue } from "./HealthQueue";
 import type { HealthStatus } from "./HealthStatus";
 import type { LoadError } from "./LoadError";
 import type { WalCheckpoint } from "./WalCheckpoint";
+import type { SchedulerLiveness } from "./SchedulerLiveness";
 
 /**
  * `GET /health`: liveness (or `draining`), the versions a client checks, the environment and
@@ -50,9 +51,9 @@ read_only: boolean,
  */
 scheduler: boolean,
 /**
- * `scheduler`, and false once the scheduler stopped on an error.
+ * `scheduler`, and false while stopped on a metadata error until a successful restart.
  */
-scheduler_enabled: boolean,
+scheduler_enabled: boolean, scheduler_liveness?: SchedulerLiveness,
 /**
  * When this server started (RFC 3339): a client that reconnects tells a restart by it.
  */

@@ -443,6 +443,21 @@ pub(crate) fn render_status_table(result: &crate::status::StatusResult) -> Strin
         .unwrap_or_else(|| "off".to_string());
     writeln!(&mut rendered, "Cache: {} budgeted (limit {limit}); {} metadata backups outside the budget; {} physical total",
         bytes(usage.budget_bytes), bytes(usage.backup_bytes), bytes(usage.size_bytes)).unwrap();
+    for trim in usage.metadata_trim.iter().filter(|t| t.reason.is_some()) {
+        writeln!(
+            &mut rendered,
+            "Metadata ({}): {} over its {} share; {}{}",
+            trim.env,
+            crate::text::human(trim.after_bytes),
+            crate::text::human(trim.allowance_bytes),
+            trim.detail.as_deref().unwrap_or_default(),
+            trim.next_attempt
+                .as_ref()
+                .map(|at| format!("; next trim attempt after {at}"))
+                .unwrap_or_default()
+        )
+        .unwrap();
+    }
     rendered
 }
 
@@ -604,6 +619,18 @@ mod utc_tests {
     fn stored_timestamps_are_marked_utc() {
         assert_eq!(utc_cell("2026-10-21 02:04:05"), "2026-10-21 02:04:05 UTC");
         assert_eq!(utc_cell("2026-10-21T02:04:05Z"), "2026-10-21 02:04:05 UTC");
+        assert_eq!(
+            utc_cell("2026-10-21T02:04:05.000Z"),
+            "2026-10-21 02:04:05 UTC"
+        );
+        assert_eq!(
+            utc_cell("2026-10-21T02:04:05.123Z"),
+            "2026-10-21 02:04:05.123 UTC"
+        );
+        assert_eq!(
+            utc_cell("2026-10-21 02:04:05.123"),
+            utc_cell("2026-10-21T02:04:05.123Z")
+        );
         assert_eq!(utc_cell(""), "");
     }
 }

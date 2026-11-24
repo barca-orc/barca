@@ -418,7 +418,7 @@ async fn delete_cancels_in_flight_run() {
             "run never started executing"
         );
         let (_, s) = send(&app, "GET", &status_uri).await;
-        match s["status"].as_str() {
+        match s["run"]["status"].as_str() {
             Some("running") => {
                 #[cfg(target_os = "linux")]
                 if workers_running(&marker) == 0 {
@@ -439,9 +439,9 @@ async fn delete_cancels_in_flight_run() {
 
     loop {
         let (_, s) = send(&app, "GET", &status_uri).await;
-        match s["status"].as_str() {
+        match s["run"]["status"].as_str() {
             Some("cancelled") => {
-                assert_eq!(s["error"], "run cancelled");
+                assert_eq!(s["run"]["error"], "run cancelled");
                 break;
             }
             Some("running" | "pending") => {}
@@ -574,7 +574,7 @@ async fn a_due_tick_is_skipped_while_a_run_started_over_http_is_in_flight() {
     assert_eq!(status, StatusCode::OK);
     loop {
         let (_, s) = send(&app, "GET", &format!("/status/{handle}")).await;
-        if s["status"] == "cancelled" {
+        if s["run"]["status"] == "cancelled" {
             break;
         }
         assert!(
@@ -885,7 +885,11 @@ async fn state_reports_the_next_run_in_the_servers_timezone() {
         config.timezone = zone.to_string();
         let (status, json) = send(&app(config), "GET", "/state").await;
         assert_eq!(status, StatusCode::OK, "{json}");
-        let next_run = json[0]["next_run"].as_i64().expect("a scheduled node");
+        let next_run = chrono::DateTime::parse_from_rfc3339(
+            json[0]["next_run"].as_str().expect("a scheduled node"),
+        )
+        .unwrap()
+        .timestamp();
         assert_eq!(next_run % 86_400, seconds_into_the_utc_day, "{zone}");
     }
 }
@@ -1199,21 +1203,21 @@ async fn runs_inspection_survives_server_restart_and_never_mutates_history() {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(list["total"], 2);
         assert_eq!(list["truncated"], true);
-        assert_eq!(list["runs"][0]["id"], "scheduled");
-        assert_eq!(list["runs"][0]["handle"], serde_json::Value::Null);
+        assert_eq!(list["runs"][0]["run_id"], "scheduled");
+        assert!(list["runs"][0].get("handle").is_none());
         assert_eq!(list["runs"][0]["status"], "failed");
         let (status, detail) = send(&router, "GET", "/runs/cli").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(detail["run_id"], "cli");
-        assert_eq!(detail["files"], serde_json::json!(["old.py"]));
-        assert_eq!(detail["steps_cached"], 1);
-        assert_eq!(detail["triggered_by"], "manual");
+        assert_eq!(detail["run"]["run_id"], "cli");
+        assert_eq!(detail["run"]["files"], serde_json::json!(["old.py"]));
+        assert_eq!(detail["run"]["steps_cached"], 1);
+        assert_eq!(detail["run"]["triggered_by"], "manual");
         assert!(
-            detail["outcome"].is_null(),
+            detail["run"]["outcome"].is_null(),
             "a CLI run has no stored outcome"
         );
         assert_eq!(detail["logs"][0]["line"], "from cli");
-        assert!(detail["started_at"].as_str().unwrap().ends_with('Z'));
+        assert!(detail["run"]["started_at"].as_str().unwrap().ends_with('Z'));
         assert_eq!(
             send(&router, "GET", "/runs/missing").await.0,
             StatusCode::NOT_FOUND
@@ -1646,10 +1650,10 @@ async fn a_run_streams_its_lines_and_outcome_and_is_answered_after_a_restart() {
     // The same answer from GET /runs/{id}, and the run is in the history as an API run.
     let (status, run) = send(&app, "GET", &format!("/runs/{id}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(run["status"], "success");
-    assert_eq!(run["triggered_by"], "api");
-    assert_eq!(run["outcome"], outcome);
-    assert_eq!(run["target"], "second");
+    assert_eq!(run["run"]["status"], "success");
+    assert_eq!(run["run"]["triggered_by"], "api");
+    assert_eq!(run["run"]["outcome"], outcome);
+    assert_eq!(run["run"]["target"], "second");
     let (_, history) = send(&app, "GET", "/history").await;
     assert_eq!(history["runs"][0]["run_id"], id.as_str());
     assert_eq!(history["runs"][0]["triggered_by"], "api");
@@ -1722,9 +1726,9 @@ async fn a_run_streams_its_lines_and_outcome_and_is_answered_after_a_restart() {
     for (run_id, status) in [(&id, "success"), (&failed, "failed")] {
         let (code, run) = send(&restarted, "GET", &format!("/runs/{run_id}")).await;
         assert_eq!(code, StatusCode::OK, "{run}");
-        assert_eq!(run["status"], status, "{run}");
-        assert_eq!(run["triggered_by"], "api");
-        assert_eq!(run["outcome"]["status"], status, "{run}");
+        assert_eq!(run["run"]["status"], status, "{run}");
+        assert_eq!(run["run"]["triggered_by"], "api");
+        assert_eq!(run["run"]["outcome"]["status"], status, "{run}");
         assert!(!run["steps"].as_array().unwrap().is_empty(), "{run}");
     }
     let output = restarted
@@ -1795,7 +1799,7 @@ async fn delete_runs_cancels_a_run_and_its_outcome_says_cancelled() {
     let t0 = std::time::Instant::now();
     loop {
         let (_, run) = send(&app, "GET", &format!("/runs/{id}")).await;
-        if run["status"] == "running" {
+        if run["run"]["status"] == "running" {
             break;
         }
         assert!(t0.elapsed() < std::time::Duration::from_secs(30), "{run}");
@@ -1809,7 +1813,7 @@ async fn delete_runs_cancels_a_run_and_its_outcome_says_cancelled() {
     assert_eq!(outcome["status"], "cancelled");
     assert_eq!(outcome["envelope"]["code"], 130);
     let (_, run) = send(&app, "GET", &format!("/runs/{id}")).await;
-    assert_eq!(run["status"], "cancelled");
+    assert_eq!(run["run"]["status"], "cancelled");
 }
 
 /// Inspection in the CLI's shapes: `/list`, `/nodes`, `/history`, `/stats/{name}`,
@@ -1956,6 +1960,12 @@ async fn a_paused_schedule_skips_its_ticks_and_stays_paused_across_a_restart() {
     let (restarted, start_scheduler) = barca_server::app_with_scheduler(config.clone());
     let scheduler = start_scheduler();
     let job = skipped_tick(&restarted).await;
+    assert!(job.get("scheduler_liveness").is_none());
+    let (status, summary) = send(&restarted, "GET", "/schedule?include_liveness=true").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(summary["jobs"][0]["id"], job["id"]);
+    assert!(summary["scheduler_liveness"]["last_due_slot"].is_i64());
+    assert_eq!(summary["scheduler_liveness"]["restart_count"], 0);
     assert_eq!(job["paused"], true, "{job}");
     assert_eq!(job["skip_reason"], "paused", "{job}");
     assert!(
@@ -1979,7 +1989,10 @@ async fn a_paused_schedule_skips_its_ticks_and_stays_paused_across_a_restart() {
     let until_epoch = chrono::DateTime::parse_from_rfc3339(&until)
         .unwrap()
         .timestamp();
-    assert_eq!(job["paused_until"], until_epoch);
+    assert_eq!(
+        job["paused_until"],
+        barca_service::time::rfc3339(until_epoch)
+    );
     let (status, job) = send(&restarted, "POST", "/schedule/every_second/resume").await;
     assert_eq!(status, StatusCode::OK, "{job}");
     assert_eq!(job["paused"], false);

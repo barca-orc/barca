@@ -241,6 +241,41 @@ recorded too, as `stream: "stderr"`, and so is the traceback of a failed attempt
 lines and trailing partial lines flushed on return/failure are recorded. `--step report` selects a function name; exact node ids disambiguate.
 See [barca logs](/reference/cli/logs/) for the full contract.
 
+
+## Explicit task skips
+
+Raise `barca.Skip(reason)` in a task body when it has no work to perform, for example when
+another process holds its advisory lock:
+
+```python
+from barca import Skip, task
+
+@task
+def copy_data():
+    if another_copy_is_running():
+        raise Skip("another copy holds the lock")
+    copy_rows()
+```
+
+The attempt is recorded as `skipped` with `skip_reason`, with no result, artifact, cache
+entry, upload or ledger publication. It does not refresh the node. The existing history
+table stores the attempt; that row is not a successful materialization. `Skip` is task-only:
+raising it from an asset, sensor, import, or parallel branch is an ordinary exception.
+Returning a `Skip` instance does not skip. A skip is never retried, even with `retries=`.
+
+Scheduled skips neither increment nor reset the failure streak. Five skipped ticks do not
+hold the schedule; the next tick may run normally. There is no `max_skips` setting.
+`GET /schedule` reports `last_status: skipped` and `last_task_skip_reason` for the latest
+fired task run. The task reason is omitted after a success, failure, or newer scheduler-only
+decision. Its existing `skip_reason` describes scheduler decisions such as `in_flight`
+and `paused`, separately from the task's reason.
+
+A run is `skipped` only when it contains explicit skips and no successful executed work.
+Cached inputs do not change that outcome. Successful work plus skips is `success`; any
+failure makes the run `failed`. Explicit skipped steps carry `skip_reason`; downstream
+steps blocked by them have reason `upstream_skipped` and do not copy that reason. Skipped
+runs exit zero. History counts executed skips separately from `ok` and `not_reached`.
+
 See also: [The Cache](/reference/cache/), `barca docs examples/deploy-task`, [barca logs](/reference/cli/logs/).
 
 ---

@@ -16,6 +16,7 @@ by `barca/_failure.py`, and results and errors leave through `barca/_runtime.py`
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import sys
@@ -687,6 +688,7 @@ class _Run:
         "retry_fresh",
         "rss_window",
         "survives",
+        "skip_allowed",
         "t0",
         "tracing",
     )
@@ -719,6 +721,7 @@ class _Run:
         # The failure was this process's, not the step's (`_duckdb.invalidated`): the worker
         # stops and the coordinator tries the step once more in a fresh one.
         self.retry_fresh = False
+        self.skip_allowed = step.get("kind") == "task" and not step.get("branch")
 
     def begin(self, step: Step, modules: Modules, log_id: str) -> _Begun:
         """Import the step's module and find its function (`_begin`). From here until the
@@ -746,6 +749,16 @@ class _Run:
             "retry_fresh": self.retry_fresh,
         }
 
+    def skipped(self, exc: BaseException) -> bool:
+        from barca._skip import Skip
+
+        return (
+            isinstance(exc, Skip)
+            and self.skip_allowed
+            and self.imported
+            and self.phase == USER_CODE
+        )
+
     def __enter__(self) -> _Run:
         return self
 
@@ -759,7 +772,7 @@ class _Run:
             if exc is None or isinstance(exc, self.propagates):
                 return False
             wall = self.wall()
-            self.tracing.finish(exc)
+            self.tracing.finish(None if self.skipped(exc) else exc)
             self.retry_fresh = _duckdb.invalidated(exc)
             self.survives = _worker_survives(exc, self.imported) and not self.retry_fresh
             self.report(exc, wall)
@@ -771,6 +784,10 @@ class _Run:
                 self.cleanup()
 
 
+# Numbers the calls a worker makes of a batched key that arrived with none.
+_ALONE = itertools.count(1)
+
+
 def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactLRU) -> bool:
     """Execute one step in daemon mode and emit its result or error.
 
@@ -778,7 +795,19 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
     with an exception that left the interpreter sound), False when it must stop. Socket
     errors raised while emitting propagate to the caller (the connection is gone — exit the
     loop).
+
+    A step of a batched node (`batched`) that arrives with no call is run as a call of its one
+    key: that function takes a list of keys, never a single one.
     """
+    if step.get("batched"):
+        call = {"id": f"w{os.getpid()}-{next(_ALONE)}"}
+        print(
+            f"[barca] warning: {step.get('node_id')} of a batched node arrived with no call; "
+            f"running it as a call of its one key ({call['id']})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return _run_daemon_call([step], call, modules, art_dir, lru)
     node_id = step.get("node_id", "unknown")
     # Set when this step is a parallel() branch whose return value could not be written.
     unwritable = False
@@ -786,6 +815,9 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
     def report(exc: BaseException, wall: float) -> None:
         from barca import _branches
 
+        if run.skipped(exc):
+            _runtime.emit_step_skipped(node_id, str(exc), wall)
+            return
         _runtime.emit_step_error(
             node_id=node_id,
             # Only this branch's own return value that could not be written is reported as
@@ -855,6 +887,8 @@ def _run_daemon_step(step: Step, modules: Modules, art_dir: str, lru: _ArtifactL
         extra: dict[str, Any] = {}
         if sensor_changed is not None:
             extra["sensor_changed"] = sensor_changed
+            if sensor_changed and result is not None:
+                extra["sensor_explicit_value"] = True
         if source_observation is not None:
             extra["source_observation"] = source_observation
         try:
@@ -915,6 +949,9 @@ def _run_daemon_call(
         left = [st for st in steps if st["node_id"] not in reported]
         for i, st in enumerate(left):
             reported.add(st["node_id"])
+            if run.skipped(exc):
+                _runtime.emit_step_skipped(st["node_id"], str(exc), wall / max(n, 1))
+                continue
             _runtime.emit_step_error(
                 node_id=st["node_id"],
                 error_type=type(exc).__name__,

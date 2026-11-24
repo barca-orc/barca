@@ -231,7 +231,34 @@ mod tests {
             assert!(next.runs.queue.waiting_ids().is_empty());
             assert!(run_queue::list(&db).await.unwrap().is_empty());
             let record = db::get_run(&db, &id).await.unwrap().unwrap();
-            assert_eq!(record.status, "error");
+            assert_eq!(record.status, "interrupted");
+        });
+    }
+
+    #[test]
+    fn predecessor_with_indeterminate_owner_is_interrupted() {
+        crate::test_support::bounded(|| async {
+            let dir = tempfile::tempdir().unwrap();
+            let first = state(dir.path());
+            let _ = pause(State(first.clone())).await.unwrap();
+            let spec = RunSpec::api(RunCommand::Get, vec!["a".into()], vec![]);
+            let id = admit(&first, spec).await.unwrap().run_id;
+            let path = first.config.resolved.db_path.clone();
+            run_queue::mark_running(&path, &id).await.unwrap();
+            db::create_run(&path, &id, "get", "[]", None, Some(1))
+                .await
+                .unwrap();
+            {
+                let (_db, conn) = db::open_conn(&path).await.unwrap();
+                conn.execute("UPDATE runs SET host = 'another-host', pid = NULL, owner = NULL WHERE run_id = ?1", [id.as_str()]).await.unwrap();
+            }
+            drop(first);
+            let next = state(dir.path());
+            resume_at_startup(&next).await.unwrap();
+            assert_eq!(
+                db::get_run(&path, &id).await.unwrap().unwrap().status,
+                "interrupted"
+            );
         });
     }
 
@@ -267,6 +294,7 @@ mod tests {
             nodes: vec!["p.py:report".into()],
             files: vec!["p.py".into()],
             policy: CachePolicy::RefreshSelective {
+                since: barca_service::time::now_secs_f64(),
                 names: vec!["raw".into()],
                 cascade: false,
             },
@@ -292,15 +320,22 @@ mod tests {
         assert_eq!(back.files, spec.files);
         assert!(matches!(
             back.policy,
-            CachePolicy::RefreshSelective { ref names, cascade: false } if names == &["raw"]
+            CachePolicy::RefreshSelective { ref names, cascade: false, since } if names == &["raw"] && since == 12.5
         ));
         assert_eq!(back.trigger, spec.trigger);
         assert!(back.values);
         assert_eq!(back.partition, spec.partition);
         assert_eq!(back.rules, spec.rules);
-        for policy in [CachePolicy::CacheAware, CachePolicy::RefreshAll] {
+        for policy in [
+            CachePolicy::CacheAware,
+            CachePolicy::RefreshAll {
+                since: barca_service::time::now_secs_f64(),
+            },
+        ] {
             let mut spec = RunSpec::api(RunCommand::Get, vec![], vec![]);
             spec.policy = policy.clone();
+            let mut policy = policy;
+            policy.accepted_at(0.0);
             let (back, _) = load(&store(&spec, 0.0)).unwrap();
             assert_eq!(format!("{:?}", back.policy), format!("{policy:?}"));
         }

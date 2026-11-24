@@ -41,6 +41,8 @@ impl Coordinator {
         if let Some(&(call, position)) = self.call_assign.get(&step_id.display()) {
             self.call_of.insert(id, call);
             self.calls[call].members[position] = Some(id);
+        } else {
+            self.call_for_unassigned(id, &step_id);
         }
         let item = Item {
             id,
@@ -146,7 +148,19 @@ impl Coordinator {
         // need a second pass.
         for stream in &phase.streams {
             let mut prev: Option<usize> = None;
+            let mut prev_node = None;
             for step in &stream.steps {
+                // Bin packing concatenates independent work units, including several
+                // chunks of the same chain. Adjacency alone is not a dependency: it can
+                // make a call wait for its own keys, or a producer wait for its consumer
+                // in the previous chunk (#1100). Keep the chain gate only for a declared
+                // upstream; data edges below still resolve across every stream.
+                let ordering_prev = prev.filter(|_| {
+                    step.inputs
+                        .values()
+                        .any(|input| Some(input.as_str()) == prev_node)
+                });
+                prev_node = Some(step.step_id.base_id());
                 if step.partition_keys.is_empty() {
                     let step_id = step.step_id.clone();
                     let display_id = step_id.display();
@@ -156,7 +170,7 @@ impl Coordinator {
                         step,
                         step_id,
                         item_id,
-                        prev,
+                        prev: ordering_prev,
                     });
                     prev_sets.push(vec![item_id]);
                     prev = Some(prev_sets.len() - 1);
@@ -175,7 +189,7 @@ impl Coordinator {
                             pk,
                             partition_step_id,
                             item_id,
-                            prev,
+                            prev: ordering_prev,
                         });
                     }
 

@@ -140,11 +140,8 @@ impl WorkerPool {
                 for &item_id in batch.iter().rev() {
                     coord.return_leased(item_id);
                 }
-                if let Some(mut dead) = self.workers.remove(&wid) {
-                    tokio::task::spawn_blocking(move || {
-                        let _ = dead.child.kill();
-                        let _ = dead.child.wait();
-                    });
+                if let Some(dead) = self.workers.remove(&wid) {
+                    self.reap(dead.child, Some(dead.cmd_tx));
                 }
                 continue;
             }
@@ -242,7 +239,10 @@ impl WorkerPool {
             let Some(&id) = ready.peek() else {
                 break;
             };
-            if coord.item(id).spec.weight > 1 {
+            // A key of a call is sent with its call (a batched node's function takes a list
+            // of keys): never in a lease of other steps, which is sent without one, so its
+            // function would get a single key.
+            if coord.item(id).spec.weight > 1 || coord.call_id(id).is_some() {
                 break;
             }
             let est = cost.estimate(&coord.item(id).step_id.display());

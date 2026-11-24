@@ -266,6 +266,8 @@ pub struct Coordinator {
     failure_phases: HashMap<ItemId, barca_compile::dispatch::ErrorPhase>,
     /// Skipped items (upstream data dep failed).
     skipped: HashSet<ItemId>,
+    explicit_skips: HashMap<ItemId, (String, f64)>,
+    worker_failures: HashMap<ItemId, String>,
     /// Items parked for retry backoff — not ready until requeue() is called.
     waiting_retry: HashSet<ItemId>,
     /// Output artifacts from completed items.
@@ -288,6 +290,14 @@ pub struct Coordinator {
     calls: Vec<Call>,
     /// Calls assigned before the phase is loaded: display id -> call index.
     call_assign: HashMap<String, (usize, usize)>,
+    /// The nodes (base ids) that declare `batch=`: their function takes a list of keys, so
+    /// every key of one that is loaded is in a call, whether or not one was assigned to it.
+    batched: HashSet<String>,
+    /// The calls made at load for keys of a batched node that were assigned none, as (the
+    /// call's id, the key's display id): the planner's calls are the rule, these the gap.
+    unassigned: Vec<(String, String)>,
+    /// The number the next such call's id is made from.
+    next_unassigned: u64,
     /// ID generators.
     next_item_id: u64,
     next_group_id: u64,
@@ -337,6 +347,8 @@ impl Coordinator {
             failure_clocks: HashMap::new(),
             failure_phases: HashMap::new(),
             skipped: HashSet::new(),
+            explicit_skips: HashMap::new(),
+            worker_failures: HashMap::new(),
             waiting_retry: HashSet::new(),
             outputs: HashMap::new(),
             groups: HashMap::new(),
@@ -346,6 +358,9 @@ impl Coordinator {
             call_of: HashMap::new(),
             calls: Vec::new(),
             call_assign: HashMap::new(),
+            batched: HashSet::new(),
+            unassigned: Vec::new(),
+            next_unassigned: 0,
             next_item_id: 0,
             next_group_id: 0,
         }

@@ -15,6 +15,9 @@ use serde::{Deserialize, Serialize};
 pub struct RunStep {
     pub node_id: String,
     pub status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub skip_reason: Option<String>,
     pub elapsed_seconds: Option<f64>,
     /// A failed step's error as recorded: for a Python exception, `Type: message` and the
     /// traceback's frames.
@@ -171,6 +174,24 @@ pub async fn get_run_steps(db_path: &str, run_id: &str) -> Result<Vec<RunStep>, 
     Ok(get_run_steps_page(db_path, run_id, None).await?.0)
 }
 
+/// Whether a step belongs to a run, without loading that run's partition history.
+pub async fn run_has_step(db_path: &str, run_id: &str, node_id: &str) -> Result<bool, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    let mut rows = conn
+        .query(
+            "SELECT 1 FROM materializations WHERE run_id = ?1 AND node_id = ?2 LIMIT 1",
+            [run_id, node_id],
+        )
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to check recorded step: {e}")))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("failed to check recorded step: {e}")))?
+        .is_some())
+}
+
 /// A page of a run's recorded steps: what `barca history RUN_ID` and `GET /runs/{run_id}`
 /// list (#623). A run of many partition keys records one step per key it computed.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -207,6 +228,9 @@ pub struct RunNodeSummary {
     pub keys: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub failed: usize,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    #[cfg_attr(feature = "ts", ts(type = "number", optional))]
+    pub skipped: usize,
     /// Summed over its keys, which may have overlapped.
     pub elapsed_seconds: f64,
     /// Batched calls that computed them; 0 when each key ran on its own.
@@ -264,6 +288,7 @@ pub async fn get_run_steps_window(
         "error_phase",
         "rows",
         "sink_seconds",
+        "skip_reason",
     ] {
         columns.push(if has_column(&conn, "materializations", name).await? {
             name
@@ -275,6 +300,7 @@ pub async fn get_run_steps_window(
         columns[0], columns[1], columns[2], columns[3], columns[4], columns[5], columns[6],
         columns[7],
     );
+    let skip_reason = columns[8];
     let total = match limit {
         None => None,
         Some(_) => {
@@ -300,7 +326,7 @@ pub async fn get_run_steps_window(
         _ => String::new(),
     };
     let mut rows = conn.query(
-        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted}, {sinks} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
+        &format!("SELECT node_id, status, elapsed_seconds, error_message, {attempts}, run_hash, artifact_path, artifact_format, artifact_size_bytes, {error_type}, error_traceback, {cpu}, {rss}, {batch}, {phase}, {counted}, {sinks}, {skip_reason} FROM materializations WHERE run_id = ?1{page} ORDER BY id"),
         [run_id],
     ).await.map_err(|e| BarcaError::Db(format!("failed to query run steps: {e}")))?;
     let text = |row: &libsql::Row, i: i32| row.get::<String>(i).ok().filter(|t| !t.is_empty());
@@ -345,6 +371,7 @@ pub async fn get_run_steps_window(
             rows: row.get::<i64>(15).ok(),
             sink_seconds: row.get::<f64>(16).ok(),
             output_tail: None,
+            skip_reason: text(&row, 17),
             batch: text(&row, 13),
             error_phase: text(&row, 14),
             node_id,
@@ -354,7 +381,19 @@ pub async fn get_run_steps_window(
     }
     drop(rows);
     if run_traced(&conn, run_id).await? {
-        attach_trace_ids(&mut steps, run_id);
+        let parent = if has_column(&conn, "runs", "parent_run_id").await? {
+            let mut rows = conn
+                .query("SELECT parent_run_id FROM runs WHERE run_id = ?1", [run_id])
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?;
+            rows.next()
+                .await
+                .map_err(|e| BarcaError::Db(e.to_string()))?
+                .and_then(|r| r.get::<String>(0).ok())
+        } else {
+            None
+        };
+        attach_trace_ids(&mut steps, parent.as_deref().unwrap_or(run_id));
     }
     // A failed step's last lines (#627). Failed steps are kept first in a page (#623), so every
     // failed step listed has its tail; only the listed failed steps' lines are read.
@@ -406,7 +445,7 @@ async fn node_summaries(
     let mut summary = conn
         .query(
             &format!(
-                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END), SUM(elapsed_seconds), COUNT(DISTINCT {batch}) \
+                "SELECT substr(node_id, 1, instr(node_id || '[', '[') - 1) AS base, COUNT(DISTINCT node_id), COUNT(DISTINCT CASE WHEN status = 'failed' THEN node_id END), SUM(elapsed_seconds), COUNT(DISTINCT {batch}), COUNT(DISTINCT CASE WHEN status = 'skipped' THEN node_id END) \
                  FROM materializations WHERE run_id = ?1 GROUP BY base ORDER BY SUM(status = 'failed') > 0 DESC, MIN(id)"
             ),
             [run_id],
@@ -425,6 +464,7 @@ async fn node_summaries(
             failed: row.get::<i64>(2).unwrap_or(0) as usize,
             elapsed_seconds: row.get::<f64>(3).unwrap_or(0.0),
             calls: row.get::<i64>(4).unwrap_or(0) as usize,
+            skipped: row.get::<i64>(5).unwrap_or(0) as usize,
             ..Default::default()
         });
     }
@@ -483,7 +523,7 @@ fn output_tail(lines: &[(String, String)], node_id: &str) -> Vec<String> {
     let mut own: Vec<&str> = lines
         .iter()
         .filter(|(node, _)| node == node_id)
-        .map(|(_, line)| line.as_str())
+        .flat_map(|(_, line)| line.split('\n'))
         .collect();
     if let Some(at) = own
         .iter()
@@ -619,6 +659,26 @@ pub async fn read_step_rows(
     Ok((out, total))
 }
 
+/// The first explicit task skip of a run, for its scheduled node (including partition keys).
+pub async fn task_skip_reason(
+    db_path: &str,
+    run_id: &str,
+    node_id: &str,
+) -> Result<Option<String>, BarcaError> {
+    let _g = db_guard_for(db_path).await;
+    let (_db, conn) = open_conn(db_path).await?;
+    if !has_column(&conn, "materializations", "skip_reason").await? {
+        return Ok(None);
+    }
+    let mut rows = conn.query("SELECT skip_reason FROM materializations WHERE run_id = ?1 AND status = 'skipped' AND (node_id = ?2 OR substr(node_id, 1, length(?2) + 1) = ?2 || '[') ORDER BY id LIMIT 1", [run_id, node_id]).await
+        .map_err(|e| BarcaError::Db(format!("reading task skip reason: {e}")))?;
+    Ok(rows
+        .next()
+        .await
+        .map_err(|e| BarcaError::Db(format!("reading task skip reason: {e}")))?
+        .and_then(|r| r.get::<String>(0).ok()))
+}
+
 #[cfg(test)]
 mod tests {
     /// #475: the keys of one run finish in any order, so the row id alone picks an arbitrary key
@@ -726,6 +786,15 @@ mod output_tail_tests {
         assert_eq!(tail.first().unwrap(), "line 10");
         assert_eq!(tail.last().unwrap(), "line 29");
         assert!(output_tail(&lines, "p.py:c").is_empty());
+        // New records group the traceback; old line-at-a-time records stay readable.
+        lines.truncate(lines.len() - 3);
+        lines.push((
+            "p.py:a".into(),
+            "Traceback (most recent call last):\n  File \"p.py\", line 3, in a\nValueError: no"
+                .into(),
+        ));
+        assert_eq!(output_tail(&lines, "p.py:a"), tail);
+        assert_eq!(output_tail(&[("blank".into(), "".into())], "blank"), [""]);
     }
 }
 

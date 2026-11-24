@@ -19,13 +19,13 @@ mod wire_tests;
 pub use pauses::{PauseRequest, Pauses, Pins};
 pub use queue::{QueueEntry, QueueEntryStatus, QueueView, RecordedRun, recorded as recorded_queue};
 pub use runs::{
-    ActiveStep, Cancelling, FirstFailure, Flight, LiveRun, LiveStatus, LiveSteps,
-    PartitionProgress, RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs,
-    RunSummary, RunViewRequest, RunViewStatus, RunViewed, RunsQuery, in_flight, in_flight_list,
-    in_flight_now, run_detail, run_list, run_view,
+    ActiveStep, Cancelling, Flight, LiveRun, LiveStatus, LiveSteps, PartitionProgress,
+    RunCancelling, RunDraft, RunHandle, RunList, RunListRequest, RunLogs, RunSummary,
+    RunViewRequest, RunViewStatus, RunViewed, RunsQuery, in_flight, in_flight_list, in_flight_now,
+    run_control, run_detail, run_list, run_view,
 };
 pub use schedule::{JobSkips, ScheduleJob, SchedulePauseAnswer, SkipReason, schedule_jobs};
 pub use server::{
     AuthMode, AuthStatus, CacheSize, Capabilities, HealthCapacity, HealthQueue, HealthStatus,
-    Project, ProjectFile, ProjectTelemetry, ServerHealth,
+    Project, ProjectFile, ProjectTelemetry, SchedulerLiveness, ServerHealth,
 };

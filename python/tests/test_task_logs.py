@@ -108,8 +108,9 @@ def test_failed_and_silent_steps_have_accessible_logs(project):
     assert stdout == ["before failure", "partial failure"]
     # The failed attempt's traceback is the step's stderr, as Python prints it.
     stderr = [row["line"] for row in logs if row["stream"] == "stderr"]
-    assert stderr[0] == "Traceback (most recent call last):"
-    assert stderr[-1] == "ValueError: boom"
+    assert len(stderr) == 1
+    assert stderr[0].startswith("Traceback (most recent call last):\n")
+    assert stderr[0].endswith("ValueError: boom")
     assert any('raise ValueError("boom")' in line for line in stderr)
     assert all(row["node_id"] == "pipeline.py:broken" for row in logs)
     quiet = json.loads(cli(project, "run", "quiet", "pipeline.py", "--json").stdout)

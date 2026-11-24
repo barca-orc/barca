@@ -910,7 +910,7 @@ def test_under_serve_a_schedule_and_a_run_request_override_the_grouping(tmp_path
             {"command": "get", "targets": ["scored"], "refresh": ["scored"], "batch": ["all"]},
         )
         view = serve.finished(answer["run_id"])
-        assert view["status"] == "success", view
+        assert view["run"]["status"] == "success", view
         validate({"$ref": "#/components/schemas/RunView"}, view)
         made = [c for c in calls(tmp_path) if c[1] == ["r1", "r2", "r3", "r4", "r5"]]
         assert made, "the refresh ran as one call"
@@ -1137,3 +1137,167 @@ def job(retailer: list[str]):
             barca.run("job", "pipeline.py", batch="all", server=f"http://127.0.0.1:{serve.port}")
             == expected
         )
+
+
+# ─── A batched function is never called with a single key ────────────────────
+
+# `plain` and `lone` (not batched) and `scored` (batched) are all inputs of `both`. When `both`
+# is due and their artifacts are gone, they are computed again in one phase, with the plain
+# steps ahead of the batched call in the queue: a lease that starts with a plain step must not
+# carry the first keys of the call away from it.
+GUARDED = """
+import os
+
+TYPES = HERE / "types.txt"
+STATE = HERE / "state.json"
+N = 300
+
+
+def _state():
+    return json.loads(STATE.read_text()) if STATE.exists() else {}
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)})
+def plain(retailer: str, cleaned: dict) -> dict:
+    return {"retailer": retailer}
+
+
+@asset()
+def lone() -> int:
+    return 1
+
+
+@asset(partitions={"retailer": partitions_from(cleaned)}, batch=2, retries=3)
+def scored(retailer: list[str], cleaned: dict[str, dict]) -> dict:
+    with TYPES.open("a") as f:
+        f.write(type(retailer).__name__ + "\\n")
+    state = _state()
+    if state.get("die") and not (HERE / "died").exists():
+        (HERE / "died").touch()
+        os._exit(9)
+    if state.get("fail_once") and not (HERE / "failed").exists():
+        (HERE / "failed").touch()
+        return {r: Failed("once") if r == retailer[0] else rows(r) for r in retailer}
+    return {r: rows(r) for r in retailer}
+
+
+def rows(r):
+    return [{"retailer": r, "row": i} for i in range(3)]
+
+
+@asset(inputs={"p": collect(plain), "s": collect(scored), "l": lone})
+def both(p: list, s: list, l: int) -> int:
+    return len(p) + len(s) + VERSION
+"""
+
+KEYS = 300
+
+
+def guarded(project: Path, version: int, state: dict) -> None:
+    write(project, GUARDED.replace("VERSION", str(version)))
+    (project / "state.json").write_text(json.dumps(state))
+    for stale in ("died", "failed"):
+        (project / stale).unlink(missing_ok=True)
+
+
+def evict(project: Path, *targets: str) -> None:
+    """Delete the artifacts of `targets`, as the cache size limit does."""
+    paths = []
+    for target in targets:
+        out = get(project, target)["final_output"]
+        for pointer in [out] if "_barca_artifact" in out else out.values():
+            paths.append(project / pointer["_barca_artifact"]["path"])
+    for path in paths:
+        path.unlink()
+    (project / "types.txt").write_text("")
+
+
+def check_scored(project: Path) -> None:
+    """Every key has its rows, and the function only ever got lists of keys."""
+    result = value(project, "scored")
+    assert sorted(result) == sorted(f"retailer=r{i}" for i in range(1, KEYS + 1))
+    for key, rows in result.items():
+        r = key.split("=", 1)[1]
+        assert rows == [{"retailer": r, "row": i} for i in range(3)], key
+    seen = (project / "types.txt").read_text().split()
+    assert seen, "the batched function never ran"
+    assert set(seen) == {"list"}, f"called with a single key: {set(seen) - {'list'}}"
+
+
+def test_a_batched_function_never_gets_a_single_key_when_its_artifacts_are_recovered(keys5):
+    set_versions(keys5, {f"r{i}": "a" for i in range(1, KEYS + 1)})
+    guarded(keys5, 0, {})
+    get(keys5, "both")
+    for version, state in enumerate(({}, {"fail_once": True}, {"die": True}), start=1):
+        # Unchanged inputs and run hashes; `both` is due, and the files it reads are gone.
+        guarded(keys5, version, state)
+        evict(keys5, "scored", "plain", "lone")
+        res = get(keys5, "both")
+        assert res["final_output"]
+        check_scored(keys5)
+
+
+@pytest.mark.parametrize("pool,count", [(1, 3), (2, 3), (3, 5), (14, 200), (16, 200), (24, 200)])
+@pytest.mark.parametrize("batch", ['"all"', "2", "7", "batches([KEYS[::2], KEYS[1::2]])"])
+@pytest.mark.parametrize("chained", [False, True])
+def test_bin_packed_batch_chunks_finish(tmp_path, pool, count, batch, chained):
+    """#1100: unequal chunks of a node/chain can land in the same stream twice."""
+    keys = [str(i) for i in range(count)]
+    source = f"""
+import json
+from pathlib import Path
+from barca import asset, batches, collect, partitions
+KEYS = {keys!r}
+
+@asset(partitions={{"key": partitions({keys!r})}}, batch={batch})
+def rows(key):
+    with Path("calls.txt").open("a") as f:
+        f.write(json.dumps(["rows", key]) + "\\n")
+    return {{k: int(k) for k in key}}
+
+@asset(partitions={{"key": partitions({keys!r})}})
+def other(key):
+    return int(key)
+"""
+    if chained:
+        source += f"""
+@asset(partitions={{"key": partitions({keys!r})}}, inputs={{"rows": rows}}, batch={batch})
+def scaled(key, rows):
+    return {{k: rows[k] * 2 for k in key}}
+
+@asset(partitions={{"key": partitions({keys!r})}}, inputs={{"other": other}}, batch={batch})
+def shifted(key, other):
+    return {{k: other[k] + 1 for k in key}}
+"""
+    left, right = ("scaled", "shifted") if chained else ("rows", "other")
+    source += f"""
+@asset(inputs={{"left": collect({left}), "right": collect({right})}})
+def top(left, right):
+    return [sorted(left), sorted(right)]
+"""
+    (tmp_path / "pipeline.py").write_text(source)
+    expected = [list(range(count)), list(range(count))]
+    if chained:
+        expected = [[i * 2 for i in range(count)], [i + 1 for i in range(count)]]
+    if batch == '"all"':
+        groups = [keys]
+    elif batch.isdigit():
+        size = int(batch)
+        groups = [keys[i : i + size] for i in range(0, count, size)]
+    else:
+        groups = [keys[::2], keys[1::2]]
+    for flags in [(), ("--refresh", "rows")]:
+        proc = barca(
+            tmp_path,
+            "get",
+            "top",
+            "pipeline.py",
+            "-o",
+            "value",
+            *flags,
+            env=clean_env(BARCA_POOL_SIZE=str(pool)),
+            timeout=30,
+        )
+        assert proc.returncode == 0, proc.stderr
+        assert json.loads(proc.stdout) == expected
+        assert sorted(group for name, group in calls(tmp_path) if name == "rows") == sorted(groups)

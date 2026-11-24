@@ -166,7 +166,8 @@ impl Sources {
     pub async fn loaded_dag(
         &self,
     ) -> Result<Arc<barca_service::dag::Dag>, barca_service::BarcaError> {
-        self.refresh_dag(false).await
+        self.refresh_dag(false, barca_service::process::Until::done())
+            .await
     }
 
     /// Execution/status must reread helper cones too; configured-file stamps alone
@@ -174,14 +175,24 @@ impl Sources {
     pub async fn current_dag(
         &self,
     ) -> Result<Arc<barca_service::dag::Dag>, barca_service::BarcaError> {
-        self.refresh_dag(true).await
+        self.refresh_dag(true, barca_service::process::Until::done())
+            .await
+    }
+
+    /// Refresh for an accepted run: cancellation also interrupts loading its resolvers.
+    pub async fn current_dag_until(
+        &self,
+        until: barca_service::process::Until<'_>,
+    ) -> Result<Arc<barca_service::dag::Dag>, barca_service::BarcaError> {
+        self.refresh_dag(true, until).await
     }
 
     async fn refresh_dag(
         &self,
         force: bool,
+        until: barca_service::process::Until<'_>,
     ) -> Result<Arc<barca_service::dag::Dag>, barca_service::BarcaError> {
-        let mut loaded = self.loaded.lock().await;
+        let mut loaded = until.admit(self.loaded.lock()).await?;
         let stamp = self.source_stamp();
         if !force
             && let Some(current) = loaded.as_ref()
@@ -195,9 +206,12 @@ impl Sources {
         }
         for _ in 0..3 {
             let before = self.source_stamp();
-            let (dag, errors) =
-                barca_service::load::build_partial_dag(&self.config.files, &self.config.python)
-                    .await?;
+            let (dag, errors) = barca_service::load::build_partial_dag_until(
+                &self.config.files,
+                &self.config.python,
+                until,
+            )
+            .await?;
             if before != self.source_stamp() {
                 continue;
             }

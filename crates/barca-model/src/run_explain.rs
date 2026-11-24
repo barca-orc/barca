@@ -175,6 +175,34 @@ pub struct Cancellation {
     pub same_as: Option<String>,
 }
 
+/// A step's original worker-fatal cause and the outcome after replacing that worker.
+/// Independent steps keep separate records; a later attempt's error is secondary only
+/// to this same step's first fatal cause. Experimental (#1106).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct WorkerFailure {
+    pub node_id: String,
+    pub first_error: String,
+    pub retry_error: Option<String>,
+    pub recovered: bool,
+}
+
+/// Bounds for the extra diagnostic copy; ordinary step outcomes retain their own errors.
+pub const WORKER_FAILURE_LIMIT: usize = 64;
+pub const WORKER_ERROR_BYTES: usize = 8 * 1024;
+
+pub fn bounded_worker_error(error: &str) -> String {
+    const MARKER: &str = "\n[barca] diagnostic truncated";
+    if error.len() <= WORKER_ERROR_BYTES {
+        return error.to_string();
+    }
+    let mut end = WORKER_ERROR_BYTES - MARKER.len();
+    while !error.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}{MARKER}", &error[..end])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,5 +255,19 @@ mod tests {
             ReasonCategory::of_component("kind"),
             ReasonCategory::CodeChanged
         );
+    }
+}
+
+#[cfg(test)]
+mod worker_failure_tests {
+    use super::*;
+    #[test]
+    fn diagnostic_copy_is_bounded_and_keeps_unicode_valid() {
+        let error = format!("FatalException: {}", "€".repeat(WORKER_ERROR_BYTES));
+        let bounded = bounded_worker_error(&error);
+        assert!(bounded.len() <= WORKER_ERROR_BYTES);
+        assert!(bounded.starts_with("FatalException: €"));
+        assert!(bounded.ends_with("[barca] diagnostic truncated"));
+        assert_eq!(bounded_worker_error("small"), "small");
     }
 }

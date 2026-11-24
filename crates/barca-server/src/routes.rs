@@ -49,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         // The run contract's reads; the middleware leaves the other methods alone.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
+        .route("/runs/{run_id}/replay", post(runs::replay_run))
         .route("/runs/{run_id}/logs", get(runs::logs))
         .route("/logs/{run_id}", get(inspect::logs))
         // The run queue: what waits to start, and pausing it.
@@ -61,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()
         .merge(reads)
+        .route("/cached", post(crate::cached::get))
         .route("/auth/status", get(crate::auth_http::status))
         .route("/auth/bootstrap", post(crate::auth_http::bootstrap))
         .route(
@@ -75,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sql/query", post(crate::sql_query::query))
         // The ledger: what a local run on another machine asks and posts (RFC-0007).
         .route("/ledger/lookup", post(ledger::lookup))
+        .route("/ledger/refresh", post(ledger::refresh))
         .route("/ledger/runs", post(ledger::post_run))
         // The rest of the run contract.
         .route("/runs/{run_id}/events", get(runs::events))
@@ -123,6 +126,11 @@ pub fn router(state: AppState) -> Router {
             state.auth.clone(),
             crate::auth_http::authorize,
         ))
+        .layer(axum::middleware::from_fn_with_state(
+            state.reads.config.clone(),
+            crate::host_guard::validate,
+        ))
+        .layer(tower_http::compression::CompressionLayer::new())
         .with_state(state)
 }
 
@@ -142,8 +150,9 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
     let Ok(bytes) = axum::body::to_bytes(body, usize::MAX).await else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
-    // The first 12 bytes of the body's digest, as hex.
-    let tag = format!("\"{}\"", &barca_service::hash::sha256_hex(&bytes)[..24]);
+    // The first 12 bytes of the body's digest, as hex. Weak because compression may
+    // encode the same JSON differently; either encoding represents the same state.
+    let tag = format!("W/\"{}\"", &barca_service::hash::sha256_hex(&bytes)[..24]);
     let value = HeaderValue::from_str(&tag).expect("hex is a valid header value");
     parts.headers.insert(header::ETAG, value.clone());
     parts
@@ -155,7 +164,7 @@ async fn etag(request: axum::extract::Request, next: axum::middleware::Next) -> 
         .is_some_and(|v| {
             v.split(',')
                 .map(|t| t.trim().trim_start_matches("W/"))
-                .any(|t| t == tag || t == "*")
+                .any(|t| t == tag.trim_start_matches("W/") || t == "*")
         });
     if matches {
         let mut not_modified = StatusCode::NOT_MODIFIED.into_response();

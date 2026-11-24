@@ -345,7 +345,7 @@ pub async fn partition_keys_page(
         .filter(|(k, _)| k == "value")
         .map(|(_, v)| v.clone())
         .collect();
-    let query =
+    let mut query =
         barca_service::key_query::KeyQuery::parse(&barca_service::key_query::KeyQueryArgs {
             states: &states,
             needs_run: last("needs_run").is_some_and(|v| !matches!(v, "" | "0" | "false")),
@@ -358,6 +358,7 @@ pub async fn partition_keys_page(
             limit: Some(number("limit")?.unwrap_or(100).min(KEYS_PAGE_MAX)),
         })
         .map_err(ApiError::BadRequest)?;
+    query.empty = last("empty").is_some_and(|v| matches!(v, "1" | "true"));
     let grid = kept_partition_grid(&reads, &name).await?;
     // A pass over every key of the node, and a sort when an order is asked for: off the
     // async threads.
