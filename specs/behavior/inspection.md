@@ -209,6 +209,8 @@ and the [initial request-scope failure](../../docs/engineering/evidence/1044/ini
 are retained rather than replacing failed measurements with later results. The
 [embedded-UI measurement](../../docs/engineering/evidence/1044/production-result.json) records
 first-load bytes separately from each 30-second idle window, with a 500,000-byte idle limit.
+The [lifecycle integration recheck](../../docs/engineering/evidence/1044/integration-result.json)
+repeats those checks after the 0.47 run-contract changes.
 
 ## Open questions and gaps
 
