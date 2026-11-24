@@ -4,8 +4,8 @@ import type { Capabilities } from "./Capabilities";
 import type { HealthQueue } from "./HealthQueue";
 import type { HealthStatus } from "./HealthStatus";
 import type { LoadError } from "./LoadError";
-import type { WalCheckpoint } from "./WalCheckpoint";
 import type { SchedulerLiveness } from "./SchedulerLiveness";
+import type { WalCheckpoint } from "./WalCheckpoint";
 
 /**
  * `GET /health`: liveness (or `draining`), the versions a client checks, the environment and
