@@ -77,7 +77,9 @@ pub async fn explain(
     };
     let signatures = evidence::signatures(dag, &ids);
     let cache = CacheReader::for_config(cfg).await?;
-    let revision = db::freshness_proofs::revision(cache.conn()).await.map_err(error)?;
+    let revision = db::freshness_proofs::revision(cache.conn())
+        .await
+        .map_err(error)?;
     let namespace = evidence::key(cfg, revision);
     let mut proofs: HashMap<String, Proof> = HashMap::new();
     let mut generation = None;
@@ -218,10 +220,6 @@ pub async fn explain(
         }
         proofs.insert(id.into(), proof);
     }
-    // Refresh can invalidate eligibility without appending a materialization.
-    if db::freshness_proofs::revision(cache.conn()).await.map_err(error)? != revision {
-        return Ok(None);
-    }
     // Recheck every proof, including cache-only selection changes at the same generation.
     for (id, proof) in &proofs {
         let Some((current, text)) =
@@ -236,6 +234,14 @@ pub async fn explain(
         {
             return Ok(None);
         }
+    }
+    // Refresh can invalidate eligibility without appending a materialization.
+    if db::freshness_proofs::revision(cache.conn())
+        .await
+        .map_err(error)?
+        != revision
+    {
+        return Ok(None);
     }
     let mut summary = ExplainSummary::default();
     for step in &steps {

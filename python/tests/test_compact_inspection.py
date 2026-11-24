@@ -160,3 +160,64 @@ def test_gc_eviction_invalidates_compact_availability(tmp_path):
     get(tmp_path)
     nodes, _ = status(tmp_path)
     assert nodes["report"]["cache"]["state"] == "cached"
+
+
+def test_late_proof_cannot_revive_inspection_after_interrupted_refresh(tmp_path):
+    import os
+    import signal
+    import subprocess
+
+    from barca.api import _find_binary
+    from .helpers import wait_until
+
+    project(tmp_path, 7)
+    source = tmp_path / "pipeline.py"
+    source.write_text(
+        source.read_text().replace(
+            "def versions():\n",
+            "def versions():\n"
+            '    if Path("hold").exists():\n'
+            "        import time\n"
+            '        Path("started").touch()\n'
+            '        while Path("hold").exists():\n'
+            "            time.sleep(0.01)\n",
+        )
+    )
+    get(tmp_path)
+    get(tmp_path)
+    _, trace = status(tmp_path)
+    assert "dry run: phase" not in trace
+    database = tmp_path / ".barca/metadata.db"
+    with closing(sqlite3.connect(database)) as db:
+        old_proofs = db.execute("SELECT id, generation, snapshot FROM freshness_proofs").fetchall()
+        generation = db.execute("SELECT max(id) FROM materializations").fetchone()[0]
+    assert old_proofs
+    (tmp_path / "hold").touch()
+    proc = subprocess.Popen(
+        [_find_binary(), "get", "report", "pipeline.py", "--local", "--refresh-all", "--json"],
+        cwd=tmp_path,
+        env=clean_env(INCREMENTAL_FACTOR="2", BARCA_POOL_SIZE="2"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        wait_until((tmp_path / "started").exists, "refresh sensor to start", proc=proc)
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+        (tmp_path / "hold").unlink()
+    with closing(sqlite3.connect(database)) as db:
+        assert db.execute("SELECT max(id) FROM materializations").fetchone()[0] == generation
+        # Simulate a publisher that prepared evidence before refresh and commits late.
+        db.executemany(
+            "INSERT OR REPLACE INTO freshness_proofs (id, generation, snapshot) VALUES (?, ?, ?)",
+            old_proofs,
+        )
+        db.commit()
+    nodes, trace = status(tmp_path)
+    assert "dry run: phase" in trace, trace
+    assert nodes["report"]["partitions"]["cached"] < 7, nodes["report"]
+    get(tmp_path)
+    nodes, _ = status(tmp_path)
+    assert nodes["report"]["partitions"]["cached"] == 7

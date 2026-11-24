@@ -10,6 +10,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Performance
 
+- Ordinary server gets for dynamic partition targets skip the ineligible fresh-read preflight before per-key expansion, reducing admission memory for large recorded domains (#656).
+
 - Partition inspection reuses generation-validated execution proofs for local aligned chains, with bounded selected-artifact checks and fixed-expiry availability evidence. Unchanged observations avoid per-key prediction, and uncounted history retains logical summaries instead of every key. Unsupported or invalid proofs still use the full predictor; the original memory acceptance remains unmet (#656).
 
 ### Breaking

@@ -150,6 +150,10 @@ external-deletion observation window under polling (plus the duration of recompu
 GC and external file deletion are checked when availability expires; required execution
 reads never use this evidence. Source deletion or changed source bytes reject the proof.
 
+Proof namespaces include the refresh-invalidation revision as well as artifact layout.
+Inspection rechecks that revision after validating the proofs: a publisher from before a
+refresh cannot revive evidence after refresh changes eligibility without appending a row.
+
 A code/environment edit, membership change, failed attempt or concurrent materialization
 must have matching current proof evidence or use ordinary prediction. Explicit SQL membership,
 remote stores/ledgers, held/Manual/cutoff nodes, unsupported chains and absent/malformed proofs
@@ -217,6 +221,8 @@ Exercise pre-poll predictions, current membership after removal, historical succ
 current reuse, stale Manual pins, remote mismatch/availability and read-route revalidation.
 Compact local-chain cold/post-run evidence is recorded by the linked harness; the combined
 100 MB budget, broader domains and long-run retention remain open under #656.
+The [integrated admission measurements](../../docs/engineering/inspection-admission-memory.json)
+preserve the failed 200,000-key budget before and after skipping dynamic-target preflight.
 
 Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [cache/execution predictions](../../python/tests/test_sensor_freshness.py),
