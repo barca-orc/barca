@@ -507,11 +507,11 @@ def test_periodic_gc_revisits_released_generations_with_a_busy_queue(tmp_path, s
         assert server.get("/health")["queue"]["queued"] >= 1
         (tmp_path / "release-1").touch()
         server.wait(
-            "first completes", lambda: server.get(f"/status/{first}")["status"] == "complete"
+            "first completes", lambda: server.get(f"/runs/{first}")["run"]["status"] == "success"
         )
         server.wait("old generation evicted by periodic GC", lambda: not old.exists(), timeout=8)
         assert newer.exists(), "active reader's generation was evicted"
-        assert server.get(f"/status/{second}")["status"] not in ("complete", "failed")
+        assert server.get(f"/runs/{second}")["run"]["status"] == "running"
         predicted = gc(tmp_path, "--dry-run")
         assert predicted["evicted_files"] == 0, predicted
         pressure = predicted["pressure"]
@@ -525,7 +525,8 @@ def test_periodic_gc_revisits_released_generations_with_a_busy_queue(tmp_path, s
         (tmp_path / "release-2").touch()
         for run_id in (second, third):
             server.wait(
-                "reader completes", lambda: server.get(f"/status/{run_id}")["status"] == "complete"
+                "reader completes",
+                lambda: server.get(f"/runs/{run_id}")["run"]["status"] == "success",
             )
     finally:
         (tmp_path / "release-1").touch()
