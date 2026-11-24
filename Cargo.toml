@@ -52,3 +52,11 @@ inherits = "release"
 lto = false
 codegen-units = 16
 incremental = true
+
+# Command parsing and run orchestration favor compact resident code. Keep parsers,
+# hashing, database code and the execution engine at the workspace optimization level.
+[profile.release.package.barca]
+opt-level = "z"
+
+[profile.release.package.barca-run]
+opt-level = "z"

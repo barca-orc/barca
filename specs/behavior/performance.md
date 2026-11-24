@@ -136,3 +136,10 @@ reports full 200k bootstrap at 68 s / 2.75 GiB native and post-run inspection ar
 bounded warm budgets. Exact raw data and later fixed-build limits are in that PR; it is not
 merged into this specification's baseline. No Dagster/Prefect comparison or TLA+ model
 establishes these resource targets for the implementation.
+
+### 0.47 release memory headroom
+
+The CLI and run-orchestration crates use `opt-level = "z"` in release-derived profiles.
+The remaining crates retain `"s"`. This reduces resident instruction pages; no budget,
+work-count assertion or validation is relaxed. See the
+[before/after measurements](../../docs/engineering/release-047-memory.md).

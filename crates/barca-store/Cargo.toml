@@ -1,6 +1,6 @@
 [package]
 name = "barca-store"
-version = "0.46.4"
+version = "0.47.0"
 edition = "2024"
 description = "Storage layer — what is kept on disk, in the store and in the tables one feature owns: transfer, gc, backups, the ledger, pins, pauses, the run queue"
 
