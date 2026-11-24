@@ -62,7 +62,7 @@ def finished(server, handle):
     def terminal():
         code, result = server.request("GET", f"/status/{handle}")
         assert code == 200
-        return result if result["status"] in {"complete", "failed", "cancelled"} else None
+        return result if result["run"]["status"] in {"success", "failed", "cancelled"} else None
 
     return wait_until(terminal, "run completion")
 
@@ -84,8 +84,13 @@ def test_broken_sibling_preserves_colocated_schedule_inspection_and_execution(pr
         assert code == 200
         result = finished(server, handle["run_id"])
         assert (
-            result["status"] == "complete"
-            and json.loads((project / result["result"]["final_output"]["path"]).read_text()) == 7
+            result["run"]["status"] == "success"
+            and json.loads(
+                (
+                    project / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 7
         )
         wait_until(lambda: (project / "ticks").exists(), "unrelated scheduled task")
         assert "not loaded: broken.py" in server.stderr
@@ -110,8 +115,13 @@ def test_watch_repair_and_break_refresh_one_selected_graph(project):
         assert code == 200
         result = finished(server, handle["run_id"])
         assert (
-            result["status"] == "complete"
-            and json.loads((project / result["result"]["final_output"]["path"]).read_text()) == 42
+            result["run"]["status"] == "success"
+            and json.loads(
+                (
+                    project / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                ).read_text()
+            )
+            == 42
         )
         (project / "broken.py").unlink()
         wait_until(lambda: errors(server), "watch-only removal diagnostics")
@@ -195,12 +205,17 @@ def test_execution_refreshes_helper_hash_even_without_watch(project):
             code, handle = server.request("POST", "/get/safe")
             assert code == 200
             result = finished(server, handle["run_id"])
-            assert result["status"] == "complete"
+            assert result["run"]["status"] == "success"
             assert (
-                json.loads((project / result["result"]["final_output"]["path"]).read_text())
+                json.loads(
+                    (
+                        project
+                        / result["run"]["outcome"]["final_output"]["_barca_artifact"]["path"]
+                    ).read_text()
+                )
                 == value
             )
-            assert result["result"]["steps_executed"] == 1
+            assert result["run"]["outcome"]["steps_executed"] == 1
     finally:
         server.kill()
 

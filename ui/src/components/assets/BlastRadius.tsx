@@ -68,7 +68,7 @@ export function BlastRadius({ id, states, paused, onSelect }: BlastRadiusProps) 
               <span>{shortName(job.id)}</span>
               <span className="barca-cell-sub">{job.kind} · {RELATION[relation]}</span>
               {job.paused ? <Tag size="sm">schedule paused</Tag> : (
-                <span className="barca-cell-sub">next <Age at={job.next_fire === null ? null : job.next_fire * 1000} /></span>
+                <span className="barca-cell-sub">next <Age at={job.next_fire} /></span>
               )}
             </li>
           ))}

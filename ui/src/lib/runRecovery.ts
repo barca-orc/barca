@@ -20,12 +20,12 @@ export interface RecoveryRequest {
 }
 
 /** Replay the recorded scope with cache reuse, without reconstructing display strings. */
-export function rerunFailedRequest(run: Pick<RunView, 'run_id'>): RecoveryRequest {
+export function rerunFailedRequest(run: Pick<RunView['run'], 'run_id'>): RecoveryRequest {
   return { runId: run.run_id, body: { cache: 'cached', step: null } }
 }
 
 /** Recompute the original scope, including its partition selection. */
-export function rerunAllRequest(run: Pick<RunView, 'run_id'>): RecoveryRequest {
+export function rerunAllRequest(run: Pick<RunView['run'], 'run_id'>): RecoveryRequest {
   return { runId: run.run_id, body: { cache: 'refresh_all', step: null } }
 }
 
@@ -46,7 +46,7 @@ export function partitionArg(key: string): string {
 }
 
 /** The server resolves the recorded step's key and current node kind, including task followers. */
-export function retryStepRequest(run: Pick<RunView, 'run_id'>, stepId: string): RecoveryRequest {
+export function retryStepRequest(run: Pick<RunView['run'], 'run_id'>, stepId: string): RecoveryRequest {
   return { runId: run.run_id, body: { cache: 'cached', step: stepId } }
 }
 
@@ -149,13 +149,13 @@ export function traceUrl(datadogUrl: string | null | undefined, step: Pick<RunSt
 export function incidentSummary(run: RunView, link: string, datadogUrl?: string | null): string {
   const failed = failedSteps(run)
   const out = [
-    `### barca run \`${run.run_id}\` ${run.status}`,
+    `### barca run \`${run.run.run_id}\` ${run.run.status}`,
     '',
-    `- **Run:** [${run.run_id}](${link})`,
-    `- **Target:** \`${run.command} ${run.explanation.target_line}\``,
-    `- **Triggered by:** ${triggeredByLabel(run.triggered_by)}`,
-    `- **Started:** ${run.started_at}`,
-    `- **Duration:** ${seconds(run.elapsed_seconds)}`,
+    `- **Run:** [${run.run.run_id}](${link})`,
+    `- **Target:** \`${run.run.command} ${run.explanation.target_line}\``,
+    `- **Triggered by:** ${triggeredByLabel(run.run.triggered_by)}`,
+    `- **Started:** ${run.run.started_at}`,
+    `- **Duration:** ${seconds(run.run.elapsed_seconds)}`,
   ]
   for (const failure of run.explanation.worker_failures ?? []) {
     const outcome = failure.recovered ? 'recovered after worker replacement' : failure.retry_error ? 'failed after worker replacement' : 'did not complete after worker replacement'
@@ -163,7 +163,7 @@ export function incidentSummary(run: RunView, link: string, datadogUrl?: string 
       `- Original cause: ${firstLine(failure.first_error)}`)
     if (failure.retry_error) out.push(`- Later attempt: ${firstLine(failure.retry_error)}`)
   }
-  const runError = firstLine(run.error ?? run.failure?.error)
+  const runError = firstLine(run.run.error ?? run.run.failure?.error)
   if (runError) out.push(`- **Error:** ${runError}`)
   if (failed.length > 0) {
     out.push('', `**Failed steps (${failed.length}):**`, '')
@@ -173,10 +173,10 @@ export function incidentSummary(run: RunView, link: string, datadogUrl?: string 
       const trace = traceUrl(datadogUrl, step)
       out.push(`- \`${step.node_id}\`: ${error}${where ? ` (raised at \`${where}\`)` : ''}${trace ? ` · [trace](${trace})` : ''}`)
     }
-  } else if (run.failure) {
-    out.push('', `**Failed step:** \`${run.failure.node}\`: ${run.failure.error}`)
+  } else if (run.run.failure) {
+    out.push('', `**Failed step:** \`${run.run.failure.node}\`: ${run.run.failure.error}`)
   }
-  out.push('', `Logs: \`barca logs ${run.run_id}\``)
+  out.push('', `Logs: \`barca logs ${run.run.run_id}\``)
   return out.join('\n') + '\n'
 }
 

@@ -910,7 +910,7 @@ def test_under_serve_a_schedule_and_a_run_request_override_the_grouping(tmp_path
             {"command": "get", "targets": ["scored"], "refresh": ["scored"], "batch": ["all"]},
         )
         view = serve.finished(answer["run_id"])
-        assert view["status"] == "success", view
+        assert view["run"]["status"] == "success", view
         validate({"$ref": "#/components/schemas/RunView"}, view)
         made = [c for c in calls(tmp_path) if c[1] == ["r1", "r2", "r3", "r4", "r5"]]
         assert made, "the refresh ran as one call"

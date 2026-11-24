@@ -41,7 +41,7 @@ def setup(tmp_path, serve):
 def run(server, **options):
     accepted = server.post("/runs", {"command": "run", "targets": ["publish"], **options})
     result = server.finished(accepted["run_id"])
-    assert result["status"] == "success", result
+    assert result["run"]["status"] == "success", result
     return result
 
 
@@ -76,8 +76,8 @@ def test_including_manual_is_cache_aware_and_dry_run_matches(tmp_path, serve):
         "/runs", {"command": "get", "targets": ["model"], "include_manual": True}
     )
     materialized = server.finished(accepted["run_id"])
-    assert materialized["status"] == "success", materialized
-    assert materialized["steps_executed"] == 1, materialized
+    assert materialized["run"]["status"] == "success", materialized
+    assert materialized["run"]["steps_executed"] == 1, materialized
     run(server, include_manual=True)
     assert calls(tmp_path, "model") == 2
     run(server, refresh_all=True)
@@ -105,11 +105,11 @@ def test_hard_refresh_holds_paused_inputs_even_after_restart_and_target_override
     server = serve("--no-schedule", port=port, env=clean_env(BARCA_POOL_SIZE="2"))
     server.post("/queue/resume", {})
     result = server.finished(queued["run_id"])
-    assert result["status"] == "success", result
+    assert result["run"]["status"] == "success", result
     assert [calls(tmp_path, name) for name in ("source", "model", "publish")] == [1, 2, 2]
     assert any(
         s["id"].endswith(":source") and "paused" in s.get("detail", "")
-        for s in result["outcome"]["steps"]
+        for s in result["run"]["outcome"]["steps"]
     ), result
 
 
@@ -120,7 +120,7 @@ def test_never_computed_paused_input_is_not_executed(tmp_path, serve):
         "/runs", {"command": "run", "targets": ["publish"], "include_manual": True}
     )
     result = server.finished(queued["run_id"])
-    assert result["status"] != "success", result
+    assert result["run"]["status"] != "success", result
     assert "paused" in str(result), result
     status, predicted = server.request(
         "POST",
@@ -142,5 +142,5 @@ def test_including_manual_survives_restart_without_hard_refresh(tmp_path, serve)
     server = serve("--no-schedule", port=port, env=clean_env(BARCA_POOL_SIZE="2"))
     server.post("/queue/resume", {})
     result = server.finished(queued["run_id"])
-    assert result["status"] == "success", result
+    assert result["run"]["status"] == "success", result
     assert calls(tmp_path, "model") == 1

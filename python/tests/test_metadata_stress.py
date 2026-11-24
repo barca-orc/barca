@@ -3,8 +3,9 @@
 
 Each process keeps a connection to the metadata database for its lifetime and takes the
 cross-process lock for each operation. This checks what that must never cost: no
-`database is locked`, no lock timeout, no `malformed` database, and the same history as the
-same commands leave when they run one after another.
+`database is locked`, no lock timeout, no `malformed` database, and complete history with
+the same results as serial execution. Overlapping refreshes may reuse results computed
+after acceptance (#928), so their execution counts can differ.
 """
 
 import json
@@ -136,4 +137,12 @@ def test_local_runs_and_readers_beside_a_server_leave_the_history_of_a_serial_ru
 
     server.stop()
     wait_until(lambda: not (busy / ".barca" / "serve.sock").exists(), timeout=30)
-    assert history(busy) == expected
+    actual = history(busy)
+    assert actual["unfinished"] == actual["rows_without_a_run"] == 0, actual
+    assert len(actual["runs"]) == len(expected["runs"])
+    for command, status, total, executed, cached in actual["runs"]:
+        assert (command, status, total) == ("get", "success", 43)
+        assert executed + cached == total
+    # Every execution was persisted, and every expected node/hash has a successful result.
+    assert sum(row[3] for row in actual["results"]) == sum(row[3] for row in actual["runs"])
+    assert [row[:3] for row in actual["results"]] == [row[:3] for row in expected["results"]]

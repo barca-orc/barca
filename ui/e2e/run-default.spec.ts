@@ -45,9 +45,9 @@ for (const target of ['pipeline.py:say_hello', 'pipeline.py:publish_manual']) {
       const id = (await response.json()).run_id
       await waitForRun(request, id)
       const detail: RunView = await (await request.get(`${API}/runs/${id}`)).json()
-      expect(detail.status).toBe('success')
+      expect(detail.run.status).toBe('success')
       expect(detail.steps.filter(step => step.status === 'success').map(step => step.node_id)).toEqual([target])
-      expect(detail.steps_cached).toBeGreaterThan(0)
+      expect(detail.run.steps_cached).toBeGreaterThan(0)
       await expect(button).toBeEnabled()
     }
   })
@@ -80,7 +80,7 @@ test('Including Manual uses the cache and hard refresh asks before recomputing i
     const id = (await started.json()).run_id
     await waitForRun(request, id)
     const run: RunView = await (await request.get(`${API}/runs/${id}`)).json()
-    expect(run.status).toBe('success')
+    expect(run.run.status).toBe('success')
     await expect(manual).toBeEnabled()
     return run.steps.filter(step => step.status === 'success').map(step => step.node_id)
   }

@@ -90,6 +90,7 @@ export function useTopbarRun({ node, show, scopes, fireNode, busy, onStarted }: 
   // its name and tooltip).
   const scopeRun: TopbarRun | null = group || readOnly ? null : scopeTarget.kind === 'none' ? {
     onRun: noop,
+    options: { includeManual, onIncludeManual: setIncludeManual, onRefresh: noop, manualNames: [] },
     label: pipeline ? `Run ${pipelineName(pipeline)}` : 'Run all',
     short: pipeline ? `Run ${pipelineName(pipeline)}` : 'Run all',
     disabled: true,

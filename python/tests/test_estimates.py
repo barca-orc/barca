@@ -188,8 +188,8 @@ def test_estimates_are_within_the_stated_error_on_a_real_server(project, serve):
         # do not silently drop a queued estimate merely because /queue missed it running.
         for run_id, estimate in starts.items():
             finished = server.finished(run_id)
-            assert finished["status"] == "success", finished
-            start_errors.append(_at(finished["started_at"]) - estimate)
+            assert finished["run"]["status"] == "success", finished
+            start_errors.append(_at(finished["run"]["started_at"]) - estimate)
 
     worst = max(abs(e) for e in fresh_errors)
     report = (

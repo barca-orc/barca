@@ -220,88 +220,92 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let outcome = live.and_then(|r| r.outcome.clone()).or(stored);
     let mut view = match (&record, live) {
         (Some(record), _) => RunView {
-            scope: db::get_run_scope(read_path, id).await?,
-            control: RunControl::default(),
-            previous_attempts: record.previous_attempts.clone(),
-            parent_run_id: record.parent_run_id.clone(),
-            run_attempt: record.run_attempt,
-            stop_reason: record.stop_reason.clone(),
-            run_id: record.run_id.clone(),
-            status: record.status.clone(),
-            skip_reason: record.skip_reason.clone(),
-            command: record.command.clone(),
-            target: record.target.clone(),
-            files: record.files.clone(),
-            triggered_by: record.triggered_by,
-            scheduled_at: record.scheduled_at.clone(),
-            schedule_id: record.schedule_id.clone(),
-            started_at: durable_timestamp(&record.started_at),
-            finished_at: record.finished_at.as_deref().map(durable_timestamp),
-            elapsed_seconds: record.elapsed_seconds,
-            steps_total: record.steps_total,
-            steps_executed: record.steps_executed,
-            steps_cached: record.steps_cached,
-            job: record.job.clone(),
-            attempts: record.attempts,
-            client_run_id: record.client_run_id.clone(),
-            failure: record.failure.clone(),
-            principal: record.principal.clone(),
-            trigger_reason: record.trigger_reason.clone(),
-            retries: record.retries,
-            plan_reasons: record.plan_reasons.clone(),
-            cancellation: record
-                .cancellation
-                .clone()
-                .or_else(|| live.and_then(|r| r.cancellation.clone())),
-            waiting_for: None,
-            queue: None,
+            run: crate::outcome::RunInfo {
+                scope: db::get_run_scope(read_path, id).await?,
+                control: RunControl::default(),
+                previous_attempts: record.previous_attempts.clone(),
+                parent_run_id: record.parent_run_id.clone(),
+                run_attempt: record.run_attempt,
+                stop_reason: record.stop_reason.clone(),
+                run_id: record.run_id.clone(),
+                status: record.status.clone(),
+                skip_reason: record.skip_reason.clone(),
+                command: record.command.clone(),
+                target: record.target.clone(),
+                files: record.files.clone(),
+                triggered_by: record.triggered_by,
+                scheduled_at: record.scheduled_at.clone(),
+                schedule_id: record.schedule_id.clone(),
+                started_at: durable_timestamp(&record.started_at),
+                finished_at: record.finished_at.as_deref().map(durable_timestamp),
+                elapsed_seconds: record.elapsed_seconds,
+                steps_total: record.steps_total,
+                steps_executed: record.steps_executed,
+                steps_cached: record.steps_cached,
+                job: record.job.clone(),
+                attempts: record.attempts,
+                client_run_id: record.client_run_id.clone(),
+                failure: record.failure.clone(),
+                principal: record.principal.clone(),
+                trigger_reason: record.trigger_reason.clone(),
+                retries: record.retries,
+                plan_reasons: record.plan_reasons.clone(),
+                cancellation: record
+                    .cancellation
+                    .clone()
+                    .or_else(|| live.and_then(|r| r.cancellation.clone())),
+                waiting_for: None,
+                queue: None,
+                outcome: None,
+                error: None,
+            },
             explanation: Default::default(),
-            outcome: None,
-            error: None,
             steps: Vec::new(),
             steps_page: db::StepsPage::default(),
             logs: Vec::new(),
         },
         (None, Some(run)) => RunView {
-            scope: db::get_run_scope(read_path, id).await?,
-            control: RunControl::default(),
-            previous_attempts: db::runs::previous_attempts(read_path, id).await?,
-            parent_run_id: None,
-            run_attempt: None,
-            stop_reason: None,
-            run_id: run.handle.clone(),
-            status: run.status.as_str().into(),
-            skip_reason: None,
-            command: run.command.clone(),
-            target: run.target.clone(),
-            files: if run.files.is_empty() {
-                req.default_files.to_vec()
-            } else {
-                run.files.clone()
+            run: crate::outcome::RunInfo {
+                scope: db::get_run_scope(read_path, id).await?,
+                control: RunControl::default(),
+                previous_attempts: db::runs::previous_attempts(read_path, id).await?,
+                parent_run_id: None,
+                run_attempt: None,
+                stop_reason: None,
+                run_id: run.handle.clone(),
+                status: run.status.as_str().into(),
+                skip_reason: None,
+                command: run.command.clone(),
+                target: run.target.clone(),
+                files: if run.files.is_empty() {
+                    req.default_files.to_vec()
+                } else {
+                    run.files.clone()
+                },
+                triggered_by: Some(run.trigger.triggered_by),
+                scheduled_at: run.trigger.scheduled_at.clone(),
+                schedule_id: run.trigger.schedule_id.clone(),
+                started_at: timestamp(run.started_at),
+                finished_at: run.finished_at.map(timestamp),
+                elapsed_seconds: run.finished_at.map(|t| t - run.started_at),
+                steps_total: None,
+                steps_executed: 0,
+                steps_cached: 0,
+                job: None,
+                attempts: None,
+                client_run_id: None,
+                failure: None,
+                principal: run.trigger.principal.clone(),
+                trigger_reason: run.trigger.reason.clone(),
+                retries: None,
+                plan_reasons: None,
+                cancellation: run.cancellation.clone(),
+                waiting_for: None,
+                queue: None,
+                outcome: None,
+                error: None,
             },
-            triggered_by: Some(run.trigger.triggered_by),
-            scheduled_at: run.trigger.scheduled_at.clone(),
-            schedule_id: run.trigger.schedule_id.clone(),
-            started_at: timestamp(run.started_at),
-            finished_at: run.finished_at.map(timestamp),
-            elapsed_seconds: run.finished_at.map(|t| t - run.started_at),
-            steps_total: None,
-            steps_executed: 0,
-            steps_cached: 0,
-            job: None,
-            attempts: None,
-            client_run_id: None,
-            failure: None,
-            principal: run.trigger.principal.clone(),
-            trigger_reason: run.trigger.reason.clone(),
-            retries: None,
-            plan_reasons: None,
-            cancellation: run.cancellation.clone(),
-            waiting_for: None,
-            queue: None,
             explanation: Default::default(),
-            outcome: None,
-            error: None,
             steps: Vec::new(),
             steps_page: db::StepsPage::default(),
             logs: Vec::new(),
@@ -314,18 +318,21 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     if let Some(run) = live
         && in_progress
     {
-        view.status = run.status.as_str().into();
-        view.waiting_for = run.waiting_for;
-        view.queue = run.queue.shown();
+        view.run.status = run.status.as_str().into();
+        view.run.waiting_for = run.waiting_for;
+        view.run.queue = run.queue.shown();
     }
     if let Some(outcome) = &outcome {
-        if view.stop_reason.is_none() {
-            view.status = outcome.status().as_str().into();
+        if view.run.stop_reason.is_none() {
+            view.run.status = outcome.status().as_str().into();
         }
-        view.error = outcome.envelope().map(|e| e.error);
+        view.run.error = outcome.envelope().map(|e| e.error);
     }
-    view.control = run_control(read_path, id, &view.status, in_progress).await?;
-    view.outcome = outcome;
+    if view.run.status == "interrupted" && view.run.error.is_none() {
+        view.run.error = Some("The execution owner stopped before recording an outcome.".into());
+    }
+    view.run.control = run_control(read_path, id, &view.run.status, in_progress).await?;
+    view.run.outcome = outcome;
     let (steps, mut steps_page) = db::get_run_steps_window(read_path, id, limit, offset).await?;
     view.steps = steps;
     if req.logs {
@@ -416,10 +423,13 @@ pub async fn run_view(req: RunViewRequest<'_>) -> Result<Option<RunDraft>, Barca
     let listed_to = offset + view.steps.len();
     steps_page.next_offset = (limit.is_some() && listed_to < steps_page.total).then_some(listed_to);
     // The steps streamed and not yet recorded get their trace ids as the recorded ones did.
-    if record.is_some() && db::get_run_traced(read_path, &view.run_id).await? {
+    if record.is_some() && db::get_run_traced(read_path, &view.run.run_id).await? {
         db::attach_trace_ids(
             &mut view.steps,
-            view.parent_run_id.as_deref().unwrap_or(&view.run_id),
+            view.run
+                .parent_run_id
+                .as_deref()
+                .unwrap_or(&view.run.run_id),
         );
     }
     let worker_failures = barca_db::db::runs::get_worker_failures(read_path, id).await?;
@@ -441,7 +451,7 @@ impl RunDraft {
     pub fn plans(&self) -> Option<&db::RunRecord> {
         self.record.as_ref().filter(|record| {
             !self.unfinished
-                && !matches!(self.view.status.as_str(), "pending" | "running")
+                && !matches!(self.view.run.status.as_str(), "pending" | "running")
                 && record.job.is_some()
         })
     }
@@ -469,7 +479,7 @@ impl RunDraft {
             dag,
             &record.command,
             &targets,
-            &self.view.status,
+            &self.view.run.status,
             record.steps_total,
             recorded,
         ) {
@@ -488,8 +498,8 @@ impl RunDraft {
             ..
         } = self;
         view.steps_page = steps_page;
-        if view.error.is_none() {
-            view.error = view.steps.iter().find_map(|step| step.error.clone());
+        if view.run.error.is_none() {
+            view.run.error = view.steps.iter().find_map(|step| step.error.clone());
         }
         view.explanation = crate::run_explanation::explain(
             crate::run_explanation::RunFacts {
@@ -504,13 +514,17 @@ impl RunDraft {
         view.explanation.worker_failures = worker_failures;
         // What the targets returned, as rows: nothing prints the raw pointers (#1042).
         let outcome = view
+            .run
             .outcome
             .as_ref()
             .and_then(|o| serde_json::from_str::<serde_json::Value>(o.text()).ok());
         view.explanation.outputs = crate::run_explanation::run_outputs(
-            &view.status,
+            &view.run.status,
             outcome.as_ref(),
-            &crate::run_explanation::output_targets(view.target.as_deref(), view.job.as_deref()),
+            &crate::run_explanation::output_targets(
+                view.run.target.as_deref(),
+                view.run.job.as_deref(),
+            ),
             &view.steps,
         );
         RunViewed { view, record }
@@ -578,7 +592,6 @@ pub enum RunViewStatus {
     Success,
     Failed,
     Cancelled,
-    Error,
     Interrupted,
 }
 
@@ -651,9 +664,7 @@ pub struct RunLogs {
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunSummary {
     pub control: RunControl,
-    pub id: String,
-    pub handle: Option<String>,
-    pub run_id: Option<String>,
+    pub run_id: String,
     pub command: String,
     pub files: Vec<String>,
     pub target: Option<String>,
@@ -680,7 +691,7 @@ pub struct RunSummary {
     pub steps_skipped: Option<i64>,
     pub error: Option<String>,
     /// The run's first failed step and its error; `null` when no step failed.
-    pub first_failure: Option<FirstFailure>,
+    pub failure: Option<db::RunFailure>,
     /// Who asked for the run (`token:<name>`), when the server knows. Experimental.
     pub principal: Option<String>,
     /// The free-text `reason` its request gave. Experimental.
@@ -714,9 +725,9 @@ impl RunSummary {
             steps_skipped: self.steps_skipped,
             error: self.error.as_deref(),
             first_failure: self
-                .first_failure
+                .failure
                 .as_ref()
-                .map(|f| (f.node_id.as_str(), f.error.as_str())),
+                .map(|f| (f.node.as_str(), f.error.as_str())),
             target: self.target.as_deref(),
         });
         self
@@ -732,9 +743,7 @@ impl RunSummary {
                 }
                 None => RunControl::server(&record.status),
             },
-            id: record.run_id.clone(),
-            handle: live.map(|r| r.handle.clone()),
-            run_id: Some(record.run_id),
+            run_id: record.run_id,
             command: record.command,
             files: record.files,
             target: record.target,
@@ -751,10 +760,7 @@ impl RunSummary {
             steps_failed: record.steps_failed,
             steps_skipped: record.steps_skipped,
             error: live.and_then(|r| r.error.clone()),
-            first_failure: record.failure.map(|f| FirstFailure {
-                node_id: f.node,
-                error: f.error,
-            }),
+            failure: record.failure,
             principal: record.principal,
             trigger_reason: record.trigger_reason,
             cancellation: record
@@ -772,9 +778,7 @@ impl RunSummary {
         let steps = run.steps;
         RunSummary {
             control: RunControl::server(run.status.as_str()),
-            id: run.handle.clone(),
-            handle: Some(run.handle.clone()),
-            run_id: run.db_run_id.clone(),
+            run_id: run.handle.clone(),
             command: run.command.clone(),
             files: files.to_vec(),
             target: run.target.clone(),
@@ -792,7 +796,7 @@ impl RunSummary {
             steps_skipped: None,
             error: run.error.clone(),
             // Not in the database yet: nothing has recorded a failed step.
-            first_failure: None,
+            failure: None,
             principal: run.trigger.principal.clone(),
             trigger_reason: run.trigger.reason.clone(),
             cancellation: run.cancellation.clone(),
@@ -805,29 +809,15 @@ impl RunSummary {
 
     /// What a search looks in for a run the database is not asked about: its ids and target.
     fn searched(&self) -> Vec<&str> {
-        [
-            Some(self.id.as_str()),
-            self.run_id.as_deref(),
-            self.target.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .collect()
+        [Some(self.run_id.as_str()), self.target.as_deref()]
+            .into_iter()
+            .flatten()
+            .collect()
     }
 
     fn in_progress(&self) -> bool {
         matches!(self.status.as_str(), "pending" | "running")
     }
-}
-
-/// A run's first failed step (`RunSummary::first_failure`).
-#[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct FirstFailure {
-    /// The step's node id, with its partition key when it has one.
-    pub node_id: String,
-    /// `ErrorType: message`, the message's first line only.
-    pub error: String,
 }
 
 /// The keys of a partitioned node, while a run works on it.
@@ -973,7 +963,7 @@ pub async fn run_list(req: RunListRequest<'_>) -> Result<RunList, BarcaError> {
         .collect();
     let mut extra = 0;
     for run in live {
-        if runs.iter().any(|r| r.id == run.handle) {
+        if runs.iter().any(|r| r.run_id == run.handle) {
             continue;
         }
         // A finished run that wrote its row is the database's to list, and counted there:
@@ -1008,7 +998,7 @@ pub async fn run_list(req: RunListRequest<'_>) -> Result<RunList, BarcaError> {
     // A run of another process on the same `.barca/` whose owner is alive, older than the
     // page holds.
     for alive in db::alive_running_runs_in(read_path, req.db_path).await {
-        if runs.iter().any(|r| r.id == alive.run_id) {
+        if runs.iter().any(|r| r.run_id == alive.run_id) {
             continue;
         }
         if let Some(mut record) = db::get_run(read_path, &alive.run_id).await? {
@@ -1088,7 +1078,7 @@ pub async fn in_flight(
     runs.sort_by(|a, b| {
         b.started_at
             .cmp(&a.started_at)
-            .then_with(|| b.id.cmp(&a.id))
+            .then_with(|| b.run_id.cmp(&a.run_id))
     });
     Ok(runs)
 }
@@ -1130,10 +1120,7 @@ pub fn in_flight_now(rows: Vec<RunSummary>) -> crate::report::HistoryNow {
     let mut out = crate::report::HistoryNow::new();
     for run in rows {
         let Some(now) = run.now else { continue };
-        if let Some(durable) = run.run_id.filter(|id| *id != run.id) {
-            out.insert(durable, now.clone());
-        }
-        out.insert(run.id, now);
+        out.insert(run.run_id, now);
     }
     out
 }
@@ -1203,7 +1190,7 @@ mod run_list_tests {
         .unwrap();
         // Three recorded, and the two only the server knows.
         assert_eq!(list.total, 5);
-        let ids: HashSet<&str> = list.runs.iter().map(|r| r.id.as_str()).collect();
+        let ids: HashSet<&str> = list.runs.iter().map(|r| r.run_id.as_str()).collect();
         assert!(ids.contains("waiting"), "{ids:?}");
         assert!(!ids.contains("trimmed"), "{ids:?}");
         assert!(list.truncated);

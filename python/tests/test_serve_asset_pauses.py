@@ -58,7 +58,7 @@ def test_a_paused_asset_is_skipped_by_ticks_until_resumed(tmp_path):
         # The next ticks skip beat with reason `paused`, and nothing of it runs.
         def skipped():
             run = _latest_tick(serve)
-            steps = run["outcome"]["steps"] if run and run.get("outcome") else []
+            steps = run["run"]["outcome"]["steps"] if run and run["run"].get("outcome") else []
             return [s for s in steps if s["id"].endswith(":beat") and s.get("reason") == "paused"]
 
         step = serve.wait("a tick that skips beat", skipped)[0]

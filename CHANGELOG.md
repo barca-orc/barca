@@ -10,6 +10,12 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Breaking
 
+- Run details (including the deprecated `/status/{run_id}` alias and Python `Client.status`/`Run.wait`) now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
+
+- Run infrastructure and request failures now use `failed` instead of `error`, including restored outcomes and history filters. Error envelopes retain their cause and exit codes; use `--status failed` to include legacy error records. Activity status counts use `pending` and fold former `error` counts into `failed`.
+
+- Schedule API timestamps (`next_fire`, `last_fired`, `last_skipped`, `late_since`, and `paused_until`, plus `/state` `next_run`, `prev_run`, and `late_since`, and `/pauses` schedule `paused_at` and `until`) now use RFC 3339 UTC strings instead of Unix seconds. Parse them as timestamps rather than multiplying by 1,000.
+
 - Server requests now hold paused inputs even during hard refresh. `allow_paused` overrides paused targets only; paused inputs without a readable result fail instead of being recomputed (#937).
 
 - Worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).
@@ -29,6 +35,14 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 - Run history and the run page retain the original worker-fatal cause and distinguish recovery after worker replacement from terminal retry failure, without hiding independent failures (#1106).
 
 ### Bug Fixes
+
+- Run-log polling preserves live completion when the database snapshot is older. Toolbar refresh controls reserve their space during loading, preventing the asset table and graph from shifting.
+
+- A refresh killed before recording a new result no longer leaves an incremental freshness proof that can serve pre-refresh data. Bulk incremental reads also exclude invalidated results.
+
+- Older metadata databases migrate newly added tables before extending their columns, so databases predating schedule tick history remain readable.
+
+- Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
 
 - Cache-aware retries after a failed refresh no longer revive pre-refresh downstream results. Invalidation survives restart and repeated failure, respects partition/cutoff/pin scope, and is acknowledged before computation against a remote ledger; remote refresh requires a server with this support (#939).
 

@@ -1632,12 +1632,18 @@ pub async fn invalidate_refresh_scope(
         .await
         .map_err(|e| BarcaError::Db(e.to_string()))?;
     let before = barca_model::time::db_timestamp(before);
+    let mut changed = 0;
     for chunk in nodes.chunks(4096) {
         let ids = serde_json::to_string(chunk).expect("step identities are JSON");
-        tx.execute(
+        changed += tx.execute(
             "UPDATE materializations SET refresh_invalidated_by = ?1 WHERE node_id IN (SELECT value FROM json_each(?2)) AND status = 'success' AND refresh_invalidated_by IS NULL AND (CASE WHEN length(created_at) = 19 THEN created_at || '.000000000' ELSE created_at END) < ?3",
             [run_id, ids.as_str(), before.as_str()],
         ).await.map_err(|e| BarcaError::Db(format!("failed to invalidate refresh scope: {e}")))?;
+    }
+    if changed > 0 {
+        super::freshness_proofs::invalidate(&tx)
+            .await
+            .map_err(|e| BarcaError::Db(e.to_string()))?;
     }
     tx.commit()
         .await

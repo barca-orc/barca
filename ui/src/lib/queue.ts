@@ -89,9 +89,9 @@ export function waitingRows(capacity: CapacitySnapshot | null | undefined): Wait
   }))
 }
 
-/** `3 queued`, or `nothing queued`. */
+/** `3 pending`, or `nothing pending`. */
 export function queuedLabel(count: number): string {
-  return count === 0 ? 'nothing queued' : `${count} queued`
+  return count === 0 ? 'nothing pending' : `${count} pending`
 }
 
 /**
@@ -259,9 +259,9 @@ export function queueSummary(view: QueueView, nowMs: number): string | null {
   return parts.join(' · ') || null
 }
 
-/** The header chip's note on the queue from `/health`: `3 queued`, `3 queued · paused`; null when empty and open. */
+/** The header chip's note on the queue from `/health`: `3 pending`, `3 pending · paused`; null when empty and open. */
 export function healthQueueLabel(queue: HealthQueue | undefined): string | null {
   if (!queue) return null
   if (queue.queued === 0) return queue.paused ? 'queue paused' : null
-  return queue.paused ? `${queue.queued} queued · paused` : `${queue.queued} queued`
+  return queue.paused ? `${queue.queued} pending · paused` : `${queue.queued} pending`
 }

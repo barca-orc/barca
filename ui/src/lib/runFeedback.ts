@@ -50,8 +50,8 @@ export type RunNotice =
   | { kind: 'starting'; target: string | null }
   | { kind: 'rejected'; target: string | null; error: string }
   /** `restart`: the server is draining, and the run starts on the next server. */
-  | { kind: 'queued'; target: string | null; runId: string; restart: boolean; control?: RunView['control'] }
-  | { kind: 'running'; target: string | null; runId: string; done: number; total: number | null; control?: RunView['control'] }
+  | { kind: 'queued'; target: string | null; runId: string; restart: boolean; control?: RunView['run']['control'] }
+  | { kind: 'running'; target: string | null; runId: string; done: number; total: number | null; control?: RunView['run']['control'] }
   | { kind: 'finished'; target: string | null; runId: string; status: StatusKind; summary: string }
 
 interface RunNoticeInput {
@@ -69,9 +69,9 @@ interface RunNoticeInput {
 
 /** `succeeded in 2.3s`, `7 keys failed`, `failed: ValueError: …`, `cancelled`. */
 export function runOutcomeSummary(run: RunView): string {
-  const status = parseRunStatus(run.status)
+  const status = parseRunStatus(run.run.status)
   if (status === 'success') {
-    const took = run.elapsed_seconds === null ? '' : ` in ${formatSeconds(run.elapsed_seconds)}`
+    const took = run.run.elapsed_seconds === null ? '' : ` in ${formatSeconds(run.run.elapsed_seconds)}`
     return `succeeded${took}`
   }
   if (status === 'cancelled' || status === 'interrupted') return status
@@ -79,7 +79,7 @@ export function runOutcomeSummary(run: RunView): string {
     ? run.steps_page.nodes.reduce((n, node) => n + node.failed, 0)
     : run.steps.filter((s) => isFailure(s.status) && s.partition_key !== null).length
   if (failedKeys > 1) return `${failedKeys.toLocaleString()} keys failed`
-  const error = run.error ?? run.failure?.error ?? null
+  const error = run.run.error ?? run.run.failure?.error ?? null
   return error ? `failed: ${error}` : 'failed'
 }
 
@@ -94,13 +94,13 @@ export function runNotice({ target, pending, error, started, run }: RunNoticeInp
   if (!started) return null
   const { runId } = started
   const named = started.target
-  if (!run || run.run_id !== runId) return { kind: 'queued', target: named, runId, restart: false }
-  const status = parseRunStatus(run.status)
+  if (!run || run.run.run_id !== runId) return { kind: 'queued', target: named, runId, restart: false }
+  const status = parseRunStatus(run.run.status)
   if (status === 'pending' || status === null) {
-    return { kind: 'queued', target: named, runId, restart: run.waiting_for === 'restart', control: run.control }
+    return { kind: 'queued', target: named, runId, restart: run.run.waiting_for === 'restart', control: run.run.control }
   }
   if (status === 'running') {
-    return { kind: 'running', target: named, runId, done: run.steps_executed, total: run.steps_total, control: run.control }
+    return { kind: 'running', target: named, runId, done: run.run.steps_executed, total: run.run.steps_total, control: run.run.control }
   }
-  return { kind: 'finished', target: named, runId, status: runStatus(run.status), summary: runOutcomeSummary(run) }
+  return { kind: 'finished', target: named, runId, status: runStatus(run.run.status), summary: runOutcomeSummary(run) }
 }

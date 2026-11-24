@@ -353,7 +353,7 @@ async fn execute(
         }
         Ok(RunResult::Multi(m)) => Outcome::multi(&m, spec.command, &ctx),
         Err(BarcaError::Cancelled) if timed_out => Outcome::ended(
-            OutcomeStatus::Error,
+            OutcomeStatus::Failed,
             &ErrorEnvelope::from_prose(ErrorKind::Infra, {
                 let (limit, source) = timeout.clone().unwrap_or_default();
                 format!(
@@ -483,10 +483,10 @@ pub(super) async fn finish(
     if let Some(mut r) = state.runs.registry.get_mut(run_id) {
         r.finished_at = Some(now_ts());
         r.status = match status {
-            OutcomeStatus::Success => RunStatus::Complete,
+            OutcomeStatus::Success => RunStatus::Success,
             OutcomeStatus::Skipped => RunStatus::Skipped,
             OutcomeStatus::Cancelled => RunStatus::Cancelled,
-            OutcomeStatus::Failed | OutcomeStatus::Error => RunStatus::Failed,
+            OutcomeStatus::Failed => RunStatus::Failed,
         };
         // The outcome holds what the run returned; the result is kept for its pointer and
         // counts, not for every key of a partitioned target (#623).
@@ -551,7 +551,7 @@ pub(crate) fn evict_over_budget(state: &AppState, budget: usize) {
         .filter(|r| {
             matches!(
                 r.status,
-                RunStatus::Complete | RunStatus::Skipped | RunStatus::Failed | RunStatus::Cancelled
+                RunStatus::Success | RunStatus::Skipped | RunStatus::Failed | RunStatus::Cancelled
             )
         })
         .map(|r| {
@@ -621,7 +621,7 @@ pub async fn evict_finished_runs(state: AppState, interval: Duration, max_age: D
         let cutoff = now_ts() - max_age.as_secs_f64();
         state.runs.registry.retain(|handle, run| {
             let keep = match run.status {
-                RunStatus::Complete
+                RunStatus::Success
                 | RunStatus::Skipped
                 | RunStatus::Failed
                 | RunStatus::Cancelled => run.finished_at.is_none_or(|t| t > cutoff),

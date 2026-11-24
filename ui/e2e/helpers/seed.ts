@@ -16,10 +16,10 @@ export async function startRun(request: APIRequestContext, target: string, verb:
 /** Wait until `GET /runs/{run_id}` shows a terminal status. */
 export async function waitForRun(request: APIRequestContext, runId: string) {
   await expect
-    .poll(async () => (await (await request.get(`${API}/runs/${encodeURIComponent(runId)}`)).json()).status, {
+    .poll(async () => (await (await request.get(`${API}/runs/${encodeURIComponent(runId)}`)).json()).run.status, {
       timeout: 30_000,
     })
-    .not.toMatch(/running|pending/)
+    .toMatch(/^(success|failed|cancelled|interrupted|skipped)$/)
 }
 
 /** Whether a browser request is the UI starting `command` on `target` (`POST /runs`). */

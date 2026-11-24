@@ -14,7 +14,7 @@ pub(crate) const STATUSES: &[&str] = &[
     "skipped",
     "failed",
     "cancelled",
-    "error",
+    "pending",
     "running",
     "interrupted",
 ];
@@ -24,8 +24,7 @@ pub(crate) const STATUSES: &[&str] = &[
 pub const NOT_SUCCESSFUL: &str = "not_successful";
 
 /// The statuses [`NOT_SUCCESSFUL`] names.
-pub(crate) const NOT_SUCCESSFUL_STATUSES: &[&str] =
-    &["failed", "error", "cancelled", "interrupted"];
+pub(crate) const NOT_SUCCESSFUL_STATUSES: &[&str] = &["failed", "cancelled", "interrupted"];
 
 /// The values of `--triggered-by`.
 pub(crate) const TRIGGERS: &[&str] = &["manual", "api", "schedule", "client"];
@@ -551,10 +550,7 @@ mod tests {
             status: Some("not_successful,failed"),
             ..Default::default()
         });
-        assert_eq!(
-            bad.statuses,
-            ["failed", "error", "cancelled", "interrupted"]
-        );
+        assert_eq!(bad.statuses, ["failed", "cancelled", "interrupted"]);
         assert_eq!(
             bad.query_pairs(),
             vec![("status", "not_successful,failed".to_string())]

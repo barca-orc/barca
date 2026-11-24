@@ -114,15 +114,13 @@ pub async fn list(db_path: &str) -> Result<Vec<barca_db::db::AssetPause>, BarcaE
 }
 
 /// One paused schedule (`barca pause --schedule`, `POST /schedule/{id}/pause`): since when,
-/// and until when (unix seconds; `None`: until it is resumed).
+/// and until when (RFC 3339 UTC; `None`: until it is resumed).
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct PausedSchedule {
     pub id: String,
-    #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub paused_at: i64,
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub until: Option<i64>,
+    pub paused_at: String,
+    pub until: Option<String>,
 }
 
 /// Every schedule paused at `now` (unix seconds) in the metadata DB at `db_path`, by id. A
@@ -137,8 +135,8 @@ pub async fn paused_schedules(db_path: &str, now: i64) -> Result<Vec<PausedSched
         .filter(|(_, pause)| pause.until.is_none_or(|until| until > now))
         .map(|(id, pause)| PausedSchedule {
             id,
-            paused_at: pause.paused_at,
-            until: pause.until,
+            paused_at: barca_model::time::rfc3339(pause.paused_at),
+            until: pause.until.map(barca_model::time::rfc3339),
         })
         .collect();
     paused.sort_by(|a, b| a.id.cmp(&b.id));

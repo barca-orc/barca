@@ -83,13 +83,13 @@ export function RunsPage() {
   const listed = runs.data?.runs
   const startedAt = useMemo(() => {
     const at = new Map<string, string>()
-    for (const run of listed ?? []) for (const id of [run.id, run.run_id, run.handle]) if (id) at.set(id, run.started_at)
+    for (const run of listed ?? []) at.set(run.run_id, run.started_at)
     return (runId: string) => at.get(runId) ?? null
   }, [listed])
 
   const { scopeRun } = usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
 
-  const durableId = detail.data?.run_id
+  const durableId = detail.data?.run.run_id
   useEffect(() => {
     if (selected && durableId && durableId !== selected) dispatch({ type: 'run_resolved', id: durableId })
   }, [durableId, selected, dispatch])

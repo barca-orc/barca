@@ -21,7 +21,7 @@ for (const surface of ['run list', 'running queue', 'pending queue', 'badge', 'n
         const response = await request.post(`${API}/runs`, { data: { command: 'get', targets: ['pipeline.py:history_asset'], refresh_all: true } })
         expect(response.ok(), await response.text()).toBeTruthy()
         id = (await response.json()).run_id
-        if (!pending) await expect.poll(async () => (await (await request.get(`${API}/runs/${id}`)).json()).status).toBe('running')
+        if (!pending) await expect.poll(async () => (await (await request.get(`${API}/runs/${id}`)).json()).run.status).toBe('running')
         await page.goto(surface === 'badge' ? '/ui/#/assets?node=pipeline.py%3Ahistory_asset' : '/ui/#/runs')
       }
       const region = surface === 'run list' ? page.locator('.barca-run-table tr').filter({ hasText: id })
@@ -34,10 +34,10 @@ for (const surface of ['run list', 'running queue', 'pending queue', 'badge', 'n
       const dialog = page.getByRole('dialog', { name: `Cancel run ${id}?` })
       await expect(dialog).toBeVisible()
       await dialog.getByRole('button', { name: 'Cancel', exact: true }).click()
-      expect((await (await request.get(`${API}/runs/${id}`)).json()).status).toBe(pending ? 'pending' : 'running')
+      expect((await (await request.get(`${API}/runs/${id}`)).json()).run.status).toBe(pending ? 'pending' : 'running')
       await cancel.click()
       await dialog.getByRole('button', { name: 'Cancel run', exact: true }).click()
-      await expect.poll(async () => (await (await request.get(`${API}/runs/${id}`)).json()).status).toBe('cancelled')
+      await expect.poll(async () => (await (await request.get(`${API}/runs/${id}`)).json()).run.status).toBe('cancelled')
       await expect(dialog).toHaveCount(0)
     } finally {
       await rm(hold, { force: true })

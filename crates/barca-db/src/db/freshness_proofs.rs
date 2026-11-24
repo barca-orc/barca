@@ -53,3 +53,26 @@ impl ReplaceProof {
         self.0.execute((id, generation, snapshot)).await
     }
 }
+
+/// Refresh changes cache eligibility without inserting a materialization. Advance a separate
+/// revision in the caller's transaction so old in-flight proof publishers cannot make their
+/// evidence current again. Drop obsolete proofs to keep retained evidence bounded.
+pub async fn invalidate(conn: &Connection) -> Result<(), libsql::Error> {
+    conn.execute("INSERT INTO metadata_info (key, value) VALUES ('freshness_revision', '1') ON CONFLICT(key) DO UPDATE SET value = CAST(value AS INTEGER) + 1", ()).await?;
+    conn.execute("DELETE FROM freshness_proofs", ()).await?;
+    Ok(())
+}
+
+/// The revision of eligibility changes that do not append materializations.
+pub async fn revision(conn: &Connection) -> Result<i64, libsql::Error> {
+    let mut rows = conn
+        .query(
+            "SELECT CAST(value AS INTEGER) FROM metadata_info WHERE key = 'freshness_revision'",
+            (),
+        )
+        .await?;
+    Ok(match rows.next().await? {
+        Some(row) => row.get(0)?,
+        None => 0,
+    })
+}

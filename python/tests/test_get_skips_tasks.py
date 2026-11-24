@@ -222,6 +222,6 @@ def test_server_full_run_skips_tasks(project, serve):
     assert client.health().get("status") == "ok"
 
     state = client.get().wait(timeout=60)  # no target: POST /run
-    assert state["status"] == "complete", state
-    assert names(state["result"]) == ASSETS_AND_SENSORS
+    assert state["run"]["status"] == "success", state
+    assert names(state["run"]["outcome"]) == ASSETS_AND_SENSORS
     assert ran(project) == ASSETS_AND_SENSORS

@@ -150,15 +150,15 @@ def test_connection_refused_becomes_barca_error(monkeypatch):
 
 def test_run_wait_polls_until_terminal(monkeypatch):
     c = Client()
-    seq = iter([{"status": "running"}, {"status": "running"}, {"status": "complete", "result": {}}])
+    seq = iter([{"run": {"status": status}} for status in ("running", "running", "success")])
     monkeypatch.setattr(c, "status", lambda run_id: next(seq))
     result = Run(c, "r1").wait(timeout=5, poll=0)
-    assert result["status"] == "complete"
+    assert result["run"]["status"] == "success"
 
 
 def test_run_wait_times_out(monkeypatch):
     c = Client()
-    monkeypatch.setattr(c, "status", lambda run_id: {"status": "running"})
+    monkeypatch.setattr(c, "status", lambda run_id: {"run": {"status": "running"}})
     with pytest.raises(BarcaError, match="did not finish"):
         Run(c, "r1").wait(timeout=0.05, poll=0.01)
 
@@ -177,7 +177,7 @@ def test_end_to_end_run_via_server(tmp_path, serve):
     assert client.health().get("status") == "ok"
 
     result = client.get("hello").wait(timeout=30)
-    assert result["status"] == "complete"
+    assert result["run"]["status"] == "success"
 
     names = {a["id"].split(":")[-1] for a in client.assets()}
     assert "hello" in names

@@ -389,7 +389,13 @@ fn record_of(row: &libsql::Row) -> Option<TickRecord> {
         run_id: row.get::<String>(4).ok(),
         started_at: row.get::<f64>(5).ok(),
         finished_at: row.get::<f64>(6).ok(),
-        run_status: row.get::<String>(7).ok(),
+        run_status: row.get::<String>(7).ok().map(|status| {
+            if status == "error" {
+                "failed".into()
+            } else {
+                status
+            }
+        }),
         queue_wait_seconds: row.get::<f64>(8).ok(),
         counts,
         targets: row

@@ -211,10 +211,12 @@ async fn init_schema_inner(conn: &libsql::Connection) -> Result<(), BarcaError> 
 /// was. The format stays version 1 (see `specs/interfaces/metadata-schema.md`).
 async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
+        // An additive column may belong to a table the older release did not have yet.
+        // Create missing tables before trying to extend the ones already present.
+        crate::db::schema::ddl::add_tables(conn).await?;
         for (table, definitions) in crate::db::schema::ddl::ADDED_COLUMNS {
             crate::db::schema::ddl::add_columns(conn, table, definitions).await?;
         }
-        crate::db::schema::ddl::add_tables(conn).await?;
         for index in crate::db::schema::ddl::INDEXES {
             conn.execute(index, ())
                 .await

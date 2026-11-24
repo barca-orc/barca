@@ -59,7 +59,7 @@ pub(super) fn tick_outcome(
 ) -> Option<Vec<String>> {
     match run.status {
         RunStatus::Pending | RunStatus::Running | RunStatus::Cancelled | RunStatus::Skipped => None,
-        RunStatus::Complete => {
+        RunStatus::Success => {
             let skipped = run
                 .outcome
                 .as_ref()

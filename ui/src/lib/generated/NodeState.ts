@@ -27,22 +27,22 @@ export type NodeState = {
  */
 durations: Durations | null,
 /**
- * Next cron fire time (unix epoch seconds) in the server's `--timezone`, if scheduled.
+ * Next cron fire time (RFC 3339 UTC) in the server's `--timezone`, if scheduled.
  */
-next_run: number | null,
+next_run: string | null,
 /**
- * The most recent cron fire time at or before now (unix epoch seconds) in the server's
+ * The most recent cron fire time at or before now (RFC 3339 UTC) in the server's
  * `--timezone`, if scheduled: the slot it last had.
  */
-prev_run: number | null,
+prev_run: string | null,
 /**
- * For a scheduled node that missed a slot: the first slot (unix epoch seconds) after its
+ * For a scheduled node that missed a slot: the first slot (RFC 3339 UTC) after its
  * schedule's newest fired tick, when that slot is at or before now. `null` while on time,
  * while paused, and when no tick is recorded. The same value as `late_since` of
  * `GET /schedule` and of its `schedule` block, which also says whether it is `late`
  * (`barca_core::schedule_standing::standing`).
  */
-late_since: number | null,
+late_since: string | null,
 /**
  * The run working on this node now, whoever started it (`null` when none is).
  */

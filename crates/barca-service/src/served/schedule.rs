@@ -2,10 +2,8 @@
 //!
 //! The same walk as every other surface ([`crate::refresh_path::schedule_views`]), so `state`,
 //! `late` and the rest agree with the `schedule` block of `GET /state`
-//! ([`crate::status::ScheduleStatus`]). The two shapes differ where they always have: the times
-//! here are unix seconds and there RFC 3339, and this one carries `last_run` (the older name of
-//! `last_run_id`) and what only a scheduler knows of its last skipped tick. Unifying them is
-//! undecided (#1056, B3); this types the route as it is served.
+//! ([`crate::status::ScheduleStatus`]). All public schedule timestamps use RFC 3339 UTC.
+//! This route also carries the scheduler's last skipped tick and the legacy `last_run` alias.
 
 use crate::NodeKind;
 use crate::refresh_path::ScheduleInputs;
@@ -45,7 +43,7 @@ pub struct JobSkips {
     pub skip_reason: Option<SkipReason>,
 }
 
-/// One entry of `GET /schedule`. Times are unix seconds.
+/// One entry of `GET /schedule`. Times are RFC 3339 UTC.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct ScheduleJob {
@@ -61,15 +59,13 @@ pub struct ScheduleJob {
     pub id: String,
     pub kind: NodeKind,
     /// The newest tick the scheduler fired.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub last_fired: Option<i64>,
+    pub last_fired: Option<String>,
     /// `last_run_id` under its older name.
     pub last_run: Option<String>,
     /// The run that tick started.
     pub last_run_id: Option<String>,
     /// When a due tick was last skipped; `null` after a restart.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub last_skipped: Option<i64>,
+    pub last_skipped: Option<String>,
     /// That run's status, in the run list's words (`pending` while it waits in the run queue).
     pub last_status: Option<String>,
     /// Explicit task reason from the newest fired run; separate from scheduler decisions.
@@ -80,19 +76,16 @@ pub struct ScheduleJob {
     #[serde(default)]
     pub late: bool,
     /// The first slot after `last_fired` that has passed; `null` while on time or paused.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub late_since: Option<i64>,
+    pub late_since: Option<String>,
     /// `Schedule(cron, max_failures=N)`, default 5.
     #[serde(default)]
     pub max_failures: u32,
     /// The next slot, in the zone the scheduler evaluates cron in.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub next_fire: Option<i64>,
+    pub next_fire: Option<String>,
     #[serde(default)]
     pub paused: bool,
     /// When a timed pause ends; `null` for an open-ended pause.
-    #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-    pub paused_until: Option<i64>,
+    pub paused_until: Option<String>,
     /// Its typical queue wait exceeds its interval (#962).
     #[serde(default)]
     pub queue_bound: bool,
@@ -123,9 +116,8 @@ pub enum SchedulePauseAnswer {
     Pause {
         id: String,
         paused: bool,
-        /// Unix seconds; `null` for an open-ended pause.
-        #[cfg_attr(feature = "ts", ts(type = "number | null"))]
-        paused_until: Option<i64>,
+        /// RFC 3339 UTC; `null` for an open-ended pause.
+        paused_until: Option<String>,
     },
 }
 
@@ -149,8 +141,8 @@ pub fn schedule_jobs(
                 id: job.id.clone(),
                 cron: job.cron_str.clone(),
                 kind: job.kind,
-                next_fire: standing.next_fire,
-                last_fired: standing.last_fired,
+                next_fire: standing.next_fire.and_then(crate::time::rfc3339_secs),
+                last_fired: standing.last_fired.and_then(crate::time::rfc3339_secs),
                 last_run_id: standing.last_run_id.clone(),
                 last_run: standing.last_run_id.clone(),
                 last_status: standing.last_status.clone(),
@@ -169,11 +161,13 @@ pub fn schedule_jobs(
                     })
                     .and_then(|r| r.task_skip_reason.clone()),
                 late: standing.late,
-                late_since: standing.late_since,
+                late_since: standing.late_since.and_then(crate::time::rfc3339_secs),
                 typical_queue_wait_seconds: block.typical_queue_wait_seconds,
                 typical_run_seconds: block.typical_run_seconds,
                 queue_bound: standing.queue_bound,
-                last_skipped: skip.and_then(|s| s.last_skipped),
+                last_skipped: skip
+                    .and_then(|s| s.last_skipped)
+                    .and_then(crate::time::rfc3339_secs),
                 skipped_for: skip.and_then(|s| s.skipped_for.clone()),
                 skip_reason: skip.and_then(|s| s.skip_reason),
                 paused: block.paused,
@@ -181,7 +175,8 @@ pub fn schedule_jobs(
                     .pauses
                     .get(&job.id)
                     .filter(|_| block.paused)
-                    .and_then(|p| p.until),
+                    .and_then(|p| p.until)
+                    .and_then(crate::time::rfc3339_secs),
                 failures: block.failures,
                 max_failures: block.max_failures,
                 failing: block.failing,

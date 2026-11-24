@@ -197,9 +197,9 @@ async fn an_expired_stream_polls_healthy_runs_beyond_the_outage_window_without_p
         }
         assert!(request.starts_with("GET /runs/r "));
         Reply::json(if polls.fetch_add(1, Ordering::SeqCst) == 0 {
-            json!({"status":"running"})
+            json!({"run":{"status":"running"}})
         } else {
-            json!({"status":"success","outcome":{"status":"success"}})
+            json!({"run":{"status":"success","outcome":{"status":"success"}}})
         })
     })
     .await;
@@ -207,7 +207,7 @@ async fn an_expired_stream_polls_healthy_runs_beyond_the_outage_window_without_p
     assert!(follow.open().await.unwrap());
     let start = std::time::Instant::now();
     assert!(
-        matches!(follow.next().await.unwrap(), Followed::Ended(body) if body["status"] == "success")
+        matches!(follow.next().await.unwrap(), Followed::Ended(body) if body["run"]["status"] == "success")
     );
     assert!(start.elapsed() >= Duration::from_secs(2));
     assert!(
@@ -294,7 +294,7 @@ async fn epoch_mismatch_follows_a_new_attempt_of_the_same_run_without_resubmissi
             return health(true);
         }
         if request.starts_with("GET /runs/r ") {
-            return Reply::json(json!({"status":"running"}));
+            return Reply::json(json!({"run":{"status":"running"}}));
         }
         assert!(request.starts_with("GET /runs/r/events "));
         match opens.fetch_add(1, Ordering::SeqCst) {
@@ -348,7 +348,7 @@ async fn missing_initial_stream_does_not_mistake_a_pending_run_for_a_terminal_ou
                 return health(true);
             }
             if request.starts_with("GET /runs/r ") {
-                return Reply::json(json!({"status":"pending"}));
+                return Reply::json(json!({"run":{"status":"pending"}}));
             }
             assert!(request.starts_with("GET /runs/r/events "));
             if opens.fetch_add(1, Ordering::SeqCst) == 0 {

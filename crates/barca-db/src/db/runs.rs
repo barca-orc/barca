@@ -34,7 +34,10 @@ pub async fn archive_attempt(
     run_id: &str,
 ) -> Result<(), BarcaError> {
     let mut rows = conn
-        .query("SELECT 1 FROM runs WHERE run_id = ?1", [run_id])
+        .query(
+            "SELECT 1 FROM runs WHERE run_id = ?1 AND status != 'pending'",
+            [run_id],
+        )
         .await
         .map_err(attempt_error("reading stopped execution"))?;
     if rows
@@ -73,6 +76,12 @@ pub async fn archive_attempt(
         .await
         .map_err(attempt_error("archiving attempt evidence"))?;
     }
+    // Keep the accepted request visible while its next execution waits. The archived
+    // attempt owns all prior execution evidence; the pending row has none of its results.
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, job, status, started_at, triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json) SELECT ?1, command, files, target, job, 'pending', COALESCE((SELECT queued_at FROM run_queue WHERE run_id = ?1), started_at), triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json FROM runs WHERE run_id = ?2",
+        [run_id, archived.as_str()],
+    ).await.map_err(attempt_error("restoring pending request"))?;
     Ok(())
 }
 
@@ -108,7 +117,7 @@ pub async fn interrupt_predecessor(
     run_id: &str,
 ) -> Result<(), BarcaError> {
     preserve_spool(conn, db_path, run_id).await?;
-    conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status = 'running'", [run_id]).await.map_err(attempt_error("interrupting predecessor"))?;
+    conn.execute("UPDATE runs SET status = 'interrupted', stop_reason = 'server stopped before completion', finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1 AND status IN ('pending', 'running')", [run_id]).await.map_err(attempt_error("interrupting predecessor"))?;
     Ok(())
 }
 
@@ -206,7 +215,9 @@ pub struct RunRecord {
     /// Total recorded materialization attempts; cached steps contribute zero.
     #[serde(default)]
     pub attempts: Option<i64>,
+    #[serde(serialize_with = "barca_model::time::serialize_datetime")]
     pub started_at: String,
+    #[serde(serialize_with = "barca_model::time::serialize_optional_datetime")]
     pub finished_at: Option<String>,
     pub elapsed_seconds: Option<f64>,
     /// What started the run: `manual` (a command typed on a machine), `api`, `schedule` or
@@ -446,6 +457,23 @@ pub struct NewRun<'a> {
     pub scope: Option<&'a barca_model::run_scope::RunScope>,
 }
 
+/// Record acceptance alongside the queue entry, in the caller's transaction. No execution
+/// owner is attached until the coordinator starts the run.
+pub async fn record_pending_on(
+    conn: &Connection,
+    run: &NewRun<'_>,
+    accepted_at: &str,
+) -> Result<(), BarcaError> {
+    conn.execute(
+        "INSERT INTO runs (run_id, command, files, target, status, started_at, triggered_by, scheduled_at, schedule_id, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'pending', ?5, ?6, NULLIF(?7, ''), NULLIF(?8, ''), NULLIF(?9, ''), NULLIF(?10, ''), NULLIF(?11, ''))",
+        libsql::params![run.run_id, run.command, run.files, run.target.unwrap_or(""), accepted_at,
+            run.trigger.triggered_by.as_str(), run.trigger.scheduled_at.as_deref().unwrap_or(""),
+            run.trigger.schedule_id.as_deref().unwrap_or(""), run.trigger.principal.as_deref().unwrap_or(""),
+            run.trigger.reason.as_deref().unwrap_or(""), run.scope.map(|v| serde_json::to_string(v).expect("run scope is JSON")).unwrap_or_default()],
+    ).await.map_err(|e| BarcaError::Db(format!("failed to record pending run: {e}")))?;
+    Ok(())
+}
+
 /// Create a new run record at the start of execution.
 pub(crate) async fn create_run_with(db_path: &str, run: NewRun<'_>) -> Result<(), BarcaError> {
     let _g = db_guard_for(db_path).await;
@@ -460,7 +488,7 @@ async fn insert_run(conn: &libsql::Connection, db_path: &str, run: &NewRun<'_>) 
     // ([`finish_run`], or the end of this process).
     let owner = crate::run_owner::claim(db_path, run.run_id);
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, ''))",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, pid, host, owner, triggered_by, scheduled_at, schedule_id, job, trace, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, 'running', ?5, ?6, ?7, NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, ''), NULLIF(?13, ''), NULLIF(?14, ''), NULLIF(?15, ''), NULLIF(?16, '')) ON CONFLICT(run_id) DO UPDATE SET status = 'running', started_at = datetime('now'), command = excluded.command, files = excluded.files, target = excluded.target, steps_total = excluded.steps_total, pid = excluded.pid, host = excluded.host, owner = excluded.owner, job = excluded.job, trace = excluded.trace, scope_json = excluded.scope_json WHERE runs.status = 'pending'",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -503,7 +531,7 @@ pub async fn record_unstarted_run(
     let _g = db_guard_for(db_path).await;
     let (_db, conn) = open_conn(db_path).await?;
     conn.execute(
-        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, '')) ON CONFLICT(run_id) DO NOTHING",
+        "INSERT INTO runs (run_id, command, files, target, status, steps_total, finished_at, elapsed_seconds, triggered_by, scheduled_at, schedule_id, outcome_json, principal, trigger_reason, scope_json) VALUES (?1, ?2, ?3, ?4, ?5, 0, datetime('now'), 0, ?6, NULLIF(?7, ''), NULLIF(?8, ''), ?9, NULLIF(?10, ''), NULLIF(?11, ''), NULLIF(?12, '')) ON CONFLICT(run_id) DO UPDATE SET status = excluded.status, finished_at = excluded.finished_at, elapsed_seconds = excluded.elapsed_seconds, steps_total = excluded.steps_total, outcome_json = excluded.outcome_json WHERE runs.status = 'pending'",
         [
             run.run_id.to_string(),
             run.command.to_string(),
@@ -568,7 +596,7 @@ pub async fn set_run_outcome(
     let (_db, conn) = open_conn(db_path).await?;
     let changed = conn
         .execute(
-            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status = 'running' THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
+            "UPDATE runs SET outcome_json = ?2, status = CASE WHEN status IN ('pending', 'running') THEN ?3 ELSE status END, finished_at = COALESCE(finished_at, datetime('now')) WHERE run_id = ?1",
             [
                 run_id.to_string(),
                 outcome_json.to_string(),
@@ -982,6 +1010,11 @@ async fn read_runs(
         } else {
             row.get::<String>(4).unwrap_or_default()
         };
+        let status = if status == "error" {
+            "failed".into()
+        } else {
+            status
+        };
         records.push(RunRecord {
             run_id,
             command: row.get::<String>(1).unwrap_or_default(),
@@ -1075,8 +1108,8 @@ pub struct ActivityRow {
 /// The window's runs that did not succeed, each with its first failed step ([`run_activity`]).
 fn activity_failures_sql(first_failure: &str, trigger: &str, window: &str, text: &str) -> String {
     format!(
-        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), status, {trigger}, {first_failure}, id \
-         FROM runs WHERE {window}{text} AND status NOT IN ('success', 'running')"
+        "SELECT replace(substr(started_at, 1, 13), 'T', ' '), CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, {first_failure}, id \
+         FROM runs WHERE {window}{text} AND status NOT IN ('success', 'skipped', 'pending', 'running')"
     )
 }
 
@@ -1149,7 +1182,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, COUNT(*) FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, COUNT(*) FROM runs \
                  WHERE {window}{text} GROUP BY 1, 2, 3 ORDER BY 1"
             ),
             (),
@@ -1168,7 +1201,7 @@ pub async fn run_activity(
     let mut rows = conn
         .query(
             &format!(
-                "SELECT {hour}, status, {trigger}, elapsed_seconds FROM runs \
+                "SELECT {hour}, CASE status WHEN 'error' THEN 'failed' ELSE status END, {trigger}, elapsed_seconds FROM runs \
                  WHERE {window}{text} AND status != 'running' AND elapsed_seconds IS NOT NULL"
             ),
             (),
@@ -1650,6 +1683,65 @@ mod tests {
             details.push(row.get::<String>(3).unwrap());
         }
         details
+    }
+
+    #[tokio::test]
+    async fn legacy_errors_are_failed_in_history_filters_and_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.db").to_string_lossy().to_string();
+        init_db(&path).await.unwrap();
+        seed_runs(
+            &path,
+            &[
+                ("legacy", "error", Some("api"), "2026-10-22 08:00:00"),
+                ("new", "failed", Some("api"), "2026-10-22 08:01:00"),
+                ("ok", "success", Some("api"), "2026-10-22 08:02:00"),
+            ],
+        )
+        .await;
+        let filter = RunFilter {
+            statuses: vec!["failed".into()],
+            ..Default::default()
+        };
+        let runs = get_runs_filtered(&path, 10, &filter).await.unwrap();
+        assert_eq!(runs.len(), 2);
+        assert!(runs.iter().all(|r| r.status == "failed"));
+        assert_eq!(
+            get_run(&path, "legacy").await.unwrap().unwrap().status,
+            "failed"
+        );
+        assert_eq!(listed(&path, 10, &filter).await.1, 2);
+        let facts = run_activity(&path, "2026-10-22 08:00:00", &RunFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            facts.counts.iter().filter(|r| r.status == "failed").count(),
+            1
+        );
+        assert_eq!(
+            facts
+                .counts
+                .iter()
+                .find(|r| r.status == "failed")
+                .unwrap()
+                .runs,
+            2
+        );
+        assert!(facts.failures.iter().all(|r| r.status == "failed"));
+        let (_db, conn) = open_conn(&path).await.unwrap();
+        let mut rows = conn
+            .query("SELECT status FROM runs WHERE run_id = 'legacy'", ())
+            .await
+            .unwrap();
+        assert_eq!(
+            rows.next()
+                .await
+                .unwrap()
+                .unwrap()
+                .get::<String>(0)
+                .unwrap(),
+            "error"
+        );
     }
 
     #[tokio::test]

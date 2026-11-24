@@ -36,23 +36,23 @@ export interface RunOverviewViewProps {
  * (`run.explanation`), and so are the nodes in flight and their groups (`now`).
  */
 export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
-  const live = runIsLive(run.status)
+  const live = runIsLive(run.run.status)
   const { cancellation: cancel, attempts, progress, slowest, why } = run.explanation
-  const overview = live && progress ? { progress, now: now ?? NOTHING_NOW, elapsed: elapsedLabel(run.started_at, nowMs) } : null
+  const overview = live && progress ? { progress, now: now ?? NOTHING_NOW, elapsed: elapsedLabel(run.run.started_at, nowMs) } : null
   return (
     <Section title="Run overview">
-      {run.stop_reason && <p role="status">Attempt {run.run_attempt ?? ((run.previous_attempts?.length ?? 0) + 1)} stopped: {run.stop_reason}.
-        {run.parent_run_id && <> <Link to={runHref(run.parent_run_id)}>Open original run</Link></>}
+      {run.run.stop_reason && <p role="status">Attempt {run.run.run_attempt ?? ((run.run.previous_attempts?.length ?? 0) + 1)} stopped: {run.run.stop_reason}.
+        {run.run.parent_run_id && <> <Link to={runHref(run.run.parent_run_id)}>Open original run</Link></>}
       </p>}
-      {run.previous_attempts && run.previous_attempts.length > 0 && <>
+      {run.run.previous_attempts && run.run.previous_attempts.length > 0 && <>
         <span className="barca-run-reason-label">Previous executions</span>
         <ul className="barca-run-groups">
-          {run.previous_attempts.map((attempt) => <li key={attempt.run_id}>
+          {run.run.previous_attempts.map((attempt) => <li key={attempt.run_id}>
             <Link to={runHref(attempt.run_id)}>Attempt {attempt.attempt}: logs and steps</Link>
             <span className="barca-cell-sub">Stopped: {attempt.stop_reason}</span>
           </li>)}
         </ul>
-        <p className="barca-note">Current execution: attempt {run.previous_attempts.length + 1}</p>
+        <p className="barca-note">Current execution: attempt {run.run.previous_attempts.length + 1}</p>
       </>}
 
       {cancel && (
@@ -65,7 +65,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
       <dl className="barca-facts">
         <div className="barca-fact"><dt>Requested by</dt><dd>{run.explanation.requested_by}</dd></div>
         {attempts && <div className="barca-fact"><dt>Attempts</dt><dd>{attempts}</dd></div>}
-        {run.trigger_reason && <div className="barca-fact" data-wide><dt>Reason</dt><dd>“{run.trigger_reason}”</dd></div>}
+        {run.run.trigger_reason && <div className="barca-fact" data-wide><dt>Reason</dt><dd>“{run.run.trigger_reason}”</dd></div>}
       </dl>
       {overview && (
         <div className="barca-run-live">
@@ -117,7 +117,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
         </div>
       )}
       {/* A run cancelled in the queue decided nothing: the notice above says so. */}
-      {run.cancellation?.started !== false && <>
+      {run.run.cancellation?.started !== false && <>
         <span className="barca-run-reason-label">Why these steps ran</span>
         <RunReasons why={why} />
       </>}
@@ -127,7 +127,7 @@ export function RunOverviewView({ run, now, nowMs }: RunOverviewViewProps) {
 
 /** [`RunOverviewView`] with what a live run is working on now. */
 export function RunOverview({ run }: { run: RunView }) {
-  const live = runIsLive(run.status)
+  const live = runIsLive(run.run.status)
   const inFlight = useQuery({
     queryKey: ['runs', 'in-flight'],
     queryFn: api.runsInFlight,
@@ -135,7 +135,7 @@ export function RunOverview({ run }: { run: RunView }) {
     refetchInterval: recovering(2_000),
     retry: false,
   })
-  const row = inFlight.data?.runs.find((r) => r.id === run.run_id || r.run_id === run.run_id)
+  const row = inFlight.data?.runs.find((r) => r.run_id === run.run.run_id || r.run_id === run.run.run_id)
   return (
     <RunOverviewView
       run={run}

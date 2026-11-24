@@ -49,9 +49,9 @@ def test_live_cached_counts_reach_history_list_and_progress(tmp_path, serve, kin
     try:
         wait_until((tmp_path / "started").exists, "remaining work to block")
         detail = server.get(f"/runs/{run_id}")
-        assert detail["status"] == "running", detail
-        assert detail["steps_cached"] == cached, detail
-        listed = next(r for r in server.get("/runs")["runs"] if r["id"] == run_id)
+        assert detail["run"]["status"] == "running", detail
+        assert detail["run"]["steps_cached"] == cached, detail
+        listed = next(r for r in server.get("/runs")["runs"] if r["run_id"] == run_id)
         assert listed["steps_cached"] == cached, listed
         history = barca(tmp_path, "history", run_id, "--json", "--server", server.url, env=env)
         assert history.returncode == 0, history.stderr
@@ -67,11 +67,11 @@ def test_live_cached_counts_reach_history_list_and_progress(tmp_path, serve, kin
     finally:
         (tmp_path / "release").touch()
     done = wait_until(
-        lambda: (r := server.get(f"/runs/{run_id}"))["status"] == "success" and r,
+        lambda: (r := server.get(f"/runs/{run_id}"))["run"]["status"] == "success" and r,
         "the run to finish",
     )
-    assert done["steps_cached"] == cached, done
-    assert done["steps_executed"] == executed + 1, done
+    assert done["run"]["steps_cached"] == cached, done
+    assert done["run"]["steps_executed"] == executed + 1, done
 
 
 def pipeline(kind):
@@ -120,17 +120,23 @@ def test_recovery_retracts_cached_hit_before_recomputation(tmp_path, serve):
     try:
         wait_until((tmp_path / "repair.started").exists, "the missing artifact to be recomputed")
         live = server.get(f"/runs/{run_id}")
-        assert live["status"] == "running"
-        assert live["steps_cached"] == 1, live
-        assert live["steps_executed"] == 0, live
+        assert live["run"]["status"] == "running"
+        assert live["run"]["steps_cached"] == 1, live
+        assert live["run"]["steps_executed"] == 0, live
         (tmp_path / "repair.release").touch()
         wait_until((tmp_path / "started").exists, "the final task to block")
-        assert server.get(f"/runs/{run_id}")["steps_cached"] == 1
+        assert server.get(f"/runs/{run_id}")["run"]["steps_cached"] == 1
     finally:
         (tmp_path / "repair.release").touch()
         (tmp_path / "release").touch()
-    done = wait_until(lambda: (r := server.get(f"/runs/{run_id}"))["status"] == "success" and r)
-    assert (done["steps_cached"], done["steps_executed"], done["steps_total"]) == (1, 2, 3)
+    done = wait_until(
+        lambda: (r := server.get(f"/runs/{run_id}"))["run"]["status"] == "success" and r
+    )
+    assert (
+        done["run"]["steps_cached"],
+        done["run"]["steps_executed"],
+        done["run"]["steps_total"],
+    ) == (1, 2, 3)
 
 
 def test_requeued_attempt_does_not_add_previous_cached_count(tmp_path, serve):
@@ -143,23 +149,25 @@ def test_requeued_attempt_does_not_add_previous_cached_count(tmp_path, serve):
     run_id = server.post("/runs", {"command": "run", "targets": ["hold"]})["run_id"]
     try:
         wait_until((tmp_path / "started").exists, "the first attempt to block")
-        assert server.get(f"/runs/{run_id}")["steps_cached"] == 2
+        assert server.get(f"/runs/{run_id}")["run"]["steps_cached"] == 2
         server.send(signal.SIGTERM)
         assert server.exited() == 0, server.stderr
         (tmp_path / "started").unlink()
         restarted = serve("--no-schedule", env=env)
         wait_until((tmp_path / "started").exists, "the next attempt to block")
         live = restarted.get(f"/runs/{run_id}")
-        assert (live["steps_cached"], live["steps_total"]) == (2, 3), live
-        archived_id = live["previous_attempts"][0]["run_id"]
+        assert (live["run"]["steps_cached"], live["run"]["steps_total"]) == (2, 3), live
+        archived_id = live["run"]["previous_attempts"][0]["run_id"]
         archived = restarted.get(f"/runs/{archived_id}")
-        assert archived["parent_run_id"] == run_id, archived
-        assert archived["steps_cached"] == 2, archived
+        assert archived["run"]["parent_run_id"] == run_id, archived
+        assert archived["run"]["steps_cached"] == 2, archived
     finally:
         (tmp_path / "release").touch()
-    done = wait_until(lambda: (r := restarted.get(f"/runs/{run_id}"))["status"] == "success" and r)
-    assert (done["steps_cached"], done["steps_executed"]) == (2, 1), done
-    assert restarted.get(f"/runs/{archived_id}")["steps_cached"] == 2
+    done = wait_until(
+        lambda: (r := restarted.get(f"/runs/{run_id}"))["run"]["status"] == "success" and r
+    )
+    assert (done["run"]["steps_cached"], done["run"]["steps_executed"]) == (2, 1), done
+    assert restarted.get(f"/runs/{archived_id}")["run"]["steps_cached"] == 2
 
 
 def test_unreached_phase_is_not_counted_cached(tmp_path, serve):
@@ -184,15 +192,15 @@ def test_unreached_phase_is_not_counted_cached(tmp_path, serve):
     try:
         wait_until((tmp_path / "refresh.started").exists, "the cutoff phase to block")
         before = server.get(f"/runs/{run_id}")
-        assert before["steps_cached"] == 0, before
+        assert before["run"]["steps_cached"] == 0, before
         (tmp_path / "refresh.release").touch()
         wait_until((tmp_path / "started").exists, "the task after cutoff to block")
         after = server.get(f"/runs/{run_id}")
-        assert after["steps_cached"] == 1, after
+        assert after["run"]["steps_cached"] == 1, after
     finally:
         (tmp_path / "refresh.release").touch()
         (tmp_path / "release").touch()
-    wait_until(lambda: server.get(f"/runs/{run_id}")["status"] == "success")
+    wait_until(lambda: server.get(f"/runs/{run_id}")["run"]["status"] == "success")
     cli = barca(tmp_path, "run", "hold", "--server", server.url, "--agent", env=env)
     assert cli.returncode == 0, cli.stderr
     assert "(3/3)" in cli.stderr, cli.stderr
@@ -226,17 +234,19 @@ def skip(x):
             )
 
         live = wait_until(skipped_live_run, "the skip completion to arrive")
-        assert live["status"] == "running", live
-        assert (live["steps_cached"], live["steps_total"]) == (2, 4), live
+        assert live["run"]["status"] == "running", live
+        assert (live["run"]["steps_cached"], live["run"]["steps_total"]) == (2, 4), live
         history = barca(tmp_path, "history", run_id, "--json", "--server", server.url, env=env)
         assert history.returncode == 0, history.stderr
         counts = json.loads(history.stdout)["explanation"]["counts"]
         assert counts["cached"] == 2, counts
     finally:
         (tmp_path / "release").touch()
-    done = wait_until(lambda: (r := server.get(f"/runs/{run_id}"))["status"] == "success" and r)
+    done = wait_until(
+        lambda: (r := server.get(f"/runs/{run_id}"))["run"]["status"] == "success" and r
+    )
     assert (
-        done["steps_cached"],
+        done["run"]["steps_cached"],
         done["explanation"]["counts"]["skipped"],
-        done["steps_executed"],
+        done["run"]["steps_executed"],
     ) == (2, 1, 2)

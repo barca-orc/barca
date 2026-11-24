@@ -2,8 +2,8 @@
 openapi: 3.1.0
 info:
   title: Barca current HTTP API
-  version: '37'
-  description: 'Normative current wire contract; specification version 37 is independent of package versions.
+  version: '38'
+  description: 'Normative current wire contract; specification version 38 is independent of package versions.
     Scope: registered barca-server routes and fallback responses. Authentication defaults off. Opt-in token mode requires a bearer token for every API method,
     including health, HEAD, ETag and SSE; read-only is an independent operating mode.
     Only exact UI static routes and GET /auth/status are public reads. POST /auth/bootstrap
@@ -3186,7 +3186,7 @@ paths:
       deprecated: true
   /status/{run_id}:
     get:
-      summary: Poll a retained live run handle
+      summary: Read a run detail (deprecated alias)
       operationId: get_status_run_id
       responses:
         '401':
@@ -3196,7 +3196,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/RunState'
+                $ref: '#/components/schemas/RunView'
         '404':
           description: Resource not found
           content:
@@ -3221,8 +3221,7 @@ paths:
                 $ref: '#/components/schemas/Error'
             text/plain:
               schema: *id003
-      description: Pending/running/complete/failed/cancelled, while the run is retained in memory. Deprecated
-        alias; GET /runs/{run_id} answers from the DB too.
+      description: Deprecated alias of GET /runs/{run_id}, with the same detail envelope, status vocabulary, RFC 3339 timestamps, and durable history.
       parameters: &id022
       - name: run_id
         in: path
@@ -3230,7 +3229,7 @@ paths:
         schema: *id003
       deprecated: true
     head:
-      summary: Poll a retained live run handle (headers only)
+      summary: Read a run detail (deprecated alias) (headers only)
       operationId: head_status_run_id
       responses:
         '401':
@@ -5146,11 +5145,13 @@ components:
             properties:
               id: {type: string}
               paused_at:
-                type: integer
-                description: Unix seconds
+                type: string
+                format: date-time
+                description: RFC 3339 UTC time when the schedule was paused
               until:
-                type: [integer, 'null']
-                description: Unix seconds at which the pause ends by itself; null until resumed
+                type: [string, 'null']
+                format: date-time
+                description: RFC 3339 UTC time when the pause ends; null until resumed
     PauseCover:
       type: object
       additionalProperties: false
@@ -5335,15 +5336,6 @@ components:
         status:
           type: string
           enum: [cancelling, cancelled]
-    RunStatus:
-      type: string
-      enum:
-      - pending
-      - running
-      - complete
-      - skipped
-      - failed
-      - cancelled
     NodeRoot:
       type: object
       additionalProperties: false
@@ -6231,33 +6223,6 @@ components:
           type: array
           items:
             type: string
-    RunState:
-      type: object
-      additionalProperties: false
-      required:
-      - handle
-      - status
-      - result
-      - error
-      - started_at
-      - finished_at
-      properties:
-        handle: *id003
-        status:
-          $ref: '#/components/schemas/RunStatus'
-        result:
-          anyOf:
-          - $ref: '#/components/schemas/Result'
-          - type: 'null'
-        error:
-          anyOf:
-          - *id003
-          - type: 'null'
-        started_at: *id045
-        finished_at:
-          anyOf:
-          - *id045
-          - type: 'null'
     Cache:
       type: object
       additionalProperties: false
@@ -7250,19 +7215,21 @@ components:
           - type: 'null'
         next_run:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         prev_run:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: For a scheduled node, the cron's most recent fire time at or before now (unix
-            seconds, in the server's --timezone); null otherwise.
+          description: For a scheduled node, the cron's most recent fire time at or before now (RFC 3339 UTC); null otherwise.
         late_since:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: For a scheduled node that missed a slot, the first slot (unix seconds) after
+          description: For a scheduled node that missed a slot, the first slot (RFC 3339 UTC) after
             its schedule's newest tick (the slot of the newest run it started or queued), when that
             slot is at or before now; null while on time, while paused, when no tick is recorded, and
             for a node without a schedule. schedule.late says whether the schedule is late.
@@ -7646,14 +7613,16 @@ components:
           - sensor
         next_fire:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         last_fired:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
           description: The schedule's newest tick, the slot of the newest run it started or queued
-            (unix epoch seconds); null when none is recorded.
+            (RFC 3339 UTC); null when none is recorded.
         last_run_id:
           anyOf:
           - *id003
@@ -7677,7 +7646,6 @@ components:
             - skipped
             - failed
             - cancelled
-            - error
             - interrupted
           - type: 'null'
           description: That run's status, in the words of GET /runs; pending while it waits in the
@@ -7690,15 +7658,17 @@ components:
             Never while paused. GET /state and barca status report the same value.
         late_since:
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
-          description: The first slot after the newest scheduler decision that has passed (unix epoch seconds); null
+          description: The first slot after the newest scheduler decision that has passed (RFC 3339 UTC); null
             while on time, while paused and when no tick is recorded.
         last_skipped:
-          description: Last time a due tick was skipped (unix epoch seconds), because a run of the node
+          description: Last time a due tick was skipped (RFC 3339 UTC), because a run of the node
             was in flight or the job is paused; in memory only, null after a restart
           anyOf:
-          - *id054
+          - type: string
+            format: date-time
           - type: 'null'
         skipped_for:
           description: The in-flight run that caused last_skipped; null for a paused job
@@ -7717,10 +7687,10 @@ components:
           description: Held back by POST /schedule/{id}/pause; kept across a restart.
         paused_until:
           anyOf:
-          - &id056
-            type: integer
+          - type: string
+            format: date-time
           - type: 'null'
-          description: When the pause ends (unix epoch seconds); null when paused until resumed, or not
+          description: When the pause ends (RFC 3339 UTC); null when paused until resumed, or not
             paused.
         failures:
           description: Consecutive failed ticks (RFC-0008); persisted across restarts
@@ -7789,27 +7759,11 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Log'
-    FirstFailure:
-      type: object
-      additionalProperties: false
-      description: A run's first failed step.
-      required:
-      - node_id
-      - error
-      properties:
-        node_id:
-          type: string
-          description: The step's node id, with its partition key when it has one.
-        error:
-          type: string
-          description: ErrorType and message, the message's first line only.
     RunSummary:
       type: object
       additionalProperties: false
       required:
       - control
-      - id
-      - handle
       - run_id
       - command
       - files
@@ -7822,7 +7776,7 @@ components:
       - steps_executed
       - steps_cached
       - error
-      - first_failure
+      - failure
       - triggered_by
       - scheduled_at
       - schedule_id
@@ -7833,15 +7787,7 @@ components:
       properties:
         control:
           $ref: '#/components/schemas/RunControl'
-        id: *id003
-        handle:
-          anyOf:
-          - *id003
-          - type: 'null'
-        run_id:
-          anyOf:
-          - *id003
-          - type: 'null'
+        run_id: *id003
         command: *id003
         files:
           type: array
@@ -7881,9 +7827,9 @@ components:
           anyOf:
           - *id003
           - type: 'null'
-        first_failure:
+        failure:
           anyOf:
-          - $ref: '#/components/schemas/FirstFailure'
+          - $ref: '#/components/schemas/RunFailure'
           - type: 'null'
         triggered_by: &id057
           anyOf:
@@ -8098,12 +8044,12 @@ components:
         by_status:
           type: object
           additionalProperties: false
-          required: [success, failed, error, cancelled, interrupted, running]
+          required: [pending, success, failed, cancelled, interrupted, running]
           properties:
             skipped: {type: integer, minimum: 0}
             success: {type: integer, minimum: 0}
             failed: {type: integer, minimum: 0}
-            error: {type: integer, minimum: 0}
+            pending: {type: integer, minimum: 0}
             cancelled: {type: integer, minimum: 0}
             interrupted: {type: integer, minimum: 0}
             running: {type: integer, minimum: 0}
@@ -8518,9 +8464,10 @@ components:
           id: *id005
           paused: &id059
             type: boolean
-          paused_until: &id058
+          paused_until:
             anyOf:
-            - type: integer
+            - type: string
+              format: date-time
             - type: 'null'
     TriggeredBy:
       type: string
@@ -8743,7 +8690,7 @@ components:
           type: object
     Outcome:
       description: 'A finished run, tagged by status. success: the exact barca get --json / barca run
-        --json body. failed: the failed-run stdout body plus envelope. cancelled and error: envelope only.'
+        --json body. failed: the failed-run stdout body plus envelope. cancelled and failures before execution: envelope only.'
       oneOf:
       - type: object
         required:
@@ -8760,7 +8707,8 @@ components:
           run_id: *id005
           elapsed_seconds:
             type: number
-          steps_executed: *id056
+          steps_executed: &id056
+            type: integer
           phases: *id056
           metadata_seconds:
             type: number
@@ -8812,7 +8760,6 @@ components:
           status:
             enum:
             - cancelled
-            - error
           envelope:
             $ref: '#/components/schemas/Error'
     RunExplanation:
@@ -9072,7 +9019,7 @@ components:
         values: {type: boolean}
         timeout: {type: [integer, 'null'], minimum: 0}
         queue: {type: string, enum: [next, last]}
-    RunView:
+    RunInfo:
       type: object
       additionalProperties: false
       description: One run. A finished run is read from the metadata DB, so the answer is the same after
@@ -9104,12 +9051,8 @@ components:
       - plan_reasons
       - cancellation
       - waiting_for
-      - explanation
       - outcome
       - error
-      - steps
-      - steps_page
-      - logs
       properties:
         scope:
           description: Original execution scope; null for older history or an unstarted run.
@@ -9154,7 +9097,6 @@ components:
           - skipped
           - failed
           - cancelled
-          - error
           - interrupted
         command: *id005
         target: *id042
@@ -9178,7 +9120,10 @@ components:
           anyOf:
           - type: number
           - type: 'null'
-        steps_total: *id058
+        steps_total: &id058
+          anyOf:
+          - type: integer
+          - type: 'null'
         steps_executed: *id056
         steps_cached: *id056
         job:
@@ -9219,14 +9164,22 @@ components:
         cancellation: *id_cancellation
         waiting_for: *id_waiting_for
         queue: *id_queue_place
-        explanation:
-          $ref: '#/components/schemas/RunExplanation'
         outcome:
           anyOf:
           - $ref: '#/components/schemas/Outcome'
           - type: 'null'
           description: Null while the run runs, and for runs not started by barca serve.
         error: *id042
+    RunView:
+      type: object
+      additionalProperties: false
+      description: Shared run-detail envelope; execution facts are nested under run.
+      required: [run, steps, steps_page, explanation, logs]
+      properties:
+        run:
+          $ref: '#/components/schemas/RunInfo'
+        explanation:
+          $ref: '#/components/schemas/RunExplanation'
         steps:
           type: array
           description: At most ?limit=N steps (default 1000) from ?offset=M, in the page order (failed

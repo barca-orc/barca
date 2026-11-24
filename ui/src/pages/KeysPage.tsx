@@ -97,7 +97,7 @@ export function KeysPage() {
   }
 
   const retry = useRunDetail(start.data?.run_id ?? null)
-  const retryStatus = retry.data?.status
+  const retryStatus = retry.data?.run.status
   const retryId = start.data?.run_id
   useEffect(() => {
     if (retryId && retryStatus && !runIsLive(retryStatus)) {

@@ -86,7 +86,7 @@ def result(key):
             assert server.request("DELETE", f"/runs/{run_id}")[0] == 200
             server.wait(
                 "cancelled resolver run",
-                lambda: server.run(run_id)["status"] == "cancelled",
+                lambda: server.run(run_id)["run"]["status"] == "cancelled",
                 timeout=5,
             )
             with snapshot(tmp_path) as db:
@@ -147,7 +147,9 @@ def blocker(key):
         wait_until((tmp_path / "resolver.pid").exists, "second run's resolver")
         server.send(signal.SIGTERM)
         server.wait(
-            "first run to be requeued", lambda: server.run(run_id)["status"] == "pending", timeout=5
+            "first run to be requeued",
+            lambda: server.run(run_id)["run"]["status"] == "pending",
+            timeout=5,
         )
         code, response = server.request("DELETE", f"/runs/{run_id}")
         assert code == 200, response
@@ -161,7 +163,7 @@ def blocker(key):
         (tmp_path / "release-work").touch()
         restarted = serve("--no-schedule")
         try:
-            actual = restarted.finished(run_id)["status"]
+            actual = restarted.finished(run_id)["run"]["status"]
             assert (queued, status, actual, (tmp_path / "starts").read_text()) == (
                 (0,),
                 ("cancelled",),

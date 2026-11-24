@@ -14,7 +14,7 @@ const stands = (over: Record<string, unknown>) => ({
 const soon = Math.floor(Date.now() / 1000) + 600
 const state = (name: string, schedule: Record<string, unknown>, next: number) => served({
   id: `jobs.py:${name}`, name, kind: 'sensor', inputs: [], partitioned: false, shape: null, env: [], durations: null,
-  next_run: next, prev_run: null, late_since: null, running: null, last_materialization: null, signals: [],
+  next_run: new Date(next * 1000).toISOString(), prev_run: null, late_since: null, running: null, last_materialization: null, signals: [],
   last_success_at: null, failing_since: null, consecutive_failures: 0,
   cache: { state: 'always_runs', reason: 'sensor', detail: '' }, schedule: stands(schedule),
 })

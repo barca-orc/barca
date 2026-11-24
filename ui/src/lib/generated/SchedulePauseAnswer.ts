@@ -7,6 +7,6 @@ import type { ScheduleJob } from "./ScheduleJob";
  */
 export type SchedulePauseAnswer = ScheduleJob | { id: string, paused: boolean,
 /**
- * Unix seconds; `null` for an open-ended pause.
+ * RFC 3339 UTC; `null` for an open-ended pause.
  */
-paused_until: number | null, };
+paused_until: string | null, };

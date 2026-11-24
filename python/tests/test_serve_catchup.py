@@ -75,14 +75,15 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
         job = schedule(second)
         handle = job["last_run"]
         assert handle is not None, f"no catch-up run was started: {job}"
-        assert job["last_fired"] >= anchored
+        assert datetime.datetime.fromisoformat(job["last_fired"]).timestamp() >= anchored
         run = second.wait(
             "the catch-up run to finish",
-            lambda: (r := second.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+            lambda: (r := second.get(f"/status/{handle}"))["run"]["status"]
+            not in ("pending", "running")
             and r,
         )
-        assert run["status"] == "complete", run
-        caught_up = job["last_fired"]
+        assert run["run"]["status"] == "success", run
+        caught_up = int(datetime.datetime.fromisoformat(job["last_fired"]).timestamp())
         done = schedule(second)
         assert (done["last_run_id"], done["last_status"]) == (handle, "success"), done
     assert f"catch-up run pipeline.py:yearly → {handle}" in second.stderr, second.stderr
@@ -96,6 +97,6 @@ def test_a_missed_tick_runs_once_when_the_server_comes_back(tmp_path):
         job = schedule(third)
         # The last tick and its run are read from the metadata DB, so a restart keeps them.
         assert (job["last_run"], job["last_status"]) == (handle, "success"), job
-        assert job["last_fired"] == caught_up
+        assert int(datetime.datetime.fromisoformat(job["last_fired"]).timestamp()) == caught_up
     assert "catch-up" not in third.stderr, third.stderr
     assert _rows(tmp_path) == {"yearly": 1}

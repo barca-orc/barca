@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { runFeedback, runNotice, runOutcomeSummary } from './runFeedback'
-import { runByStatus } from '@/kit/fixtures'
+import { runInfrastructureFailure, runByStatus } from '@/kit/fixtures'
 import { RUN_IDS, runDetail } from './testdata/project'
 import type { LogLine, RunView, StatusKind } from './types'
 
@@ -72,14 +72,14 @@ describe('runNotice', () => {
     expect(runNotice({ ...base, started })).toEqual({ kind: 'queued', target: 'p.py:demand_forecast', runId: '127', restart: false })
     expect(runNotice({ ...base, started, run: runByStatus.pending })).toMatchObject({ kind: 'queued', runId: '127', restart: false })
     // Accepted by a draining server: it starts on the next one (#1011).
-    expect(runNotice({ ...base, started, run: { ...runByStatus.pending, waiting_for: 'restart' } })).toMatchObject({ kind: 'queued', restart: true })
+    expect(runNotice({ ...base, started, run: { ...runByStatus.pending, run: { ...runByStatus.pending.run, waiting_for: 'restart' } } })).toMatchObject({ kind: 'queued', restart: true })
     // Another run's record (a stale query) is not this run's.
-    expect(runNotice({ ...base, started, run: { ...runByStatus.running, run_id: '9' } })).toMatchObject({ kind: 'queued' })
+    expect(runNotice({ ...base, started, run: { ...runByStatus.running, run: { ...runByStatus.running.run, run_id: '9' } } })).toMatchObject({ kind: 'queued' })
   })
 
   it('a live run reports its progress', () => {
     expect(runNotice({ ...base, started, run: runByStatus.running })).toEqual({
-      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4, control: runByStatus.running.control,
+      kind: 'running', target: 'p.py:demand_forecast', runId: '127', done: 1, total: 4, control: runByStatus.running.run.control,
     })
   })
 
@@ -118,7 +118,7 @@ describe('runOutcomeSummary', () => {
     const listed = { ...runByStatus.failed, steps_page: { total: 2, truncated: false } }
     const key = (k: string) => ({ ...runByStatus.failed.steps[0]!, node_id: `p.py:a[k=${k}]`, partition_key: `k=${k}` })
     expect(runOutcomeSummary({ ...listed, steps: [key('1'), key('2')] })).toBe('2 keys failed')
-    expect(runOutcomeSummary(runByStatus.error)).toBe('failed: could not start a worker: python3 not found')
-    expect(runOutcomeSummary({ ...listed, error: null, failure: null })).toBe('failed')
+    expect(runOutcomeSummary(runInfrastructureFailure)).toBe('failed: could not start a worker: python3 not found')
+    expect(runOutcomeSummary({ ...listed, run: { ...listed.run, error: null, failure: null } })).toBe('failed')
   })
 })

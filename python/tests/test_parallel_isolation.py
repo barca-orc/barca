@@ -223,9 +223,9 @@ def test_two_runs_under_one_barca_serve_do_not_read_each_others_branches(root, s
         runs = [server.run(t) for t in targets]
         for target, run in zip(targets, runs):
             status = run.wait(timeout=180, poll=0.05)
-            assert status["status"] == "complete", status
-            # The server answers with where the task's result is, not with the value.
-            got = json.loads((root / status["result"]["final_output"]["path"]).read_text())
+            assert status["run"]["status"] == "success", status
+            # Task outcomes carry their returned value, as the run CLI does.
+            got = status["run"]["outcome"]["final_output"]
             assert got == {"tag": target[-1], "count": BRANCHES, "wrong": []}, (round_, got)
         wait_until(lambda: branch_files(root) == [], "both runs' branch results to be removed")
 
@@ -288,12 +288,12 @@ def test_branch_results_are_gone_after_a_run_is_cancelled_under_barca_serve(root
     wait_until(lambda: len(branch_results(root)) >= 20, "twenty branch results on disk")
     run.cancel()
     status = run.wait(timeout=60, poll=0.05)
-    assert status["status"] == "cancelled", status
+    assert status["run"]["status"] == "cancelled", status
     wait_until(lambda: branch_files(root) == [], "the cancelled run's branch results to go")
     # The server is still there and its next run is not disturbed.
     (root / "release").write_text("")
     again = server.run("fan_a").wait(timeout=60, poll=0.05)
-    assert again["status"] == "complete", again
+    assert again["run"]["status"] == "success", again
     wait_until(lambda: branch_files(root) == [], "the next run's branch results to go")
 
 

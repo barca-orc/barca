@@ -109,6 +109,18 @@ pub async fn push_with_slot(
     queued_at: &str,
     slot: Option<(&str, i64)>,
 ) -> Result<i64, BarcaError> {
+    push_with_record(db_path, run_id, spec, queued_at, slot, None).await
+}
+
+/// Queue admission and its pending history record commit together.
+pub async fn push_with_record(
+    db_path: &str,
+    run_id: &str,
+    spec: &str,
+    queued_at: &str,
+    slot: Option<(&str, i64)>,
+    pending: Option<db::NewRun<'_>>,
+) -> Result<i64, BarcaError> {
     let _g = db::db_guard().await;
     let (_db, conn) = db::open_conn(db_path).await?;
     ensure(&conn).await?;
@@ -133,6 +145,9 @@ pub async fn push_with_slot(
         db::run_queue::insert_queued(&conn, run_id, seq, spec, queued_at)
             .await
             .map_err(failed("adding a run"))?;
+        if let Some(run) = pending.as_ref() {
+            db::runs::record_pending_on(&conn, run, queued_at).await?;
+        }
         if let Some((job, epoch)) = slot {
             db::record_tick_on(
                 &conn,
@@ -391,6 +406,81 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admission_history_and_queue_commit_or_roll_back_together() {
+        let (_dir, path) = fresh().await;
+        let trigger = barca_model::trigger::Trigger::default();
+        let pending = || db::NewRun {
+            run_id: "accepted",
+            command: "get",
+            files: "[]",
+            target: Some("a"),
+            steps_total: None,
+            job: None,
+            trigger: &trigger,
+            traced: false,
+            scope: None,
+        };
+        push_with_record(
+            &path,
+            "accepted",
+            "{}",
+            "2026-11-23T12:00:00Z",
+            None,
+            Some(pending()),
+        )
+        .await
+        .unwrap();
+        let row = db::get_run(&path, "accepted").await.unwrap().unwrap();
+        assert_eq!(row.status, "pending");
+        assert_eq!(row.started_at, "2026-11-23T12:00:00Z");
+        assert!(row.finished_at.is_none());
+        let activity = db::run_activity(&path, "2026-11-23 00:00:00", &db::RunFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(activity.counts.len(), 1);
+        assert_eq!(activity.counts[0].status, "pending");
+        assert!(activity.failures.is_empty());
+        // The queue insert succeeds first, then a failed history write refuses the whole
+        // admission. Neither a new queue entry nor a history row survives.
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            conn.execute("CREATE TRIGGER refuse_pending BEFORE INSERT ON runs WHEN NEW.run_id = 'rejected' BEGIN SELECT RAISE(ABORT, 'history unavailable'); END", ()).await.unwrap();
+        }
+        assert!(
+            push_with_record(
+                &path,
+                "rejected",
+                "{}",
+                "2026-11-23T13:00:00Z",
+                None,
+                Some(db::NewRun {
+                    run_id: "rejected",
+                    ..pending()
+                })
+            )
+            .await
+            .is_err()
+        );
+        let queued = list(&path).await.unwrap();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].run_id, "accepted");
+        assert_eq!(db::count_runs(&path).await.unwrap(), 1);
+        requeue(&path, "accepted", None).await.unwrap();
+        assert!(
+            db::runs::previous_attempts(&path, "accepted")
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        db::create_run(&path, "accepted", "get", "[]", Some("a"), Some(2))
+            .await
+            .unwrap();
+        let row = db::get_run(&path, "accepted").await.unwrap().unwrap();
+        assert_eq!(row.status, "running");
+        assert_eq!(row.steps_total, Some(2));
+    }
+
+    #[tokio::test]
     async fn runs_keep_their_order_and_state_across_reads() {
         let (_dir, path) = fresh().await;
         assert!(list(&path).await.unwrap().is_empty());
@@ -473,7 +563,10 @@ mod tests {
         assert_eq!(rows[0].run_id, "first");
         assert_eq!(rows[0].state, QueueState::Queued);
         assert_eq!(rows[0].spec, "{\"again\":1}");
-        assert!(db::get_run(&path, "first").await.unwrap().is_none());
+        assert_eq!(
+            db::get_run(&path, "first").await.unwrap().unwrap().status,
+            "pending"
+        );
         assert!(
             !db::get_logs(&path, "first-attempt-1")
                 .await
@@ -499,7 +592,7 @@ mod tests {
             Some("server restart (requeued)")
         );
         assert_eq!(archived.status, "interrupted");
-        assert_eq!(db::count_runs(&path).await.unwrap(), 0);
+        assert_eq!(db::count_runs(&path).await.unwrap(), 1);
         {
             let (_db, conn) = db::open_conn(&path).await.unwrap();
             let mut rows = conn.query("SELECT future_attempt_diagnostics, plan_reasons, cancellation FROM runs WHERE run_id = 'first-attempt-1'", ()).await.unwrap();

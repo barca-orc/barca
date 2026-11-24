@@ -1023,15 +1023,15 @@ impl Project {
                 );
                 fields.insert(
                     "next_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.next_fire)),
+                    serde_json::json!(slot.and_then(|s| s.next_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "prev_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.prev_fire)),
+                    serde_json::json!(slot.and_then(|s| s.prev_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "late_since".into(),
-                    serde_json::json!(slot.and_then(|s| s.late_since)),
+                    serde_json::json!(slot.and_then(|s| s.late_since).map(crate::time::rfc3339)),
                 );
                 // No run of this server's is in flight: the queued one has not started.
                 fields.insert("running".into(), serde_json::Value::Null);
@@ -1104,7 +1104,7 @@ impl Project {
                 });
                 let mut row = serde_json::json!({
                     "control": crate::outcome::RunControl::server(&record.status),
-                    "id": record.run_id, "handle": null, "run_id": record.run_id,
+                    "run_id": record.run_id,
                     "command": record.command, "files": record.files, "target": record.target,
                     "status": record.status, "triggered_by": record.triggered_by,
                     "scheduled_at": record.scheduled_at, "schedule_id": record.schedule_id,
@@ -1114,7 +1114,7 @@ impl Project {
                     "steps_total": record.steps_total, "steps_executed": record.steps_executed,
                     "steps_cached": record.steps_cached,
                     "error": null,
-                    "first_failure": first_failure.map(|(node_id, error)| serde_json::json!({"node_id": node_id, "error": error})),
+                    "failure": first_failure.map(|(node_id, error)| serde_json::json!({"node": node_id, "error": error})),
                     "principal": record.principal, "trigger_reason": record.trigger_reason,
                     "cancellation": record.cancellation,
                     "line": line,
@@ -1170,44 +1170,46 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
-            scope: None,
-            control: crate::outcome::RunControl::server(&record.status),
-            skip_reason: None,
-            previous_attempts: Vec::new(),
-            parent_run_id: None,
-            run_attempt: None,
-            stop_reason: None,
-            run_id: record.run_id.clone(),
-            status: record.status.clone(),
-            command: record.command.clone(),
-            target: record.target.clone(),
-            files: record.files.clone(),
-            triggered_by: record.triggered_by,
-            scheduled_at: record.scheduled_at.clone(),
-            schedule_id: record.schedule_id.clone(),
-            started_at: crate::time::sql_datetime_rfc3339(&record.started_at),
-            finished_at: record
-                .finished_at
-                .as_deref()
-                .map(crate::time::sql_datetime_rfc3339),
-            elapsed_seconds: record.elapsed_seconds,
-            steps_total: record.steps_total,
-            steps_executed: record.steps_executed,
-            steps_cached: record.steps_cached,
-            job: record.job.clone(),
-            attempts: record.attempts,
-            client_run_id: record.client_run_id.clone(),
-            failure: record.failure.clone(),
-            principal: record.principal.clone(),
-            trigger_reason: record.trigger_reason.clone(),
-            retries: record.retries,
-            plan_reasons: record.plan_reasons.clone(),
-            cancellation: record.cancellation.clone(),
-            waiting_for: None,
-            queue: None,
+            run: crate::outcome::RunInfo {
+                scope: None,
+                control: crate::outcome::RunControl::server(&record.status),
+                skip_reason: None,
+                previous_attempts: Vec::new(),
+                parent_run_id: None,
+                run_attempt: None,
+                stop_reason: None,
+                run_id: record.run_id.clone(),
+                status: record.status.clone(),
+                command: record.command.clone(),
+                target: record.target.clone(),
+                files: record.files.clone(),
+                triggered_by: record.triggered_by,
+                scheduled_at: record.scheduled_at.clone(),
+                schedule_id: record.schedule_id.clone(),
+                started_at: crate::time::sql_datetime_rfc3339(&record.started_at),
+                finished_at: record
+                    .finished_at
+                    .as_deref()
+                    .map(crate::time::sql_datetime_rfc3339),
+                elapsed_seconds: record.elapsed_seconds,
+                steps_total: record.steps_total,
+                steps_executed: record.steps_executed,
+                steps_cached: record.steps_cached,
+                job: record.job.clone(),
+                attempts: record.attempts,
+                client_run_id: record.client_run_id.clone(),
+                failure: record.failure.clone(),
+                principal: record.principal.clone(),
+                trigger_reason: record.trigger_reason.clone(),
+                retries: record.retries,
+                plan_reasons: record.plan_reasons.clone(),
+                cancellation: record.cancellation.clone(),
+                waiting_for: None,
+                queue: None,
+                outcome: None,
+                error: steps.iter().find_map(|step| step.error.clone()),
+            },
             explanation: Default::default(),
-            outcome: None,
-            error: steps.iter().find_map(|step| step.error.clone()),
             steps,
             steps_page,
             logs: crate::db::get_logs(db, id).await.unwrap(),
@@ -1223,9 +1225,12 @@ impl Project {
             at(NOW).timestamp() as f64,
         );
         view.explanation.outputs = crate::run_explanation::run_outputs(
-            &view.status,
+            &view.run.status,
             None,
-            &crate::run_explanation::output_targets(view.target.as_deref(), view.job.as_deref()),
+            &crate::run_explanation::output_targets(
+                view.run.target.as_deref(),
+                view.run.job.as_deref(),
+            ),
             &view.steps,
         );
         serde_json::to_value(view).unwrap()

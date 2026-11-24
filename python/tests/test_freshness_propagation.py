@@ -134,12 +134,12 @@ def test_a_tick_brings_the_always_nodes_below_a_sensor_up_to_date_in_one_run(tmp
         assert jobs["inbox"]["failures"] == 0 and jobs["inbox"]["failing"] is False
         # The last tick's run may still be going (one starts every second).
         run = serve.finished(jobs["inbox"]["last_run"])
-        ids = {step["id"].rsplit(":", 1)[1] for step in run["outcome"]["steps"]}
+        ids = {step["id"].rsplit(":", 1)[1] for step in run["run"]["outcome"]["steps"]}
         assert ids == {"inbox", "orders", "summary", "send_report"}, run
         # One run with several targets, recorded as the schedule's tick (#469).
-        assert run["triggered_by"] == "schedule", run
-        assert run["schedule_id"].endswith(":inbox") and run["scheduled_at"], run
-        targets = {t.rsplit(":", 1)[1] for t in run["outcome"]["targets"]}
+        assert run["run"]["triggered_by"] == "schedule", run
+        assert run["run"]["schedule_id"].endswith(":inbox") and run["run"]["scheduled_at"], run
+        targets = {t.rsplit(":", 1)[1] for t in run["run"]["outcome"]["targets"]}
         assert targets == {"inbox", "orders", "summary", "send_report"}, run
     # Each value was computed once, not once per consumer (#253).
     assert _rows(tmp_path).get("orders") == 2
@@ -161,16 +161,16 @@ def test_manual_pins_itself_and_a_refresh_lets_the_next_tick_through(tmp_path):
         )
         assert jobs["prices"]["last_status"] == "success", jobs
         run = serve.finished(jobs["prices"]["last_run"])
-        assert run["status"] == "success", run
+        assert run["run"]["status"] == "success", run
         blocked = {
             s["id"].rsplit(":", 1)[1]
-            for s in run["outcome"]["steps"]
+            for s in run["run"]["outcome"]["steps"]
             if s.get("reason") == "blocked"
         }
         assert blocked == {"report", "publish"}, run
         assert {
             name.rsplit(":", 1)[1]
-            for name, t in run["outcome"]["targets"].items()
+            for name, t in run["run"]["outcome"]["targets"].items()
             if t["status"] == "blocked"
         } == {"report", "publish"}, run
 
@@ -268,9 +268,11 @@ def test_post_runs_reads_a_manual_upstream_as_barca_get_does(tmp_path):
             "run_id"
         ]
         run = serve.finished(run_id)
-        assert run["status"] == "success", run
-        assert run["outcome"]["final_output"] == {"baseline": "p1", "etag": "p2"}, run
-        detail = {s["id"].rsplit(":", 1)[1]: s.get("detail") for s in run["outcome"]["steps"]}
+        assert run["run"]["status"] == "success", run
+        assert run["run"]["outcome"]["final_output"] == {"baseline": "p1", "etag": "p2"}, run
+        detail = {
+            s["id"].rsplit(":", 1)[1]: s.get("detail") for s in run["run"]["outcome"]["steps"]
+        }
         assert (detail["baseline"] or "").startswith("Manual"), run
     assert _rows(tmp_path).get("baseline") == 1
 
@@ -617,7 +619,7 @@ def _polled(tmp_path, freshness: str, source: str = POLLED, also: tuple[str, ...
         # Ticks go on after the change: one that found the sensor unchanged.
         serve.wait("a tick after the change", lambda: serve.rows().get("feed", 0) > rows["feed"])
         run = serve.finished(serve.schedule()["fast"]["last_run"])
-    return rows, run["outcome"]
+    return rows, run["run"]["outcome"]
 
 
 def test_a_tick_rebuilds_the_always_nodes_below_a_sensor_it_polls(tmp_path):
@@ -700,8 +702,8 @@ def test_a_paused_or_pinned_node_below_a_polled_sensor_is_left_alone(tmp_path):
         # The tick skips the paused target and reads it as it is for what is below it.
         assert rows.get("side") == 1 and rows.get("below") == 1, rows
         run = serve.finished(serve.schedule()["fast"]["last_run"])
-        skipped = [s for s in run["outcome"]["steps"] if s.get("reason") == "paused"]
-        assert _names(s["id"] for s in skipped) == {"side"}, run["outcome"]["steps"]
+        skipped = [s for s in run["run"]["outcome"]["steps"] if s.get("reason") == "paused"]
+        assert _names(s["id"] for s in skipped) == {"side"}, run["run"]["outcome"]["steps"]
 
         # Resumed: a target again, rebuilt at the tick that sees the next value.
         resumed = _barca(tmp_path, "resume", "side", "--server", serve.url)

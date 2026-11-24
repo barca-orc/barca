@@ -419,7 +419,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<RUN_ID>` | - | - | experimental: new in 0.29.3: the run detail's step keys and human layout may change after field use | One run in detail: its fields, the steps it recorded (the first 1000, failed steps always; --limit and --all change it), and each failed step's error, traceback and how its worker ended |
 | `--reconcile` | `RUN_ID` | - | experimental: explicit operator recovery for stopped runs whose owner cannot be verified | After verifying a run stopped, record it as interrupted; refuses a proven live owner |
-| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): success, failed, cancelled, error, running, interrupted; not_successful is every one but success and running |
+| `--status` | `STATUS[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs with one of these statuses (comma-separated): pending, running, success, skipped, failed, cancelled, interrupted; not_successful means failed, cancelled or interrupted |
 | `--target` | `NAME` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs whose target or job is this node (a function name or node id); runs of every node (`all`) are left out |
 | `--triggered-by` | `TRIGGER[,...]` | - | experimental: new in 0.29.3: the history filters' values and matching may change after field use | Only runs started this way (comma-separated): manual, api, schedule, client |
 | `--not-triggered-by` | `T[,...]` | - | experimental: new in 0.44 (#969): the history filters' values and matching may change after field use | Without the runs started this way (comma-separated): schedule hides the cron ticks and keeps the runs that recorded no trigger |
@@ -3737,9 +3737,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.excluded.at` | string | always |
 | `activity.excluded.by_status` | object | always |
 | `activity.excluded.by_status.cancelled` | integer | always |
-| `activity.excluded.by_status.error` | integer | always |
 | `activity.excluded.by_status.failed` | integer | always |
 | `activity.excluded.by_status.interrupted` | integer | always |
+| `activity.excluded.by_status.pending` | integer | always |
 | `activity.excluded.by_status.running` | integer | always |
 | `activity.excluded.by_status.success` | integer | always |
 | `activity.excluded.by_trigger` | object | always |
@@ -3760,9 +3760,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.hours[].at` | string | always |
 | `activity.hours[].by_status` | object | always |
 | `activity.hours[].by_status.cancelled` | integer | always |
-| `activity.hours[].by_status.error` | integer | always |
 | `activity.hours[].by_status.failed` | integer | always |
 | `activity.hours[].by_status.interrupted` | integer | always |
+| `activity.hours[].by_status.pending` | integer | always |
 | `activity.hours[].by_status.running` | integer | always |
 | `activity.hours[].by_status.success` | integer | always |
 | `activity.hours[].by_trigger` | object | always |
@@ -3790,9 +3790,9 @@ machine: barca history RUN_ID --local`. RUN_ID conflicts with `--reconcile`, the
 | `activity.total.at` | string | always |
 | `activity.total.by_status` | object | always |
 | `activity.total.by_status.cancelled` | integer | always |
-| `activity.total.by_status.error` | integer | always |
 | `activity.total.by_status.failed` | integer | always |
 | `activity.total.by_status.interrupted` | integer | always |
+| `activity.total.by_status.pending` | integer | always |
 | `activity.total.by_status.running` | integer | always |
 | `activity.total.by_status.success` | integer | always |
 | `activity.total.by_trigger` | object | always |

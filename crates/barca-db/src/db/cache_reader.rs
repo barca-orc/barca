@@ -545,6 +545,13 @@ mod observation_tests {
                 .unwrap();
         }
         let cache = crate::db::CacheReader::open(&path).await.unwrap();
+        assert_eq!(
+            super::super::freshness_proofs::revision(cache.conn())
+                .await
+                .unwrap(),
+            1,
+            "resuming the same invalidation does not advance the revision again"
+        );
         let rows = cache.key_rows("p.py:a", 5).await.unwrap();
         for (key, eligible) in [
             ("old", false),

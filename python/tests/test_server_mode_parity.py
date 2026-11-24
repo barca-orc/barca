@@ -60,7 +60,7 @@ from .test_cli_contract import AGENT_RUNS, CASES, PIPELINE
 SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats", "logs"}
 # Contract cases that only exist on this machine: `--reconcile` writes local history.
 # `history --activity` counts runs, and the two sides do not record the same ones (a server
-# records a request it refuses as a run with status `error`; the CLI records none for a usage
+# records a request it refuses as a run with status `failed`; the CLI records none for a usage
 # error): test_serve_running.py compares it with the server's own `GET /runs` instead, and the
 # table below compares the count that is the same on both sides, the schedule's (none).
 LOCAL_ONLY = {"history_reconciled", "history_activity"}
@@ -98,9 +98,9 @@ CONTRACT_TABLE += [
     ("run_partition_no_dimension", ["run", "report", "pipeline.py", "--partition", "k=a"]),
     ("get_partition_skipped_target", ["get", "keys", "pipeline.py", "--partition", "k=a"]),
     ("stats_unknown", ["stats", "nope", "pipeline.py", "--json"]),
-    # History filters and one run in detail. `FAILED_RUN` is the newest failed run of the side
-    # the case runs on.
-    ("history_failed", ["history", "--status", "failed", "--json"]),
+    # Compare the same executed failure (broken), excluding server-only admission failures.
+    # Both kinds now use failed; FAILED_RUN resolves this same target on each host.
+    ("history_failed", ["history", "--status", "failed", "--target", "broken", "--json"]),
     ("history_filters", ["history", "--status", "success", "--target", "total", "--since", "1d"]),
     ("history_no_schedule", ["history", "--triggered-by", "schedule", "--json"]),
     # #991: the runs in progress (none here) and the last day's activity.
@@ -110,7 +110,16 @@ CONTRACT_TABLE += [
     # runs of (a server also records a refused request, as `error`), so the counts agree.
     (
         "history_not_schedule",
-        ["history", "--status", "failed", "--not-triggered-by", "schedule", "--json"],
+        [
+            "history",
+            "--status",
+            "failed",
+            "--target",
+            "broken",
+            "--not-triggered-by",
+            "schedule",
+            "--json",
+        ],
     ),
     (
         "history_only_others",
@@ -130,7 +139,10 @@ CONTRACT_TABLE += [
         ["history", "--activity", "--status", "failed", "--triggered-by", "schedule", "--json"],
     ),
     ("history_activity_search", ["history", "--activity", "--search", "no_such_node"]),
-    ("pretty_history_failed", ["history", "--status", "failed", "--pretty", "-l", "2"]),
+    (
+        "pretty_history_failed",
+        ["history", "--status", "failed", "--target", "broken", "--pretty", "-l", "2"],
+    ),
     ("history_bad_status", ["history", "--status", "nope", "--json"]),
     ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
     ("pretty_run_detail", ["history", "FAILED_RUN", "--pretty"]),
@@ -307,7 +319,9 @@ def _resolve(cwd: Path, argv: list[str], server: list[str]) -> list[str]:
     """`argv` with `FAILED_RUN` replaced by the newest failed run that side recorded."""
     if "FAILED_RUN" not in argv:
         return argv
-    out = _run(cwd, ["history", "--status", "failed", "-l", "1", "--json", *server])
+    out = _run(
+        cwd, ["history", "--status", "failed", "--target", "broken", "-l", "1", "--json", *server]
+    )
     [run] = json.loads(out.stdout)["runs"]
     return [run["run_id"] if a == "FAILED_RUN" else a for a in argv]
 

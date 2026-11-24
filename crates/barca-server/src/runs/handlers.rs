@@ -13,7 +13,7 @@ use crate::error::ApiError;
 use crate::guards::refuse_if_read_only;
 use crate::replay::RunChannel;
 use crate::respond::{json_text, stdout_of};
-use crate::run_model::{RunState, RunStatus};
+use crate::run_model::RunStatus;
 use crate::state::AppState;
 use axum::Extension;
 use axum::extract::{Path, Query, State};
@@ -415,17 +415,13 @@ pub async fn get_target(
     Ok(Json(json!({ "run_id": start(state, spec).await? })))
 }
 
-/// `GET /status/{run_id}` (alias) — the live state of a run this server started.
+/// `GET /status/{run_id}` — deprecated alias of the durable run-detail response.
 pub async fn status(
     State(state): State<AppState>,
     Path(run_id): Path<String>,
-) -> Result<Json<RunState>, ApiError> {
-    state
-        .runs
-        .registry
-        .get(&run_id)
-        .map(|r| Json(r.clone()))
-        .ok_or_else(|| ApiError::NotFound(format!("run '{run_id}' not found")))
+    Query(page): Query<StepsQuery>,
+) -> Result<Json<RunView>, ApiError> {
+    detail(State(state), Path(run_id), Query(page)).await
 }
 
 // ─── cancel ─────────────────────────────────────────────────────────────────
@@ -610,12 +606,14 @@ pub async fn logs(
             ))
         })?),
     };
-    let snapshot = state.reads.snapshot_db().await?;
+    // Observe completion before taking the snapshot so terminal status cannot accompany
+    // a snapshot taken before the final log writes.
     let live = state.runs.registry.get(&id).map(|r| r.status);
+    let snapshot = state.reads.snapshot_db().await?;
     let record = db::get_run(&snapshot.path, &id).await?;
-    let mut status = match (&record, live) {
-        (Some(record), _) => record.status.clone(),
-        (None, Some(live)) => live_status(live).as_str().to_string(),
+    let status = match (&record, live) {
+        (_, Some(live)) => live_status(live).as_str().to_string(),
+        (Some(record), None) => record.status.clone(),
         (None, None) => {
             return Err(ApiError::NotFound(format!(
                 "run '{id}' was not found on this server
@@ -624,11 +622,6 @@ A run recorded on another machine is \
             )));
         }
     };
-    if let Some(live) = live
-        && matches!(live, RunStatus::Pending | RunStatus::Running)
-    {
-        status = live_status(live).as_str().to_string();
-    }
     let step = query.step.as_deref().filter(|s| !s.is_empty());
     let lines = if record.is_some() || live.is_some() {
         // Errors read as `barca logs` reports them here.
@@ -718,7 +711,7 @@ pub async fn output(
     Path(run_id): Path<String>,
 ) -> Result<Response, ApiError> {
     let view = view(&state, &run_id).await?;
-    if matches!(view.status.as_str(), "pending" | "running") {
+    if matches!(view.run.status.as_str(), "pending" | "running") {
         return Err(ApiError::Conflict(format!(
             "run '{run_id}' has not finished\nWait for its `run_finished` event, then ask again."
         )));
@@ -736,12 +729,12 @@ pub async fn output(
     let (path, format) = match live {
         Some(oref) => (oref.path, oref.format),
         None => {
-            if view.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
+            if view.run.outcome.as_ref().map(Outcome::status) != Some(OutcomeStatus::Success) {
                 return Err(no_output());
             }
-            let target = view.target.clone().filter(|t| !t.contains(','));
+            let target = view.run.target.clone().filter(|t| !t.contains(','));
             let target = target.ok_or_else(no_output)?;
-            let body: Value = serde_json::from_str(view.outcome.as_ref().unwrap().text())
+            let body: Value = serde_json::from_str(view.run.outcome.as_ref().unwrap().text())
                 .map_err(|_| no_output())?;
             let step = body["steps"]
                 .as_array()

@@ -272,7 +272,8 @@ pub(crate) async fn run_detail(
         }
     };
     let bad = |e: serde_json::Error| server.unexpected(&format!("GET {path}"), &e.to_string());
-    let run: barca_service::db::RunRecord = serde_json::from_value(body.clone()).map_err(bad)?;
+    let run: barca_service::db::RunRecord =
+        serde_json::from_value(body["run"].clone()).map_err(bad)?;
     let mut steps: Vec<barca_service::db::RunStep> =
         serde_json::from_value(body["steps"].clone()).map_err(bad)?;
     // The steps the run recorded, as on this machine: a finished run the server started also
@@ -450,7 +451,7 @@ fn render_queue(view: &QueueView) -> String {
         slots => slots.to_string(),
     };
     let mut out = format!(
-        "queue: {} · {slots} · {} queued\n",
+        "queue: {} · {slots} · {} pending\n",
         state.join(", "),
         queued.len()
     );
@@ -826,25 +827,22 @@ pub(crate) async fn pause_schedule(
         SchedulePauseAnswer::Job(job) => (
             job.id.as_str(),
             job.paused,
-            job.paused_until,
+            job.paused_until.as_deref(),
             Some(job.cron.as_str()),
-            job.next_fire,
+            job.next_fire.as_deref(),
         ),
         SchedulePauseAnswer::Pause {
             id,
             paused,
             paused_until,
-        } => (id.as_str(), *paused, *paused_until, None, None),
+        } => (id.as_str(), *paused, paused_until.as_deref(), None, None),
     };
     match pause {
         Some(_) => barca_service::errln!(
             "[barca] schedule {id} paused on {}: its ticks do not fire until {}",
             server.shown_url,
             match paused_until {
-                Some(until) => format!(
-                    "{} (or `barca resume --schedule {schedule}`)",
-                    barca_service::outcome::rfc3339(until)
-                ),
+                Some(until) => format!("{} (or `barca resume --schedule {schedule}`)", until),
                 None => format!("`barca resume --schedule {schedule}`"),
             }
         ),
@@ -865,16 +863,16 @@ pub(crate) async fn pause_schedule(
 }
 
 /// One schedule's entry in a line: `p.py:nightly: paused until resumed · cron 0 2 * * * · next
-/// fire 2026-10-21T02:00:00Z`. Times are unix seconds, as `GET /schedule` gives them.
+/// fire 2026-10-21T02:00:00Z`. Times are RFC 3339 UTC, as `GET /schedule` gives them.
 fn schedule_line(
     id: &str,
     paused: bool,
-    paused_until: Option<i64>,
+    paused_until: Option<&str>,
     cron: Option<&str>,
-    next_fire: Option<i64>,
+    next_fire: Option<&str>,
 ) -> String {
     let mut parts = vec![match (paused, paused_until) {
-        (true, Some(until)) => format!("paused until {}", barca_service::outcome::rfc3339(until)),
+        (true, Some(until)) => format!("paused until {}", until),
         (true, None) => "paused until resumed".to_string(),
         _ => "not paused".to_string(),
     }];
@@ -882,7 +880,7 @@ fn schedule_line(
         parts.push(format!("cron {cron}"));
     }
     if let Some(at) = next_fire {
-        parts.push(format!("next fire {}", barca_service::outcome::rfc3339(at)));
+        parts.push(format!("next fire {}", at));
     }
     format!("{id}: {}\n", parts.join(" · "))
 }
@@ -1120,9 +1118,8 @@ fn print_pauses(body: &Value, pauses: &Pauses, json: bool) {
             out.push_str(&format!(
                 "{:<40} {:<22} {}\n",
                 s.id,
-                barca_service::outcome::rfc3339(s.paused_at),
-                s.until
-                    .map_or("resumed".to_string(), barca_service::outcome::rfc3339)
+                s.paused_at,
+                s.until.as_deref().unwrap_or("resumed")
             ));
         }
     }

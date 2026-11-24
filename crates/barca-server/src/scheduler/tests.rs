@@ -423,7 +423,6 @@ fn get_schedule_reports_next_fire_in_the_servers_zone() {
             an_instant(),
             &Default::default()
         ));
-        let want = DateTime::parse_from_rfc3339(want).unwrap().timestamp();
         assert_eq!(body[0]["next_fire"], want, "{zone}: {body}");
         assert_eq!(body[0]["id"], "f.py:daily");
     }
@@ -485,7 +484,7 @@ fn a_run_of_the_node_is_in_flight_only_while_pending_or_running() {
     for (status, in_flight) in [
         (RunStatus::Pending, true),
         (RunStatus::Running, true),
-        (RunStatus::Complete, false),
+        (RunStatus::Success, false),
         (RunStatus::Failed, false),
         (RunStatus::Cancelled, false),
     ] {
@@ -640,7 +639,7 @@ async fn a_skip_is_published_to_get_schedule() {
         an_instant(),
         &Default::default()
     ));
-    assert_eq!(body[0]["last_skipped"], 1_234);
+    assert_eq!(body[0]["last_skipped"], "1970-01-01T00:20:34Z");
     assert_eq!(body[0]["skipped_for"], "api");
     assert_eq!(body[0]["skip_reason"], "in_flight");
     assert_eq!(body[0]["paused"], false);
@@ -725,7 +724,7 @@ fn a_tick_run_counts_once_it_finished_and_not_when_cancelled() {
     assert_eq!(tick_outcome(&st.runs.registry.get("p").unwrap(), &j), None);
     finished(&st, "c", RunStatus::Cancelled, &[]);
     assert_eq!(tick_outcome(&st.runs.registry.get("c").unwrap(), &j), None);
-    finished(&st, "ok", RunStatus::Complete, &[]);
+    finished(&st, "ok", RunStatus::Success, &[]);
     assert_eq!(
         tick_outcome(&st.runs.registry.get("ok").unwrap(), &j),
         Some(vec![])
@@ -780,7 +779,7 @@ async fn consecutive_failed_ticks_add_up_and_a_success_clears_them() {
         book.failures["f.py:s"].failed_nodes,
         vec!["f.py:report".to_string()]
     );
-    finished(&st, "c", RunStatus::Complete, &[]);
+    finished(&st, "c", RunStatus::Success, &[]);
     book.last_handle.insert("f.py:s".into(), "c".into());
     assert!(count_outcomes(&st, &jobs, &mut book, None).await);
     assert_eq!(book.failures(&jobs[0]), 0);
@@ -836,7 +835,7 @@ fn plan_tick_skips_for_a_run_started_over_http() {
     assert_eq!(skipped_ids(&plan), vec!["f.py:daily"]);
 
     // Once it finishes, the next due tick fires.
-    st.runs.registry.get_mut("api").unwrap().status = RunStatus::Complete;
+    st.runs.registry.get_mut("api").unwrap().status = RunStatus::Success;
     let plan = plan_tick(
         &at(5, 0),
         &jobs,
@@ -1517,7 +1516,7 @@ async fn a_fired_paused_skipped_and_failing_tick_each_leave_one_row() {
     // so reached none of the tick's targets.
     assert!(done.started_at.is_some() && done.queue_wait_seconds.is_some());
     assert!(done.finished_at >= done.started_at);
-    assert_eq!(done.run_status.as_deref(), Some("error"));
+    assert_eq!(done.run_status.as_deref(), Some("failed"));
     assert_eq!(
         done.targets,
         Some(vec![(j.id.clone(), db::TickTargetOutcome::NotReached)])
@@ -1655,7 +1654,7 @@ async fn a_restart_while_a_ticks_run_is_queued_or_running_leaves_a_consistent_ro
     let st = state_at(&path);
     crate::runs::resume_at_startup(&st).await.unwrap();
     let row = &ticks(&path, &killed).await[0];
-    assert_eq!(row.run_status.as_deref(), Some("error"));
+    assert_eq!(row.run_status.as_deref(), Some("interrupted"));
     assert_eq!(
         (row.started_at, row.queue_wait_seconds),
         (Some(241.0), Some(1.0))
@@ -2313,7 +2312,7 @@ async fn explicit_task_skips_preserve_failure_streak_and_next_tick_runs() {
         assert!(!count_outcomes(&st, &jobs, &mut book, None).await);
         assert_eq!(book.failures(&jobs[0]), 1);
     }
-    finished(&st, "mixed", RunStatus::Complete, &[]);
+    finished(&st, "mixed", RunStatus::Success, &[]);
     st.runs.registry.get_mut("mixed").unwrap().outcome = Some(
         barca_service::outcome::Outcome::from_text(
             r#"{"status":"success","steps":[{"id":"f.py:copy[key=a]","status":"skipped","skip_reason":"locked"},{"id":"f.py:other","status":"ran"}]}"#
@@ -2330,7 +2329,7 @@ async fn explicit_task_skips_preserve_failure_streak_and_next_tick_runs() {
     );
     let plan = plan_tick(&at(5, 0), &jobs, |_| false, |_| None, |j| book.failures(j));
     assert_eq!(fired_ids(&plan), vec!["f.py:copy"]);
-    finished(&st, "next-success", RunStatus::Complete, &[]);
+    finished(&st, "next-success", RunStatus::Success, &[]);
     book.last_handle
         .insert(jobs[0].id.clone(), "next-success".into());
     assert!(count_outcomes(&st, &jobs, &mut book, None).await);

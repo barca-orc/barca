@@ -165,9 +165,9 @@ def test_serve_warns_once_per_node_across_polls(serve, tmp_path):
     for node in ("first", "first", "second", "second"):
         run_id = server.submit(node, command="get")["run_id"]
         server.wait(
-            "sensor poll", lambda: server.run(run_id)["status"] not in ("pending", "running")
+            "sensor poll", lambda: server.run(run_id)["run"]["status"] not in ("pending", "running")
         )
-        assert server.run(run_id)["status"] == "success"
+        assert server.run(run_id)["run"]["status"] == "success"
     assert server.stderr.count("always counts as changed") == 2
     assert server.stderr.count("sensor pipeline.py:first returned") == 1
     assert server.stderr.count("sensor pipeline.py:second returned") == 1

@@ -449,7 +449,7 @@ pub struct StatusCounts {
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub failed: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
-    pub error: usize,
+    pub pending: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub cancelled: usize,
     #[cfg_attr(feature = "ts", ts(type = "number"))]
@@ -504,7 +504,7 @@ pub struct ActivityHour {
     /// Of `runs`, the ones that succeeded.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub ok: usize,
-    /// Of `runs`, the ones that ended otherwise: failed, error, cancelled or interrupted.
+    /// Of `runs`, the ones that ended otherwise: failed, cancelled or interrupted.
     #[cfg_attr(feature = "ts", ts(type = "number"))]
     pub not_successful: usize,
     /// Of `runs`, the ones still running.
@@ -533,6 +533,10 @@ impl ActivityHour {
             "skipped" => {
                 by_status.skipped += runs;
             }
+            "pending" => {
+                by_status.pending += runs;
+                self.in_progress += runs;
+            }
             "running" => {
                 by_status.running += runs;
                 self.in_progress += runs;
@@ -544,7 +548,7 @@ impl ActivityHour {
                     "cancelled" => by_status.cancelled += runs,
                     "interrupted" => by_status.interrupted += runs,
                     // `error`, and a status this barca does not know.
-                    _ => by_status.error += runs,
+                    _ => by_status.failed += runs,
                 }
             }
         }
@@ -1144,7 +1148,7 @@ mod tests {
             StatusCounts {
                 running: 1,
                 interrupted: 1,
-                error: 1,
+                failed: 1,
                 ..Default::default()
             }
         );

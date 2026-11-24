@@ -9,7 +9,6 @@ use serde::Serialize;
 
 /// Lifecycle of an async run tracked by the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     /// Accepted, not yet started.
@@ -17,7 +16,7 @@ pub enum RunStatus {
     /// Executing in a background task.
     Running,
     /// Finished successfully.
-    Complete,
+    Success,
     Skipped,
     /// Finished with an error.
     Failed,
@@ -28,7 +27,6 @@ pub enum RunStatus {
 /// In-memory record of a single run, kept while it runs and for a while after. `handle` is
 /// the database run id, allocated when the run is accepted.
 #[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunState {
     /// The run id (see `/runs/{run_id}`); the older `/status/{run_id}` calls it the handle.
     pub handle: String,
@@ -59,7 +57,7 @@ pub struct RunState {
     #[serde(skip)]
     pub files: Vec<String>,
     pub status: RunStatus,
-    /// Populated when `status == Complete` for a single-target run. Carries the DB run id,
+    /// Populated when `status == Success` for a single-target run. Carries the DB run id,
     /// timing, output.
     pub result: Option<GetResult>,
     /// Populated when the run did not succeed.

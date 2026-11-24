@@ -1,5 +1,7 @@
 """`barca serve` started and stopped the way a supervisor or a container does it (#289)."""
 
+import datetime
+
 import json
 import re
 import signal
@@ -126,7 +128,10 @@ def test_the_server_reports_next_fire_in_its_own_timezone(serve):
     server = serve("--timezone", "Asia/Kolkata")
     jobs = wait_until(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
     assert [j["id"] for j in jobs] == ["pipeline.py:nightly"]
-    assert jobs[0]["next_fire"] % 86400 == 23 * 3600 + 1800
+    assert (
+        int(datetime.datetime.fromisoformat(jobs[0]["next_fire"]).timestamp()) % 86400
+        == 23 * 3600 + 1800
+    )
     status, nodes = server.request("GET", "/state")
     assert status == 200
     next_run = {n["id"]: n["next_run"] for n in nodes}
@@ -184,7 +189,7 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project, se
 
     # A full id picks one of two nodes with the same name, and that run happens.
     result = client.get("other.py:quick").wait(timeout=30)
-    assert result["status"] == "complete", result
+    assert result["run"]["status"] == "success", result
     # It is the only run there has been: the refused requests started none.
     assert [r["status"] for r in history(project)] == ["success"]
 
@@ -224,7 +229,7 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     # that keeps its event stream open the way a browser tab on a run page does.
     done = server.request("POST", "/get/quick")[1]["run_id"]
     wait_until(
-        lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
+        lambda: server.request("GET", f"/status/{done}")[1]["run"]["status"] == "success",
         "the quick run to complete",
     )
     going = start_slow_run(server, project)
@@ -244,8 +249,8 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     for path in ("/run", "/get/slow", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
-        assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
-    assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
+        assert server.request("GET", f"/status/{body['run_id']}")[1]["run"]["status"] == "pending"
+    assert server.request("GET", f"/status/{going}")[1]["run"]["status"] == "running"
     assert server.proc.poll() is None, "the server waits for the run"
 
     (project / "release").write_text("")
@@ -260,7 +265,7 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     assert '"status":"success"' in tails[1], "with its outcome"
 
     # The run finished and was recorded; the queued ones wait for the next server.
-    assert [r["status"] for r in history(project)] == ["success", "success"]
+    assert sorted(r["status"] for r in history(project)) == ["pending"] * 3 + ["success"] * 2
     assert "3 runs wait in the queue for the next start" in log, log
 
 
@@ -283,14 +288,17 @@ def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, se
     assert "the drain timeout (1s) passed: stopping 1 run and putting it back in the queue" in log
     assert f"[barca] run {going} stopped and put back in the queue" in log, log
 
-    # Not recorded as an attempt that ended: the next server starts it again (its first step,
-    # which finished, is a cache hit then).
-    assert history(project) == []
+    # The accepted request remains pending; the next server resumes it and reuses its
+    # completed first step.
+    [pending] = history(project)
+    assert pending["run_id"] == going and pending["status"] == "pending"
+    assert pending["finished_at"] is None
     (project / "release").write_text("")
     restarted = serve("--no-schedule")
     assert "[barca] resuming 1 queued run" in restarted.stderr
     run = wait_until(
-        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
+        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["run"]["status"] == "success"
+        and r,
         "the requeued run to finish",
     )
     assert {s["node_id"].rsplit(":", 1)[1] for s in run["steps"]} >= {"quick", "slow"}, run

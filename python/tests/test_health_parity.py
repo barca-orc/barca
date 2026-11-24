@@ -139,7 +139,10 @@ def test_status_and_state_say_the_same_of_every_node(tmp_path, serve):
     assert 5.5 < typical["median_seconds"] < 9, typical
     assert typical["p95_seconds"] > 11.5, typical
     fresh = datetime.fromisoformat(local["orders"]["expected_fresh_at"]).timestamp()
-    assert fresh - state["inbox"]["next_run"] == 10, (local["orders"], typical)
+    assert fresh - datetime.fromisoformat(state["inbox"]["next_run"]).timestamp() == 10, (
+        local["orders"],
+        typical,
+    )
 
     # The rollup sums the same rows: what each root costs is the same number.
     def roots(doc: dict) -> list[tuple]:
