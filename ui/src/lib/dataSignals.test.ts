@@ -57,9 +57,9 @@ describe('dataSignalSets', () => {
       [
         row('p.py:empty', { signals: [{ kind: 'empty', empty_keys: 1, keys: 1, previous_empty_keys: null }] }),
         row('p.py:fan', { signals: [{ kind: 'behind_input', input: 'p.py:orders', input_success_at: '2026-11-16 09:00:00', last_success_at: '2026-11-14 10:00:00' }] }),
-        row('p.py:job', { ...LATE_SCHEDULE, late_since: Date.parse('2026-11-16T12:05:00Z') / 1000 }),
+        row('p.py:job', { ...LATE_SCHEDULE, late_since: '2026-11-16T12:05:00Z' }),
         // A missed slot the server does not call late (within its grace, or paused) is not behind.
-        row('p.py:soon', { late_since: Date.parse('2026-11-16T12:16:30Z') / 1000 }),
+        row('p.py:soon', { late_since: '2026-11-16T12:16:30Z' }),
       ],
       now,
     )

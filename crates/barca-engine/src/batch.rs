@@ -17,8 +17,8 @@ use barca_model::model::BatchSpec;
 
 pub(crate) use barca_python::batch_spec as spec;
 
-pub use spec::evaluate_labels;
 pub use spec::{BatchOverride, OverrideValue};
+pub use spec::{evaluate_labels, evaluate_labels_until};
 
 // ─── Grouping ────────────────────────────────────────────────────────────────
 

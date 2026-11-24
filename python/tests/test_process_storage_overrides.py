@@ -159,7 +159,7 @@ def test_serve_reuses_explicit_process_overrides_and_backs_up_to_a_store(project
     )
     server = serve("--no-schedule", root=root, env=env, timeout=15)
     client = Client(server.url)
-    assert client.get("total").wait(timeout=15)["status"] == "complete"
+    assert client.get("total").wait(timeout=15)["run"]["status"] == "success"
     if override == "remote":
         assert not list(observer.glob("*.pids")) and not store.exists()
     else:

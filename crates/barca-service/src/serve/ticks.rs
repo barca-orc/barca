@@ -24,6 +24,8 @@ struct Step {
     id: String,
     #[serde(default)]
     status: Option<String>,
+    #[serde(default)]
+    skip_reason: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -50,9 +52,10 @@ pub fn target_outcomes(targets: &[String], outcome_json: &str) -> Vec<(String, T
     use TickTargetOutcome::*;
     let body: Body = serde_json::from_str(outcome_json).unwrap_or_default();
     let rank = |outcome: TickTargetOutcome| match outcome {
-        Failed => 3,
-        Rebuilt => 2,
-        UpToDate => 1,
+        Failed => 4,
+        Rebuilt => 3,
+        UpToDate => 2,
+        Skipped => 1,
         NotReached => 0,
     };
     // Keys borrow from `body`.
@@ -73,6 +76,7 @@ pub fn target_outcomes(targets: &[String], outcome_json: &str) -> Vec<(String, T
             Some(StepStatus::Ran | StepStatus::Partial | StepStatus::Success) => Rebuilt,
             Some(StepStatus::Cached) => UpToDate,
             Some(StepStatus::Failed) => Failed,
+            Some(StepStatus::Skipped) if step.skip_reason.is_some() => Skipped,
             Some(StepStatus::Skipped | StepStatus::Blocked) | None => NotReached,
         };
         note(&mut seen, base(&step.id), outcome, rank);

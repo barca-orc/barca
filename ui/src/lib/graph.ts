@@ -35,7 +35,7 @@ interface GraphNodeData {
   stateHint?: string
   /** A partitioned node's keys: drawn as a count and a bar of the failed and waiting ones. */
   keys?: import('./graphState').GraphKeys
-  /** A group's health, most severe first: the card leads with the first, the rest compactly. */
+  /** A group's health, most severe first: the card names every count and cause. */
   parts?: readonly import('./graphState').GroupPart[]
   [key: string]: unknown
 }
@@ -90,8 +90,8 @@ export function shortName(id: string): string {
  */
 const RESTING_TONE: Tone = 'neutral'
 
-const GROUP_WIDTH = 248
-const GROUP_HEIGHT = 112
+const GROUP_WIDTH = 320
+const GROUP_HEIGHT = 224
 
 const PORT_WIDTH = 176
 const PORT_HEIGHT = 28

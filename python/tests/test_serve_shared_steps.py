@@ -98,8 +98,8 @@ def release(project: Path, *names: str) -> None:
 def steps(server: Serve, run_id: str) -> dict[str, dict]:
     """The step reports of a finished run, by node id."""
     run = server.finished(run_id)
-    assert run["status"] == "success", run
-    outcome = run.get("outcome") or run.get("result") or run
+    assert run["run"]["status"] == "success", run
+    outcome = run["run"]["outcome"]
     return {s["id"]: s for s in outcome["steps"]}
 
 
@@ -129,7 +129,7 @@ def test_two_runs_of_a_task_run_it_twice(project, server):
     wait_until(lambda: calls(project).count("explicit") == 2, "both runs to start the task")
     release(project, "explicit")
     for run in (first, second):
-        assert server.finished(run)["status"] == "success"
+        assert server.finished(run)["run"]["status"] == "success"
 
 
 def test_runs_share_only_the_partition_keys_they_have_in_common(project, server):
@@ -142,7 +142,7 @@ def test_runs_share_only_the_partition_keys_they_have_in_common(project, server)
         "the second run to start keys 2 and 3",
     )
     release(project, "part-1", "part-2", "part-3")
-    assert server.finished(first)["status"] == "success"
+    assert server.finished(first)["run"]["status"] == "success"
     reported = steps(server, second)["pipeline.py:part"]
     assert reported["partitions"]["cached"] == 1, reported
     assert reported["partitions"]["will_run"] == 2, reported
@@ -157,7 +157,7 @@ def test_a_run_waiting_on_a_step_that_fails_executes_it_itself(project, server):
     settle()
     release(project, "shared")
 
-    assert server.finished(first)["status"] == "failed"
+    assert server.finished(first)["run"]["status"] == "failed"
     assert steps(server, second)["pipeline.py:shared"]["status"] == "ran"
     assert calls(project) == ["shared", "shared"], "the failed attempt and the waiter's own"
 
@@ -169,7 +169,7 @@ def test_a_run_waiting_on_a_cancelled_run_executes_the_step_itself(project, serv
     settle()
     status, body = server.request("DELETE", f"/runs/{first}")
     assert status in (200, 202), body
-    assert server.finished(first)["status"] == "cancelled"
+    assert server.finished(first)["run"]["status"] == "cancelled"
     wait_until(lambda: calls(project) == ["shared", "shared"], "the waiter to start shared itself")
     release(project, "shared")
     assert steps(server, second)["pipeline.py:shared"]["status"] == "ran"

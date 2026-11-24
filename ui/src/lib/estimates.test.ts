@@ -46,7 +46,7 @@ describe('when a node is fresh', () => {
 
   it('says why a node has no estimate instead of a blank, in the words the server gives each reason', () => {
     const why = (no_estimate: NonNullable<Parameters<typeof nodeEstimate>[0]['no_estimate']>, cause: NonNullable<Parameters<typeof nodeEstimate>[0]['cause']>) => nodeEstimate(node({ cause, no_estimate }), 'utc', NOW).text
-    expect(why('no_path', 'no_refresh_path')).toBe('no estimate: no refresh path')
+    expect(why('no_path', 'no_refresh_path')).toBe('no estimate')
     expect(why('paused', 'no_refresh_path')).toBe('no estimate: paused')
     expect(why('scheduler_off', 'no_refresh_path')).toBe('no estimate: no scheduler is firing its schedule')
     expect(why('failing', 'failing')).toBe('no estimate: until the failure is fixed')
@@ -60,9 +60,9 @@ describe('when a node is fresh', () => {
     expect(failing.title).toContain('rechecked 15:00')
   })
 
-  it('says when a fresh node is next rechecked, and nothing when no tick reaches it', () => {
+  it('says when a fresh node is next rechecked, and says fresh when no tick reaches it', () => {
     expect(nodeEstimate(node({ recheck_at: '2026-11-17T15:00:00Z' }), 'utc', NOW)).toMatchObject({ kind: 'ok', text: 'rechecked 15:00' })
-    expect(nodeEstimate(node(), 'utc', NOW)).toMatchObject({ kind: 'ok', text: '' })
+    expect(nodeEstimate(node(), 'utc', NOW)).toMatchObject({ kind: 'ok', text: 'fresh' })
   })
 })
 
@@ -81,13 +81,13 @@ describe('the estimates of the generated project', () => {
 
   it('says why not, for each reason the server gives', () => {
     expect(['invoices', 'invoice_totals', 'ledger', 'sales_by_day', 'sales_report', 'check__invoices'].map((name) => words(name).text)).toEqual(Array(6).fill('no estimate: until the failure is fixed'))
-    expect(words('forecast').text).toBe('no estimate: no refresh path')
+    expect(words('forecast').text).toBe('no estimate')
     expect(words('nightly_export').text).toBe('no estimate: no scheduler is firing its schedule')
   })
 
   it('says when a fresh node is next looked at, and nothing where no tick reaches it', () => {
     expect(['orders_feed', 'orders', 'publish_dashboard'].map((name) => words(name))).toEqual(Array(3).fill(expect.objectContaining({ kind: 'ok', text: 'rechecked 15:00' })))
-    expect(['customers', 'fx_rates'].map((name) => words(name))).toEqual(Array(2).fill(expect.objectContaining({ kind: 'ok', text: '' })))
+    expect(['customers', 'fx_rates'].map((name) => words(name))).toEqual(Array(2).fill(expect.objectContaining({ kind: 'ok', text: 'fresh' })))
   })
 
   it('reads a scope off its entry', () => {

@@ -231,16 +231,15 @@ pub(super) async fn expand_and_decide<'p>(
     // Multi-target run after a failure: drop the steps that depend on a failed
     // step before they are decided; the rest of the phase still runs.
     let unblocked_phase;
-    let phase = if !session.state.failed_bases.is_empty() {
+    let unavailable = unavailable_bases(session);
+    let phase = if !unavailable.is_empty() {
         let mut p = phase.clone();
         let narrowed = narrow_blocked_keys(session, &mut p);
         recover::drop_blocked(
             &mut p,
             |base| {
                 (!narrowed.contains(base))
-                    .then(|| {
-                        blocking_failure(&session.prepared.dag, base, &session.state.failed_bases)
-                    })
+                    .then(|| blocking_failure(&session.prepared.dag, base, &unavailable))
                     .flatten()
             },
             |st, up| {
@@ -527,6 +526,24 @@ pub(super) fn fail_step(
         .record_failure(base, error_type, message, 1, None, None);
 }
 
+/// Explicit task skips, like failures, cannot provide an input in a later phase.
+/// Other planner skips (for example a pause) retain their existing cache semantics.
+fn unavailable_bases(session: &RunSession<'_, '_>) -> std::collections::HashSet<String> {
+    session
+        .state
+        .failed_bases
+        .iter()
+        .cloned()
+        .chain(session.state.results.task_skips.iter().map(|skip| {
+            skip.node_id
+                .split('[')
+                .next()
+                .unwrap_or(&skip.node_id)
+                .to_string()
+        }))
+        .collect()
+}
+
 /// What this run knows about its failures so far, for `blocked`.
 pub(super) fn failures<'s>(session: &'s RunSession<'_, '_>) -> blocked::Failures<'s> {
     blocked::Failures {
@@ -560,10 +577,11 @@ pub(super) fn narrow_blocked_keys(
         .filter(|id| in_phase.contains(id))
         .map(str::to_string)
         .collect();
+    let unavailable = unavailable_bases(session);
     let mut narrowed = std::collections::HashSet::new();
     let mut dropped = std::collections::HashSet::new();
     for base in order {
-        if blocking_failure(&prepared.dag, &base, &session.state.failed_bases).is_none() {
+        if blocking_failure(&prepared.dag, &base, &unavailable).is_none() {
             continue;
         }
         match blocked::how(&failures(session), &base, &dropped) {
@@ -603,15 +621,14 @@ pub(super) async fn recover_phase_inputs<'p>(
 ) -> Result<Option<(Phase, HashMap<String, dispatch::ProvidedInput>)>, BarcaError> {
     // A phase that waited for a recompute may since have lost an upstream to a failure
     // (several targets keep going around one): its blocked steps do not run.
-    if !session.state.failed_bases.is_empty() {
+    let unavailable = unavailable_bases(session);
+    if !unavailable.is_empty() {
         let narrowed = narrow_blocked_keys(session, &mut filtered_phase);
         recover::drop_blocked(
             &mut filtered_phase,
             |base| {
                 (!narrowed.contains(base))
-                    .then(|| {
-                        blocking_failure(&session.prepared.dag, base, &session.state.failed_bases)
-                    })
+                    .then(|| blocking_failure(&session.prepared.dag, base, &unavailable))
                     .flatten()
             },
             |st, _| {

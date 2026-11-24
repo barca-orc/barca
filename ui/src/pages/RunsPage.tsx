@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { match } from 'ts-pattern'
+import { useAssets } from '@/hooks/useAssets'
 import { useHealth } from '@/hooks/useHealth'
 import { useProject } from '@/hooks/useProject'
 import { usePageTopbarRun } from '@/hooks/useTopbarRun'
@@ -32,6 +33,7 @@ export function RunsPage() {
   const [params, setParams] = useSearchParams()
   const selected = params.get('run')
   const health = useHealth()
+  const assets = useAssets()
   const project = useProject().data
   const root = project?.root
   const client = useQueryClient()
@@ -83,19 +85,20 @@ export function RunsPage() {
   const listed = runs.data?.runs
   const startedAt = useMemo(() => {
     const at = new Map<string, string>()
-    for (const run of listed ?? []) for (const id of [run.id, run.run_id, run.handle]) if (id) at.set(id, run.started_at)
+    for (const run of listed ?? []) at.set(run.run_id, run.started_at)
     return (runId: string) => at.get(runId) ?? null
   }, [listed])
 
   const { scopeRun } = usePageTopbarRun((handle) => dispatch({ type: 'run_selected', id: handle }))
 
-  const durableId = detail.data?.run_id
+  const durableId = detail.data?.run.run_id
   useEffect(() => {
     if (selected && durableId && durableId !== selected) dispatch({ type: 'run_resolved', id: durableId })
   }, [durableId, selected, dispatch])
 
   return (
     <RunsView
+      emptyProject={assets.data?.length === 0}
       model={model}
       runs={remote(runs)}
       selected={selected ? { id: selected, run: remote(detail), eventGap: params.get('event_gap') === '1' } : null}

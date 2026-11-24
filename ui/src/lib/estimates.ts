@@ -30,13 +30,13 @@ export function nodeEstimate(node: Timed, zone: TimeZone, nowMs: number): Estima
   }
   const recheck = node.recheck_at === null ? null : `rechecked ${formatSlot(node.recheck_at, zone, nowMs)}`
   if (node.cause === null) {
-    return { kind: 'ok', text: recheck ?? '', title: recheck ? 'It is fresh; the next tick of its refresh path looks at it then' : '' }
+    return { kind: 'ok', text: recheck ?? 'fresh', title: recheck ? 'It is fresh; the next tick of its refresh path looks at it then' : '' }
   }
   const why = node.no_estimate === null ? null : `no estimate: ${noEstimateWord(node.no_estimate)}`
   if (recheck !== null && settledByATick(node.no_estimate)) {
     return { kind: 'rechecked', text: recheck, title: `A tick looks at it then; it may be found up to date, rebuilt or left as it is${why ? ` (${why})` : ''}` }
   }
-  return { kind: 'none', text: why ?? 'no estimate', title: recheck ? `Nothing known will leave it fresh; ${recheck} by the next tick of its refresh path` : 'Nothing known will leave it fresh' }
+  return { kind: 'none', text: node.no_estimate === 'no_path' ? 'no estimate' : why ?? 'no estimate', title: node.no_estimate === 'no_path' ? 'No refresh path is configured' : recheck ? `Nothing known will leave it fresh; ${recheck} by the next tick of its refresh path` : 'Nothing known will leave it fresh' }
 }
 
 type Scoped = Pick<RollupEntry, 'fresh_by' | 'unbounded' | 'not_fresh'>

@@ -53,6 +53,12 @@ pub enum RunEvent {
         #[cfg_attr(feature = "ts", ts(optional))]
         import_seconds: Option<f64>,
     },
+    /// A task explicitly skipped its invocation; distinct from a blocked dependent.
+    StepSkipped {
+        node_id: String,
+        skip_reason: String,
+        elapsed_seconds: f64,
+    },
     /// The run finished. Terminal: nothing follows it. `outcome` is the run's full result
     /// (`barca_service::outcome`), absent only from events recorded by an older server.
     RunFinished {
@@ -184,6 +190,20 @@ impl RunEvent {
                     line,
                     stream,
                     ts,
+                }
+            }
+            "step_skipped" => {
+                #[derive(Deserialize)]
+                struct Skipped {
+                    node_id: String,
+                    skip_reason: String,
+                    elapsed_seconds: f64,
+                }
+                let s: Skipped = serde_json::from_str(data)?;
+                RunEvent::StepSkipped {
+                    node_id: s.node_id,
+                    skip_reason: s.skip_reason,
+                    elapsed_seconds: s.elapsed_seconds,
                 }
             }
             "step_finished" => {

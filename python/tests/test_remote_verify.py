@@ -270,16 +270,17 @@ def test_barca_serve_reports_the_marker_in_the_run_result(tmp_path, serve):
     handle = server.request("POST", "/get/total")[1]["run_id"]
     run = server.wait(
         f"GET /status/{handle}",
-        lambda: (r := server.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+        lambda: (r := server.get(f"/status/{handle}"))["run"]["status"]
+        not in ("pending", "running")
         and r,
     )
     server.stop()
-    assert run["status"] == "complete", run
-    steps = {st["id"]: st for st in run["result"]["steps"]}
+    assert run["run"]["status"] == "success", run
+    steps = {st["id"]: st for st in run["run"]["outcome"]["steps"]}
     assert steps["pipeline.py:total"]["artifact_mismatch"] is True
     assert "--refresh pipeline.py:total" in steps["pipeline.py:total"]["warning"]
     assert "artifact_mismatch" not in steps["pipeline.py:numbers"]
-    assert run["result"]["warnings"] == []
+    assert run["run"]["outcome"]["warnings"] == []
 
 
 # How old a checked file must be before the check for barca serve to remember it
@@ -329,12 +330,13 @@ def test_barca_serve_hashes_an_unchanged_local_copy_once(tmp_path, serve):
         )[1]["run_id"]
         done = server.wait(
             f"run {handle}",
-            lambda: (r := server.get(f"/status/{handle}"))["status"] not in ("pending", "running")
+            lambda: (r := server.get(f"/status/{handle}"))["run"]["status"]
+            not in ("pending", "running")
             and r,
         )
-        assert done["status"] == "complete", done
-        output = Path(done["result"]["final_output"]["path"])
-        assert json.loads(output.read_text()) == {"sum": 6}, done["result"]
+        assert done["run"]["status"] == "success", done
+        output = Path(done["run"]["outcome"]["final_output"]["_barca_artifact"]["path"])
+        assert json.loads(output.read_text()) == {"sum": 6}, done["run"]["outcome"]
         assert copy.read_text() == "[1, 2, 3]"
         (checked,) = _checks(server.stderr[seen:])
         return checked

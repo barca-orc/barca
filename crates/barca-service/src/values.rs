@@ -245,6 +245,34 @@ fn read_final_output(oref: &crate::dispatch::OutputRef) -> serde_json::Value {
     }
 }
 
+/// Cached value reads may deserialize data, but never invoke pickle reconstruction hooks.
+pub async fn read_cached_value(
+    python: &std::path::Path,
+    cfg: &crate::config::ResolvedConfig,
+    output: &OutputRef,
+) -> Result<Value, crate::BarcaError> {
+    if output.format == "json" {
+        return read_json(&output.path).map_err(crate::BarcaError::Other);
+    }
+    let request = serde_json::json!({"op":"cached_value", "artifacts":[{"path":output.path,"format":output.format}]});
+    let values = crate::store_inspect::run_json_helper(helper(python, cfg), python, &request)
+        .await
+        .map_err(crate::BarcaError::Other)?;
+    let value = values
+        .into_iter()
+        .next()
+        .ok_or_else(|| crate::BarcaError::Other("cached value reader returned no answer".into()))?;
+    if value["kind"] == "cached_value_unsupported" {
+        return Err(crate::BarcaError::CachedValueUnsupported(
+            value["error"]
+                .as_str()
+                .unwrap_or("unsupported cached value")
+                .into(),
+        ));
+    }
+    answer(value).map_err(crate::BarcaError::Other)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

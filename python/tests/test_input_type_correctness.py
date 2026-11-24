@@ -1,12 +1,15 @@
 """Input annotations must survive remote-only storage and batching (#1103, #814)."""
 
 import json
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
 from barca import _artifacts, _batch, _storage
 
-from .helpers import barca
+from .helpers import QUICK, barca
 
 
 @pytest.mark.parametrize("remote", ["local", "remote-only", "mixed"])
@@ -179,3 +182,54 @@ def total(k: list[str], rows: {annotation} = None) -> dict:
 def test_remote_dataset_cannot_silently_substitute_polars():
     with pytest.raises(ValueError, match="fetched to local disk"):
         _artifacts.deserialize("memory://missing.parquet", "parquet", frame_type="pyarrow_dataset")
+
+
+def test_remote_duckdb_batch_aligns_schemas_and_can_be_rebound(tmp_path):
+    # A native deadlock holding the GIL cannot handle pytest's signal timeout.
+    # Keep this regression in a child so the parent can enforce its deadline.
+    proc = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            textwrap.dedent("""
+                from pathlib import Path
+                import duckdb
+                import pyarrow as pa
+                import pyarrow.parquet as pq
+                from barca import _batch, _duckdb, _storage
+
+                paths = []
+                for i, data in enumerate([
+                    {"amount": [1, 1], "k": ["stored", "stored"]},
+                    {"extra": ["present"], "k": ["stored"], "amount": [2]},
+                ]):
+                    path = Path(f"h{i}.parquet")
+                    pq.write_table(pa.table(data), path)
+                    uri = f"memory://batch-schemas/h{i}.parquet"
+                    _storage.put_file(path, uri)
+                    path.unlink()
+                    paths.append(uri)
+                bound = []
+                try:
+                    value = _batch.lazy_table(
+                        "rows", "duckdb", ["k"], ["a", "b"], paths, ["k=a", "k=b"]
+                    )
+                    # Workers bind the returned relation again: fixing only the
+                    # first view creation does not fix the real call path.
+                    bound = _duckdb.bind_inputs({"rows": value}, {"rows": "duckdb"})
+                    assert bound == ["rows"]
+                    rows = duckdb.sql(
+                        "SELECT amount, extra, k FROM rows ORDER BY amount"
+                    ).fetchall()
+                    assert rows == [(1, None, "a"), (1, None, "a"), (2, "present", "b")], rows
+                finally:
+                    _duckdb.unbind_inputs(bound)
+                    _batch.unbind()
+            """),
+        ],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        timeout=QUICK,
+    )
+    assert proc.returncode == 0, proc.stderr

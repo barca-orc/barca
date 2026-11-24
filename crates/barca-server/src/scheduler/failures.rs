@@ -58,8 +58,23 @@ pub(super) fn tick_outcome(
     job: &ScheduledJob,
 ) -> Option<Vec<String>> {
     match run.status {
-        RunStatus::Pending | RunStatus::Running | RunStatus::Cancelled => None,
-        RunStatus::Complete => Some(Vec::new()),
+        RunStatus::Pending | RunStatus::Running | RunStatus::Cancelled | RunStatus::Skipped => None,
+        RunStatus::Success => {
+            let skipped = run
+                .outcome
+                .as_ref()
+                .and_then(|o| serde_json::from_str::<serde_json::Value>(o.text()).ok())
+                .and_then(|o| o["steps"].as_array().cloned())
+                .is_some_and(|steps| {
+                    steps.iter().any(|s| {
+                        s["id"]
+                            .as_str()
+                            .is_some_and(|id| id.split('[').next() == Some(job.id.as_str()))
+                            && s["skip_reason"].is_string()
+                    })
+                });
+            if skipped { None } else { Some(Vec::new()) }
+        }
         RunStatus::Failed => {
             let mut nodes = failed_steps(run);
             nodes.dedup();

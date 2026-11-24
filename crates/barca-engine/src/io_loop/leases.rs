@@ -140,11 +140,8 @@ impl WorkerPool {
                 for &item_id in batch.iter().rev() {
                     coord.return_leased(item_id);
                 }
-                if let Some(mut dead) = self.workers.remove(&wid) {
-                    tokio::task::spawn_blocking(move || {
-                        let _ = dead.child.kill();
-                        let _ = dead.child.wait();
-                    });
+                if let Some(dead) = self.workers.remove(&wid) {
+                    self.reap(dead.child, Some(dead.cmd_tx));
                 }
                 continue;
             }

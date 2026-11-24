@@ -31,6 +31,7 @@ pub struct TickRun {
     /// The run's status, in the words of `GET /runs`: `pending` while it waits in the run
     /// queue, then `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
     pub status: String,
+    pub task_skip_reason: Option<String>,
     /// When the run queue accepted it (unix seconds); `None` once its queue row is gone.
     pub queued_at: Option<i64>,
     /// When it started executing; `None` while it waits.
@@ -151,11 +152,19 @@ pub async fn recorded(
         ticks.newest = runs.into_iter().next().map(|r| TickRun {
             run_id: r.run_id,
             scheduled_at: r.scheduled_at,
+            task_skip_reason: None,
             status: r.status,
             queued_at: None,
             started_at: r.started_at,
             finished_at: r.finished_at,
         });
+    }
+    for (schedule, ticks) in &mut out {
+        if let Some(run) = &mut ticks.newest
+            && run.status == "skipped"
+        {
+            run.task_skip_reason = db::task_skip_reason(db_path, &run.run_id, schedule).await?;
+        }
     }
     // The tick record says how long each tick's run waited in the queue and how long it took:
     // it outlives the `runs` rows, which are trimmed.
@@ -202,6 +211,7 @@ pub async fn recorded(
                         QueueState::Running | QueueState::Draining => "running",
                     }
                     .into(),
+                    task_skip_reason: None,
                     queued_at,
                     started_at: None,
                     finished_at: None,
@@ -423,6 +433,7 @@ mod tests {
                 run_id: "r1".into(),
                 scheduled_at: secs(tick),
                 status: status.into(),
+                task_skip_reason: None,
                 queued_at: queued.map(secs),
                 started_at: started.map(secs),
                 finished_at: None,

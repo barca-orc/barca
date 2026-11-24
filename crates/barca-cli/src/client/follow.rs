@@ -31,7 +31,7 @@ pub(super) fn dropped(server: &Server, run_id: &str, why: &str) -> CliError {
 
 /// The outcome in a `GET /runs/{run_id}` body.
 pub(super) fn outcome_of(server: &Server, path: &str, body: &Value) -> Result<Outcome, CliError> {
-    match &body["outcome"] {
+    match &body["run"]["outcome"] {
         Value::Null => {
             Err(server.unexpected(&format!("GET {path}"), "the run ended without an outcome"))
         }
@@ -126,7 +126,9 @@ impl<'a> Follow<'a> {
                 .json_attempt(&format!("/runs/{}", encode(&self.run_id)))
                 .await
             {
-                Ok(body) if matches!(body["status"].as_str(), Some("pending" | "running")) => {
+                Ok(body)
+                    if matches!(body["run"]["status"].as_str(), Some("pending" | "running")) =>
+                {
                     self.lose("the run has no live stream yet".into())?;
                     Ok(true)
                 }
@@ -135,10 +137,10 @@ impl<'a> Follow<'a> {
                     self.lose(why)?;
                     Ok(true)
                 }
-                Err(Attempt::Refused(error)) => Err(error),
+                Err(Attempt::Refused(error)) => Err(*error),
                 Err(_) => unreachable!("JSON requests have no cursor"),
             },
-            Err(Attempt::Refused(e)) => Err(e),
+            Err(Attempt::Refused(e)) => Err(*e),
             Err(Attempt::Expired) => {
                 self.gap()?;
                 Ok(true)
@@ -160,7 +162,7 @@ impl<'a> Follow<'a> {
             .server
             .http
             .request(reqwest::Method::GET, &self.path)
-            .map_err(Attempt::Refused)?
+            .map_err(Attempt::refused)?
             .header(reqwest::header::ACCEPT, "text/event-stream")
             .timeout(STREAM_LIMIT);
         if self.resume
@@ -192,7 +194,7 @@ impl<'a> Follow<'a> {
             return Err(Attempt::Unreachable(format!("HTTP {status}")));
         }
         let body = response.bytes().await.unwrap_or_default();
-        Err(Attempt::Refused(self.server.refusal(
+        Err(Attempt::refused(self.server.refusal(
             status,
             &body,
             &format!("GET {}", self.path),
@@ -205,7 +207,7 @@ impl<'a> Follow<'a> {
             .server
             .http
             .request(reqwest::Method::GET, path)
-            .map_err(Attempt::Refused)?
+            .map_err(Attempt::refused)?
             .send()
             .await
             .map_err(|error| {
@@ -219,14 +221,14 @@ impl<'a> Follow<'a> {
             Attempt::Unreachable(self.server.http.redact(&transport_reason(&error)))
         })?;
         if !status.is_success() {
-            return Err(Attempt::Refused(self.server.refusal(
+            return Err(Attempt::refused(self.server.refusal(
                 status,
                 &body,
                 &format!("GET {path}"),
             )));
         }
         serde_json::from_slice(&body).map_err(|_| {
-            Attempt::Refused(
+            Attempt::refused(
                 self.server
                     .unexpected(&format!("GET {path}"), "invalid JSON"),
             )
@@ -269,11 +271,11 @@ impl<'a> Follow<'a> {
                     // A healthy pending/running answer resets only transport-outage state;
                     // the run itself can remain healthy longer than the reconnect window.
                     self.lost = None;
-                    if !matches!(body["status"].as_str(), Some("pending" | "running")) {
+                    if !matches!(body["run"]["status"].as_str(), Some("pending" | "running")) {
                         return Ok(Followed::Ended(body));
                     }
                 }
-                Err(Attempt::Refused(error)) => return Err(error),
+                Err(Attempt::Refused(error)) => return Err(*error),
                 Err(Attempt::Unreachable(why)) => {
                     if self.window.is_zero() {
                         return Err(dropped(self.server, &self.run_id, &why));
@@ -420,7 +422,7 @@ impl<'a> Follow<'a> {
             tokio::time::sleep(RECONNECT_PAUSE).await;
             let health = match self.json_attempt("/health").await {
                 Ok(health) => health,
-                Err(Attempt::Refused(error)) => return Err(error),
+                Err(Attempt::Refused(error)) => return Err(*error),
                 Err(_) => continue,
             };
             self.resume = resume_capability(&health);
@@ -430,7 +432,7 @@ impl<'a> Follow<'a> {
             let instance = started_at(health);
             match self.request().await {
                 Err(Attempt::Unreachable(_)) => continue,
-                Err(Attempt::Refused(e)) => return Err(e),
+                Err(Attempt::Refused(e)) => return Err(*e),
                 Err(Attempt::Expired) => {
                     self.gap()?;
                     return Ok(None);
@@ -443,7 +445,8 @@ impl<'a> Follow<'a> {
                         ));
                     }
                     let body = self.recorded().await?;
-                    let ended = !matches!(body["status"].as_str(), Some("pending" | "running"));
+                    let ended =
+                        !matches!(body["run"]["status"].as_str(), Some("pending" | "running"));
                     self.last_cursor = None;
                     self.pending_cursor = None;
                     self.seen = 0;
@@ -465,7 +468,7 @@ impl<'a> Follow<'a> {
                 }
                 Ok(None) => {
                     let body = self.recorded().await?;
-                    if matches!(body["status"].as_str(), Some("pending" | "running")) {
+                    if matches!(body["run"]["status"].as_str(), Some("pending" | "running")) {
                         // Live in the history but not streamed yet: ask again.
                         continue;
                     }
@@ -476,7 +479,7 @@ impl<'a> Follow<'a> {
                     barca_service::errln!(
                         "[barca] the server is back; run {} ended meanwhile ({})",
                         self.run_id,
-                        body["status"].as_str().unwrap_or("unknown")
+                        body["run"]["status"].as_str().unwrap_or("unknown")
                     );
                     return Ok(Some(Followed::Ended(body)));
                 }
@@ -526,7 +529,13 @@ enum Attempt {
     /// No answer, or one from a proxy whose server is away: try again.
     Unreachable(String),
     /// The server's answer: stop.
-    Refused(CliError),
+    Refused(Box<CliError>),
+}
+
+impl Attempt {
+    fn refused(error: CliError) -> Self {
+        Self::Refused(Box::new(error))
+    }
 }
 
 fn resume_capability(health: &Value) -> bool {

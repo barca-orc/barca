@@ -135,7 +135,7 @@ def test_stderr_is_recorded_per_step_with_times_and_still_shown_live(project):
     assert lines_of(rows, "stdout") == ["loading orders"]
     stderr = lines_of(rows, "stderr")
     assert stderr[0] == "INFO pipeline: fetched 3 orders"
-    assert stderr[1].endswith("UserWarning: old API")
+    assert stderr[1].splitlines()[0].endswith("UserWarning: old API")
     assert stderr[-1] == "to stderr"
     # barca's own lines are not the step's.
     assert not any(line.startswith("[barca]") for line in lines_of(rows))
@@ -144,9 +144,8 @@ def test_stderr_is_recorded_per_step_with_times_and_still_shown_live(project):
     assert only == [row for row in rows if row["stream"] == "stderr"]
     text = cli(project, "logs", doc["run_id"], "--stream", "stdout", "--pretty").stdout
     assert text == "loading orders\n"
-    stamped = cli(project, "logs", doc["run_id"], "--timestamps", "--pretty").stdout.splitlines()
-    assert [line.split(" ", 1)[1] for line in stamped] == lines_of(rows)
-    assert all(TS.fullmatch(line.split(" ", 1)[0]) for line in stamped)
+    stamped = cli(project, "logs", doc["run_id"], "--timestamps", "--pretty").stdout
+    assert stamped == "".join(f"{row['ts']} {row['line']}\n" for row in rows)
     cli(project, "logs", doc["run_id"], "--stream", "both", code=2)
 
 
@@ -330,3 +329,46 @@ def test_a_configured_server_points_at_runs_of_this_machine(tmp_path):
         assert "[barca] note" not in cli(laptop, "logs", "--json", BARCA_SERVER=url).stderr
     finally:
         server.stop()
+
+
+def test_multiline_stderr_write_and_traceback_are_single_entries(project):
+    (project / "pipeline.py").write_text("""
+import sys
+from barca import task
+@task
+def report():
+    sys.stderr.write("first\\nsecond\\n")
+    raise ValueError("grouped failure")
+""")
+    failed = cli(project, "run", "report", "pipeline.py", "--json", code=1)
+    run_id = json.loads(failed.stdout)["run_id"]
+    rows = json.loads(cli(project, "logs", run_id, "--stream", "stderr", "--json").stdout)
+    assert len(rows) == 2, rows
+    assert rows[0]["line"] == "first\nsecond"
+    assert rows[1]["line"].startswith("Traceback (most recent call last):\n")
+    assert rows[1]["line"].endswith("ValueError: grouped failure")
+    with Server(project, "--no-schedule") as server:
+        served = server.get(f"/runs/{run_id}/logs")["logs"]
+        assert [row["line"] for row in served] == [row["line"] for row in rows]
+
+
+def test_stderr_entry_boundaries_flush_filter_and_carriage_returns(monkeypatch):
+    import io
+    from barca import _capture, _runtime
+
+    entries = []
+    monkeypatch.setattr(
+        _runtime, "emit_log", lambda node, line, stream: entries.append((node, line, stream))
+    )
+    underlying = io.StringIO()
+    capture = _capture._StderrTee("step", underlying)
+    capture.write("first\nsecond\npartial")
+    capture.write(" end\n\n[barca] hidden\nold\rnew\n")
+    capture.write("tail")
+    capture.flush()
+    assert entries == [
+        ("step", "first\nsecond", "stderr"),
+        ("step", "partial end\n\nnew", "stderr"),
+        ("step", "tail", "stderr"),
+    ]
+    assert underlying.getvalue() == "first\nsecond\npartial end\n\n[barca] hidden\nold\rnew\ntail"

@@ -11,7 +11,7 @@ import { match } from 'ts-pattern'
 import { shortName } from './graph'
 import type { RunsQuery } from './types'
 import { only, type Next } from './program'
-import { isFailure, parseRunStatus, runNodeIdle } from './runs'
+import { isFailure, isSkipped, parseRunStatus, runNodeIdle } from './runs'
 import { formatHour, hourOf, parseTime, zoneName, type TimeZone, formatSeconds } from './time'
 import type { ActivityHour, RunNodeSummary, RunStep } from './types'
 
@@ -183,7 +183,7 @@ export function updateRuns(model: RunsModel, msg: RunsMsg): Next<RunsModel, Runs
 /** Whether the recovery action should offer to re-run failed steps. */
 export function rerunLabel(status: string): string | null {
   const known = parseRunStatus(status)
-  if (known === 'failed' || known === 'error') return 'Re-run failed'
+  if (known === 'failed') return 'Re-run failed'
   if (known === 'cancelled' || known === 'interrupted') return 'Re-run'
   return null
 }
@@ -299,8 +299,10 @@ export function runStepRows(steps: readonly RunStep[], nodes: readonly RunNodeSu
     rows.push({ kind: 'node', group, open: opened })
     if (!opened) continue
     const node = summary.node_id
-    const { failed, ok } = splitRunSteps(group.steps)
+    const skipped = group.steps.filter((s) => isSkipped(s.status))
+    const { failed, ok } = splitRunSteps(group.steps.filter((s) => !isSkipped(s.status)))
     for (const step of failed) rows.push({ kind: 'key', node, step })
+    for (const step of skipped) rows.push({ kind: 'key', node, step })
     if (ok.length > 0) {
       if (failed.length === 0) for (const step of ok) rows.push({ kind: 'key', node, step })
       else {

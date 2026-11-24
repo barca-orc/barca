@@ -46,6 +46,7 @@ impl ResultJournal {
         let id = match message {
             WorkerMessage::StepCompleted { node_id, .. }
             | WorkerMessage::StepError { node_id, .. }
+            | WorkerMessage::StepSkipped { node_id, .. }
             | WorkerMessage::Blocked { node_id, .. } => node_id,
             _ => return Ok(true),
         };

@@ -123,7 +123,7 @@ def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
             # Backpressure: two live producers, not an unbounded queue whose size depends
             # on machine speed (the old loop accumulated >11,000 pending runs).
             done = server.finished(body["run_id"])
-            assert done["status"] == "success", done
+            assert done["run"]["status"] == "success", done
             with sample_lock:
                 completed += 1
                 enough()
@@ -219,3 +219,32 @@ def test_a_broken_event_stream_is_only_expected_during_a_stop(tmp_path, monkeypa
         assert len(harness.problems) == 1
         assert "IncompleteRead" in harness.problems[0]["detail"]
         assert harness.problems[0]["class"] == "unexplained"
+
+
+@pytest.mark.parametrize("reason,errors", [("refreshed_by_this_run", 0), ("cache_hit", 1)])
+def test_local_refresh_check_requires_evidence_for_reused_steps(reason, errors):
+    """The stress check counts post-acceptance reuse, but rejects ordinary old cache hits."""
+    import random
+    import runpy
+    from types import SimpleNamespace
+
+    harness_type = runpy.run_path(str(SCRIPT))["Harness"]
+    harness = object.__new__(harness_type)
+    harness.pause_writers = threading.Event()
+    harness.lock = threading.Lock()
+    harness.local_runs = {}
+    harness.now = lambda: 0
+    problems = []
+    harness.problem = lambda *args: problems.append(args)
+    done = {
+        "run_id": "local-refresh",
+        "status": "success",
+        "steps_executed": 12,
+        "steps": [
+            {"id": node, "status": "cached", "reason": reason}
+            for node in ("pipeline.py:base", "pipeline.py:total", "pipeline.py:last")
+        ],
+    }
+    harness.cli = lambda *args: SimpleNamespace(stdout=json.dumps(done), stderr="")
+    harness.local_gets(random.Random(1))  # selects the whole 15-step pipeline
+    assert len(problems) == errors, problems

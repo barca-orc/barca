@@ -72,7 +72,7 @@ def finished(server: Serve, target: str) -> dict:
     run_id = server.submit(target, "get")["run_id"]
     return server.wait(
         f"run {run_id}",
-        lambda: (run := server.run(run_id))["status"] not in LIVE and run,
+        lambda: (run := server.run(run_id))["run"]["status"] not in LIVE and run,
     )
 
 
@@ -140,7 +140,7 @@ def test_tick_outcomes_with_a_node_literal_need_no_shared_store(tmp_path):
 
 def test_an_aggregate_over_barca_runs_is_answered_by_the_server(project, server, tmp_path):
     assert helpers_of(server) == [], "the helper starts with the first query"
-    assert finished(server, "report")["status"] == "success"
+    assert finished(server, "report")["run"]["status"] == "success"
     status, body = ask(
         server,
         "select status, count(*) as runs, sum(steps_executed) as steps from barca.runs group by all",
@@ -177,7 +177,7 @@ def test_an_aggregate_over_barca_runs_is_answered_by_the_server(project, server,
 
     # A run recorded after the tables were loaded shows in the next query.
     (project / "pipeline.py").write_text(PIPELINE.replace('"n": 2', '"n": 5'))
-    assert finished(server, "report")["status"] == "success"
+    assert finished(server, "report")["run"]["status"] == "success"
     status, body = wait_until(
         lambda: (r := ask(server, "select count(*) as n from barca.runs"))[1]["rows"] == [{"n": 2}]
         and r,
@@ -206,7 +206,7 @@ def test_an_aggregate_over_barca_runs_is_answered_by_the_server(project, server,
 
 
 def test_a_read_only_server_answers_it(project, server):
-    assert finished(server, "report")["status"] == "success"
+    assert finished(server, "report")["run"]["status"] == "success"
     with Serve(project, "--read-only", env=_env()) as reader:
         status, body = ask(reader, "select count(*) as n from barca.runs")
         assert status == 200, body
@@ -252,7 +252,7 @@ def test_a_token_is_required_where_tokens_are(project):
 
 
 def test_only_one_select_over_barcas_tables_is_answered(project, server, tmp_path):
-    assert finished(server, "report")["status"] == "success"
+    assert finished(server, "report")["run"]["status"] == "success"
     secret = tmp_path / "secret.csv"
     secret.write_text("password\nhunter2\n")
     written = tmp_path / "written.csv"
@@ -492,7 +492,7 @@ def test_the_helper_runs_outside_the_project_and_names_no_directory_of_the_serve
 
 
 def test_a_query_is_run_as_sent_and_reaches_no_table_unloaded(project, server):
-    assert finished(server, "report")["status"] == "success"
+    assert finished(server, "report")["run"]["status"] == "success"
     # A trailing comment or `;` on a query whose rows are cut and counted.
     for query in (
         "select * from range(5000) -- c",
@@ -690,7 +690,9 @@ def test_the_schedules_the_ticks_and_the_queue_are_tables_of_a_scheduling_server
 
         # One run slot: a slow run holds it and the next one waits, first in line.
         first = server.submit("slow", "get")["run_id"]
-        server.wait("the slow run to start", lambda: server.run(first)["status"] == "running")
+        server.wait(
+            "the slow run to start", lambda: server.run(first)["run"]["status"] == "running"
+        )
         second = server.submit("quick", "get")["run_id"]
         listed = "select * from barca.queue where triggered_by = 'api'"
         queue = server.wait(
@@ -711,7 +713,9 @@ def test_the_schedules_the_ticks_and_the_queue_are_tables_of_a_scheduling_server
         for row in rows(scheduled):
             assert row["schedule_id"] == "pipeline.py:pulse" and row["scheduled_at"], row
         # The table is the queue now, not the queue when it was first read.
-        server.wait(f"run {second}", lambda: server.run(second)["status"] not in LIVE, timeout=60)
+        server.wait(
+            f"run {second}", lambda: server.run(second)["run"]["status"] not in LIVE, timeout=60
+        )
         assert rows(listed) == []
 
         # A query that also names a result view runs here: the same schedule and ticks, read

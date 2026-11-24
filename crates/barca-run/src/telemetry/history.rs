@@ -5,7 +5,7 @@
 use chrono::NaiveDateTime;
 
 /// SQLite's `datetime('now')` format, which `runs` timestamps use too.
-const STAMP: &str = "%Y-%m-%d %H:%M:%S";
+const STAMP: &str = "%Y-%m-%d %H:%M:%S%.f";
 
 /// What an integration last posted about a job.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -387,3 +387,48 @@ def test_a_source_with_equal_bytes_moves_its_proof_to_the_new_artifact(tmp_path)
     (tmp_path / old).unlink()
     third, _ = get(tmp_path, "-o", "value")
     assert third["final_output"] == first["final_output"]
+
+
+def test_killed_refresh_without_a_new_row_invalidates_warm_proofs(tmp_path):
+    import signal
+    import subprocess
+    from barca.api import _find_binary
+    from .helpers import clean_env, wait_until
+
+    (tmp_path / "pipeline.py").write_text("""
+from pathlib import Path
+import time
+from barca import asset
+@asset
+def source():
+    if Path("hold").exists():
+        Path("started").touch()
+        while Path("hold").exists():
+            time.sleep(0.01)
+    return Path("value").read_text()
+@asset(inputs={"value": source})
+def result(value):
+    return value
+""")
+    (tmp_path / "value").write_text("old")
+    args = ["get", "result", "pipeline.py", "--local", "-o", "value"]
+    assert run(tmp_path, *args)[0]["final_output"] == "old"
+    (tmp_path / "value").write_text("new")
+    (tmp_path / "hold").touch()
+    proc = subprocess.Popen(
+        [_find_binary(), *args, "--refresh", "source"],
+        cwd=tmp_path,
+        env=clean_env(BARCA_POOL_SIZE="2"),
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    try:
+        wait_until((tmp_path / "started").exists, "refresh to start", proc=proc)
+    finally:
+        os.killpg(proc.pid, signal.SIGKILL)
+        proc.wait(timeout=10)
+        (tmp_path / "hold").unlink()
+    recovered, _ = run(tmp_path, *args)
+    assert recovered["final_output"] == "new", recovered
+    assert recovered["steps_executed"] == 2, recovered

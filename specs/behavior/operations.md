@@ -82,7 +82,11 @@ copying an entry module alone is not proof of isolation.
 
 A client timeout/disconnection alone does not cancel execution. Work remains accessible by
 ID until explicitly cancelled. Cancelling a queued invocation removes it immediately; it must
-not start unless explicitly retried. Cancelling shared work detaches that requester; work
+not start unless explicitly retried. This includes the window after drain requeues a run
+and before server exit: DELETE removes its durable queue row and records cancelled before
+returning `status: cancelled`. Cancellation while execution unwinds returns `status: cancelling`.
+Partition-key and batch resolver subprocesses observe cancellation and are reaped, with
+a one-second SIGTERM grace followed by SIGKILL for an unresponsive resolver. Cancelling shared work detaches that requester; work
 continues while another requester or background freshness demand needs it.
 
 Cancellation first requests graceful termination, then force-stops after a configurable
@@ -99,6 +103,13 @@ gracefully then force-stop its process trees. A second shutdown signal skips the
 grace period and forces cleanup. Preserve recovery state/outcomes, flush logs, and release
 locks, connections and listeners. The precise durable transition ordering is implementation
 work; cleanup must not imply that state can be discarded before recovery is possible.
+
+Queue-owned predecessor records are terminated or requeued under the existing killed-drain
+retry rule even when host/PID checks are indeterminate. Requeue preserves linked execution
+records, stop reasons, diagnostics and logs, without changing the accepted request's ID or
+time. Original-ID history and logs discover earlier executions, and local log followers wait
+across requeues instead of reporting a terminal interruption. Each execution's outcome stays
+separate; logical run counts exclude archived executions. Conformance: `test_serve_queue.py`.
 
 Startup reconciles interrupted work before admitting new work, recovering assets while
 leaving tasks interrupted and avoiding duplicate surviving workers. One-off execution exits

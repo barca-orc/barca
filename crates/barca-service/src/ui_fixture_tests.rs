@@ -66,6 +66,7 @@ fn row(state: CacheState, last: &str, keys_failed: bool) -> NodeStatus {
     node.cache.state = state;
     if last != "none" {
         node.last_materialization = Some(LastMaterialization {
+            skip_reason: None,
             content_hash: None,
             status: last.to_string(),
             created_at: "2026-11-16 10:00:00".to_string(),
@@ -1022,15 +1023,15 @@ impl Project {
                 );
                 fields.insert(
                     "next_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.next_fire)),
+                    serde_json::json!(slot.and_then(|s| s.next_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "prev_run".into(),
-                    serde_json::json!(slot.and_then(|s| s.prev_fire)),
+                    serde_json::json!(slot.and_then(|s| s.prev_fire).map(crate::time::rfc3339)),
                 );
                 fields.insert(
                     "late_since".into(),
-                    serde_json::json!(slot.and_then(|s| s.late_since)),
+                    serde_json::json!(slot.and_then(|s| s.late_since).map(crate::time::rfc3339)),
                 );
                 // No run of this server's is in flight: the queued one has not started.
                 fields.insert("running".into(), serde_json::Value::Null);
@@ -1096,12 +1097,14 @@ impl Project {
                     steps_executed: record.steps_executed,
                     steps_cached: record.steps_cached,
                     steps_failed: record.steps_failed,
+                    steps_skipped: None,
                     error: None,
                     first_failure,
                     target: record.target.as_deref(),
                 });
                 let mut row = serde_json::json!({
-                    "id": record.run_id, "handle": null, "run_id": record.run_id,
+                    "control": crate::outcome::RunControl::server(&record.status),
+                    "run_id": record.run_id,
                     "command": record.command, "files": record.files, "target": record.target,
                     "status": record.status, "triggered_by": record.triggered_by,
                     "scheduled_at": record.scheduled_at, "schedule_id": record.schedule_id,
@@ -1111,7 +1114,7 @@ impl Project {
                     "steps_total": record.steps_total, "steps_executed": record.steps_executed,
                     "steps_cached": record.steps_cached,
                     "error": null,
-                    "first_failure": first_failure.map(|(node_id, error)| serde_json::json!({"node_id": node_id, "error": error})),
+                    "failure": first_failure.map(|(node_id, error)| serde_json::json!({"node": node_id, "error": error})),
                     "principal": record.principal, "trigger_reason": record.trigger_reason,
                     "cancellation": record.cancellation,
                     "line": line,
@@ -1167,37 +1170,46 @@ impl Project {
             }
         }
         let mut view = crate::outcome::RunView {
-            run_id: record.run_id.clone(),
-            status: record.status.clone(),
-            command: record.command.clone(),
-            target: record.target.clone(),
-            files: record.files.clone(),
-            triggered_by: record.triggered_by,
-            scheduled_at: record.scheduled_at.clone(),
-            schedule_id: record.schedule_id.clone(),
-            started_at: crate::time::sql_datetime_rfc3339(&record.started_at),
-            finished_at: record
-                .finished_at
-                .as_deref()
-                .map(crate::time::sql_datetime_rfc3339),
-            elapsed_seconds: record.elapsed_seconds,
-            steps_total: record.steps_total,
-            steps_executed: record.steps_executed,
-            steps_cached: record.steps_cached,
-            job: record.job.clone(),
-            attempts: record.attempts,
-            client_run_id: record.client_run_id.clone(),
-            failure: record.failure.clone(),
-            principal: record.principal.clone(),
-            trigger_reason: record.trigger_reason.clone(),
-            retries: record.retries,
-            plan_reasons: record.plan_reasons.clone(),
-            cancellation: record.cancellation.clone(),
-            waiting_for: None,
-            queue: None,
+            run: crate::outcome::RunInfo {
+                scope: None,
+                control: crate::outcome::RunControl::server(&record.status),
+                skip_reason: None,
+                previous_attempts: Vec::new(),
+                parent_run_id: None,
+                run_attempt: None,
+                stop_reason: None,
+                run_id: record.run_id.clone(),
+                status: record.status.clone(),
+                command: record.command.clone(),
+                target: record.target.clone(),
+                files: record.files.clone(),
+                triggered_by: record.triggered_by,
+                scheduled_at: record.scheduled_at.clone(),
+                schedule_id: record.schedule_id.clone(),
+                started_at: crate::time::sql_datetime_rfc3339(&record.started_at),
+                finished_at: record
+                    .finished_at
+                    .as_deref()
+                    .map(crate::time::sql_datetime_rfc3339),
+                elapsed_seconds: record.elapsed_seconds,
+                steps_total: record.steps_total,
+                steps_executed: record.steps_executed,
+                steps_cached: record.steps_cached,
+                job: record.job.clone(),
+                attempts: record.attempts,
+                client_run_id: record.client_run_id.clone(),
+                failure: record.failure.clone(),
+                principal: record.principal.clone(),
+                trigger_reason: record.trigger_reason.clone(),
+                retries: record.retries,
+                plan_reasons: record.plan_reasons.clone(),
+                cancellation: record.cancellation.clone(),
+                waiting_for: None,
+                queue: None,
+                outcome: None,
+                error: steps.iter().find_map(|step| step.error.clone()),
+            },
             explanation: Default::default(),
-            outcome: None,
-            error: steps.iter().find_map(|step| step.error.clone()),
             steps,
             steps_page,
             logs: crate::db::get_logs(db, id).await.unwrap(),
@@ -1205,6 +1217,7 @@ impl Project {
         view.explanation = crate::run_explanation::explain(
             crate::run_explanation::RunFacts {
                 steps_failed: record.steps_failed,
+                steps_skipped: None,
                 ..(&view).into()
             },
             &view.steps_page.nodes,
@@ -1212,9 +1225,12 @@ impl Project {
             at(NOW).timestamp() as f64,
         );
         view.explanation.outputs = crate::run_explanation::run_outputs(
-            &view.status,
+            &view.run.status,
             None,
-            &crate::run_explanation::output_targets(view.target.as_deref(), view.job.as_deref()),
+            &crate::run_explanation::output_targets(
+                view.run.target.as_deref(),
+                view.run.job.as_deref(),
+            ),
             &view.steps,
         );
         serde_json::to_value(view).unwrap()
@@ -1252,6 +1268,11 @@ fn explanations() -> String {
         (
             "running",
             serde_json::json!({"status": "running", "triggered_by": "client", "started_at": started(192), "steps_total": 4, "steps_executed": 1, "steps_cached": 1}),
+            vec![],
+        ),
+        (
+            "mostly cached in flight",
+            serde_json::json!({"status": "running", "triggered_by": "client", "started_at": started(12), "steps_total": 365, "steps_executed": 0, "steps_cached": 364}),
             vec![],
         ),
         (
@@ -1367,6 +1388,7 @@ fn explanations() -> String {
                 steps_executed: run["steps_executed"].as_i64().unwrap(),
                 steps_cached: run["steps_cached"].as_i64().unwrap(),
                 steps_failed: run["steps_failed"].as_i64(),
+                steps_skipped: None,
                 started_at: text("started_at").unwrap(),
                 plan_reasons: plan_reasons.as_ref(),
                 cancellation: cancellation.as_ref(),
@@ -1382,6 +1404,7 @@ fn explanations() -> String {
             steps_executed: run["steps_executed"].as_i64().unwrap(),
             steps_cached: run["steps_cached"].as_i64().unwrap(),
             steps_failed: run["steps_failed"].as_i64(),
+            steps_skipped: None,
             error: text("error"),
             first_failure: run["first_failure"]["node_id"]
                 .as_str()

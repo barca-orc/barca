@@ -29,8 +29,8 @@ mod tests;
 
 pub(crate) use admission::{admit, admit_as, dispatch, ensure_db, resume_at_startup};
 pub(crate) use handlers::{
-    cancel, create, detail, events, get_target, in_flight_now, list, logs, output, run_all,
-    run_target, status,
+    cancel, create, detail, events, get_target, in_flight_now, list, logs, output, replay_run,
+    run_all, run_target, status,
 };
 #[cfg(test)]
 pub(crate) use lifecycle::start;
@@ -85,7 +85,15 @@ async fn check_target_as(
     verb: &str,
     wording: Wording,
 ) -> Result<String, ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = match if !state.config.python.is_absolute() || state.config.python.is_file() {
+        barca_service::load::build_static_dag(&state.config.files).await
+    } else {
+        Err(BarcaError::Other("Python unavailable".into()))
+    } {
+        Ok(dag) => std::sync::Arc::new(dag),
+        // Preserve partial-deployment diagnostics when an unrelated source is broken.
+        Err(_) => state.reads.loaded_dag().await?,
+    };
     let nodes: Vec<(String, barca_service::NodeKind)> =
         barca_service::queries::list_assets_from_dag(&dag)
             .into_iter()
@@ -145,7 +153,15 @@ pub(crate) fn verb_command(verb: &str) -> &'static str {
 
 /// Refuse a run of every asset and sensor when no asset or sensor loaded.
 pub(crate) async fn check_any_asset(state: &AppState) -> Result<(), ApiError> {
-    let dag = state.reads.loaded_dag().await?;
+    let dag = match if !state.config.python.is_absolute() || state.config.python.is_file() {
+        barca_service::load::build_static_dag(&state.config.files).await
+    } else {
+        Err(BarcaError::Other("Python unavailable".into()))
+    } {
+        Ok(dag) => std::sync::Arc::new(dag),
+        // Preserve partial-deployment diagnostics when an unrelated source is broken.
+        Err(_) => state.reads.loaded_dag().await?,
+    };
     if !barca_service::queries::list_assets_from_dag(&dag)
         .iter()
         .any(|n| n.kind != barca_service::NodeKind::Task)

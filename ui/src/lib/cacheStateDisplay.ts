@@ -72,6 +72,7 @@ export function cacheStateDisplay(state: CacheState): CacheStateDisplay {
  */
 const ALWAYS_RUNS: Record<LastAttempt, CacheStateDisplay> = {
   never_run: DISPLAY.never_run,
+  skipped: { word: 'always_runs', label: 'skipped', tone: 'neutral', glyph: 'skipped' },
   success: DISPLAY.always_runs,
   // Never shown as a state: a failed attempt reads `failing` first (`nodeStateDisplay`).
   failed: { word: 'always_runs', label: 'failing', tone: 'failed', glyph: 'failed' },

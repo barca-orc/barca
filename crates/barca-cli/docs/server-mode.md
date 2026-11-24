@@ -65,7 +65,7 @@ What that means for `get` and `run`:
   `--watch`), not an edit it has not loaded. A command that names no file uses all of them; a
   file the server did not deploy is a usage error listing the deployed files. To run an edit
   the server has not loaded, pass `--local`.
-- The run waits for a run slot like any other (`barca queue`), and Ctrl-C cancels it on the
+- Work requiring execution waits for a run slot (`barca queue`), and Ctrl-C cancels it on the
   server. Like every requested run it starts ahead of the scheduled runs that wait; `--queue
   last` puts it behind them instead (`barca docs serve-ops`, "Queue a run last").
 - `-o url` is not available on a server yet; pass `--local` for it.
@@ -186,6 +186,13 @@ The server is an ordinary `barca serve` of the project with the same `[remote]` 
   `doctor` runs its checks here and, with a server (configured, or `--server`), checks the
   server too; `--local` leaves it out (`barca docs doctor`, "Checking a server").
 
+A local refresh first invalidates pre-acceptance results in its planned scope on the server
+(`POST /ledger/refresh`). The client obtains historical partition identities through
+`POST /ledger/lookup` when needed, and waits for the server's acknowledgement before running
+workers. An unavailable, read-only or older server cannot silently fall back to local
+invalidation. A subsequent verified post may replace an invalidated result under the same
+run hash; ordinary conflicting posts retain the existing non-determinism checks.
+
 ## A local run against the server's ledger
 
 Without `--server` or `--local`, `barca get` and `barca run` run on this machine with this
@@ -290,7 +297,12 @@ recorded in the window, which the web UI's Runs page draws as its strip.
 `limit` lists. `--not-triggered-by schedule`
 (`GET /runs?not_triggered_by=schedule`, the page's "Hide schedule runs") leaves a
 schedule's runs out of the list, its `total` and the activity. `barca history RUN_ID` reads
-`GET /runs/{run_id}`: the run, its steps with their attempts, run hashes, artifacts, errors and
+the `{run, steps, steps_page, explanation}` envelope from `GET /runs/{run_id}`.
+Execution fields are under `run` (for example `run.status`, `run.outcome`, and
+`run.control`), and run timestamps are RFC 3339 UTC strings. The deprecated
+`GET /status/{run_id}` alias and Python `Client.status()` / `Run.wait()` return
+the same envelope, including after a server restart; successful runs use `success`.
+The detail includes the run, its steps with their attempts, run hashes, artifacts, errors and
 tracebacks (at most 1000 steps unless `--limit N` or `--all` asks for more; `steps_page` says how
 many there are). For a finished run whose plan the server can still rebuild from the sources,
 `steps_page.nodes` lists every planned node in plan order with a `status`: `ran`, `cached`, or
@@ -403,6 +415,9 @@ The declared differences:
 The parity suite (`python/tests/test_server_mode_parity.py`) runs the contract's case table
 once locally and once through `barca serve` on a copy of the same project and compares the
 normalized output with exactly these differences.
+
+The key explorer also accepts `empty=1` on this HTTP route: only keys whose latest attempt
+succeeded with zero recorded rows match. Unknown row counts are excluded.
 
 `barca status NODE --keys --server` sends its filters, order and page to the server
 (`GET /assets/{name}/partitions/keys?state=failed,blocked&needs_run=1&value=region=apac,emea&range=day=2026-01-01..2026-01-31&error=0&q=text&sort=attempted&limit=200&offset=0`;
@@ -741,7 +756,7 @@ curl -s localhost:8274/nodes | jq '.data_coverage'
 ```
 
 A scheduled node's row also has `prev_run`, the cron's most recent fire time at or before now,
-beside `next_run` (unix seconds, in the server's `--timezone`), `late_since`: the first slot
+beside `next_run` (RFC 3339 UTC, calculated in the server's `--timezone`), `late_since`: the first slot
 after its schedule's newest recorded decision, when that slot has passed, and a
 `schedule` block, the one `barca status --json` prints, whose `late` says whether the schedule
 is late (`barca docs scheduling`, "A schedule that missed its slot"). `late_since` is
@@ -749,5 +764,60 @@ is late (`barca docs scheduling`, "A schedule that missed its slot"). `late_sinc
 UI shows a schedule as `late by 12m` when `schedule.late` is true and compares no times itself.
 A `--read-only` server reads the same runs and run queue from the shared metadata, so its
 answer is the scheduling server's, with slots in its own `--timezone`.
+
+
+### Cached reads and execution capacity
+
+Ordinary server `get` requests whose selected plan is provably cached use the same
+retained-artifact read operation, under request freshness rules. They do not wait for a run
+slot or allocate a pipeline worker. Four artifact reads may proceed at once per server,
+shared with explicit cached-only reads and independent of execution capacity. Store fetches
+count as reads and refresh their retention stamps; active reads pin their selected artifacts
+and retain completed inodes in process-owned staging through concurrent GC.
+
+A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
+resolution follows normal execution admission. Executable pickle reconstruction also follows
+normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
+128 keys with one retained inode at a time. The existing output listing limit affects only
+presentation: a larger unselected cache hit returns its usual partition counts, while an
+explicit selection returns every selected key. Freshness and selection semantics are unchanged. Cached-only reads continue to return latest successful
+results even when stale.
+
+Ordinary reads retain the run ID, event, history and output contracts; a cache hit can already
+be complete when its accepted run handle is returned.
+
+
+### Cancellation ownership
+
+`GET /runs/{run_id}` includes `control`: `cancellable` is true only while the answering
+server owns the pending or running run; `owner` describes who holds it and `reason` explains
+why cancellation is unavailable. This is independent of authentication and read-only mode.
+A CLI run on the same project is visible but must be stopped in its owning process. The server
+never signals a PID read from history. DELETE of an unowned live run returns 409 with that
+owner; an interrupted run points to `barca history --reconcile` instead. The UI displays the
+reason instead of offering Cancel for these runs. The same `control` accompanies run-list rows,
+queue entries, and each node's `running` badge. Cancel is reachable on these surfaces and on the
+notice after starting a run, with the same confirmation dialog. While health or ownership is
+unknown, Cancel stays visible but disabled and explains what is being checked.
+
+## Manual and paused inputs of server runs
+
+`POST /runs` is cache-aware by default. `include_manual: true` brings Manual assets up to
+date and runs Manual upstream tasks; current assets still use the cache. `refresh_all: true`
+is a hard refresh of the cone, including Manual nodes. Paused inputs remain held in both
+cases. A paused input without a readable result fails the run. `allow_paused: true` permits
+paused targets only; it does not resume or recompute their paused inputs. Whole-file/project
+requests skip paused targets unless overridden. Prediction and queue recovery preserve these rules.
+
+
+### Replaying a recorded request
+
+`POST /runs/{run_id}/replay` accepts `{"cache":"original"}` to replay the recorded
+request, `{"cache":"cached"}` to reuse successful work, or `{"cache":"refresh_all"}`
+to recompute the selected cone. All three preserve the original partition selection, batch
+settings, Manual/pause overrides and tick rules. Add `"step":"pipeline.py:node[region=emea]"`
+to narrow to one recorded step. A task follower is retried as a task. The new request uses
+the current caller's identity and a new refresh cutoff. Older runs with no recorded scope
+return 409; start a new request with explicit targets and options instead.
 
 See also: `barca docs scheduling`, `barca docs remote`, `barca docs contract`.

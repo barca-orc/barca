@@ -35,8 +35,17 @@ impl DoctorReport {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProbeReport {
+    #[serde(deserialize_with = "Option::deserialize")]
+    project_version: Option<ProjectVersion>,
     python: PythonInfo,
     stores: Vec<StoreProbe>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectVersion {
+    ok: bool,
+    detail: String,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -312,7 +321,12 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
         }
         stores
     });
-    command.env("BARCA_DOCTOR_REQUEST", json!({"stores":stores}).to_string());
+    let has_pyproject = root.join("pyproject.toml").exists();
+    command.env(
+        "BARCA_DOCTOR_REQUEST",
+        json!({"stores":stores, "project_root":root, "cli_version":env!("CARGO_PKG_VERSION")})
+            .to_string(),
+    );
     match helper_proc::run_to_output(command, None, Some(Duration::from_secs(30))).await {
         Ok(output) if output.status.success() => {
             let parsed = serde_json::from_slice::<ProbeReport>(&output.stdout)
@@ -327,7 +341,9 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                         .iter()
                         .map(|store| store.name.as_str())
                         .collect();
-                    if actual != expected || actual.len() != result.stores.len() {
+                    if result.project_version.is_some() != has_pyproject {
+                        Err("missing or unsolicited project-version check".into())
+                    } else if actual != expected || actual.len() != result.stores.len() {
                         Err("missing, duplicated or unsolicited store checks".into())
                     } else {
                         Ok(result)
@@ -335,6 +351,9 @@ pub async fn doctor(files: &[PathBuf], env: Option<&str>, python: &Path) -> Doct
                 });
             match parsed {
                 Ok(result) => {
+                    if let Some(check) = result.project_version {
+                        report.add("project_version", check.ok, check.detail, Value::Null);
+                    }
                     let compatible = result.python.barca_version == env!("CARGO_PKG_VERSION");
                     let detail = if compatible {
                         result.python.executable.clone()

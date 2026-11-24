@@ -15,7 +15,7 @@ third-party dependencies.
 
     c = Client("http://127.0.0.1:8274")
     run = c.get("daily_report")      # trigger, returns immediately
-    result = run.wait()              # block until complete/failed
+    result = run.wait()              # block until success/failed
     for job in c.schedules():
         print(job["id"], job["cron"], job["next_fire"])
 """
@@ -77,7 +77,7 @@ class _ServerRedirects(urllib.request.HTTPRedirectHandler):
 
 
 # Terminal run states reported by ``GET /status``.
-_TERMINAL = {"complete", "failed", "cancelled"}
+_TERMINAL = {"success", "skipped", "failed", "cancelled", "interrupted"}
 
 
 def _quote(target: str) -> str:
@@ -107,12 +107,12 @@ class Run:
         """Poll until the run reaches a terminal state, returning its status.
 
         Raises :class:`BarcaError` if ``timeout`` seconds elapse first. Does not
-        raise on run failure — inspect ``["status"]``/``["error"]`` in the result.
+        raise on run failure — inspect ``["run"]["status"]``/``["run"]["error"]`` in the result.
         """
         deadline = time.monotonic() + timeout
         while True:
             payload = self.status()
-            if payload.get("status") in _TERMINAL:
+            if payload["run"]["status"] in _TERMINAL:
                 return payload
             if time.monotonic() >= deadline:
                 raise BarcaError(f"run {self.run_id} did not finish within {timeout}s")
@@ -255,7 +255,7 @@ class Client:
         return self._request("GET", "/schedule")
 
     def status(self, run_id: str) -> dict:
-        """Status payload for a run (``GET /status/{run_id}``)."""
+        """Run detail envelope (``GET /status/{run_id}``, an alias of ``GET /runs/{run_id}``)."""
         return self._request("GET", f"/status/{run_id}")
 
     def cancel(self, run_id: str) -> dict:

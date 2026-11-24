@@ -108,12 +108,12 @@ def test_serve_records_preflight_failure_without_running_user_code(project):
 
         def failed():
             status, body = server.request("GET", f"/runs/{accepted['run_id']}")
-            # The store check is barca's environment failing, not a step: an `error` outcome
+            # The store check is barca's environment failing, not a step: a `failed` outcome
             # with an infra envelope.
-            return body if status == 200 and body.get("status") == "error" else None
+            return body if status == 200 and body["run"]["status"] == "failed" else None
 
         body = wait_until(failed, "a failed preflight run")
-        assert body["outcome"]["envelope"]["kind"] == "infra", body
+        assert body["run"]["outcome"]["envelope"]["kind"] == "infra", body
         assert "bad credentials" in json.dumps(body)
         assert not (root / "user.started").exists()
         assert not (root / "user.imported").exists()

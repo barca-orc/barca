@@ -1024,6 +1024,7 @@ mod tests {
 
     fn last(status: &str) -> Option<LastMaterialization> {
         Some(LastMaterialization {
+            skip_reason: None,
             content_hash: None,
             status: status.to_string(),
             created_at: "2026-11-16 10:00:00".to_string(),

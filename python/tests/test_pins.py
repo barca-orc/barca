@@ -124,8 +124,8 @@ def test_a_scheduled_tick_does_not_compute_a_pinned_asset(project):
             and j["last_run"],
         )
         run = served.finished(run_id)
-        assert run["triggered_by"] == "schedule", run
-        step = next(s for s in run["outcome"]["steps"] if s["id"].endswith(":raw"))
+        assert run["run"]["triggered_by"] == "schedule", run
+        step = next(s for s in run["run"]["outcome"]["steps"] if s["id"].endswith(":raw"))
         assert step["status"] == "cached" and step["reason"] == "pinned", run
         time.sleep(1.5)
         status, versions = served.request("GET", "/assets/raw/versions")

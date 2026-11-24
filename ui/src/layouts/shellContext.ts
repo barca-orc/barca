@@ -1,3 +1,4 @@
+import type { RunOptionsControl } from '@/components/PageRunButton'
 import type { RunButton } from '@/lib/runTarget'
 
 /**
@@ -5,6 +6,7 @@ import type { RunButton } from '@/lib/runTarget'
  * palette (⌘K) offers; `null` when the page has nothing to run.
  */
 export interface TopbarRun {
+  options?: RunOptionsControl
   onRun: () => void
   /** The button's words: what it runs and how much. */
   label: string

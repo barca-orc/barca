@@ -16,6 +16,37 @@ pub(crate) async fn perform(
 ) -> Result<(), CliError> {
     match request {
         Request::Get { run, mode } => {
+            if let Some(tier) = mode.cached_only {
+                server.health(run.env.as_deref()).await?;
+                let request = barca_service::cached::Request {
+                    targets: run.targets,
+                    files: server.deployed_files(&run.files).await?,
+                    tier,
+                    partition: run.partition,
+                    values: mode.values,
+                    url_expires: mode.url_expires,
+                };
+                let response = server
+                    .http
+                    .request(reqwest::Method::POST, "/cached")?
+                    .header(reqwest::header::CONTENT_TYPE, "application/json")
+                    .body(serde_json::json!(request).to_string())
+                    .send()
+                    .await
+                    .map_err(|e| server.unreachable(&e))?;
+                let status = response.status();
+                let body = response.bytes().await.map_err(|e| server.unreachable(&e))?;
+                let answer: barca_service::cached::Answer = match serde_json::from_slice(&body) {
+                    Ok(answer)
+                        if status.is_success() || status == reqwest::StatusCode::NOT_FOUND =>
+                    {
+                        answer
+                    }
+                    _ => return Err(server.refusal(status, &body, "POST /cached")),
+                };
+                return crate::print::print_cached(&answer, mode, run.fields.as_deref())
+                    .map_err(|e| CliError::from_barca(e, ctx));
+            }
             let format = match mode.shape {
                 GetShape::Json => ResultFormat::Json,
                 GetShape::Pretty => ResultFormat::Pretty,

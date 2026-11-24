@@ -28,6 +28,8 @@ def history_clock():
 @asset(inputs={"tick": history_clock})
 def history_asset(tick):
     print("history asset started", flush=True)
+    while Path(__file__).with_name(".cancel-hold").exists():
+        time.sleep(0.05)
     time.sleep(2)
     print("history asset finished", flush=True)
     return {"history": "inspectable"}
