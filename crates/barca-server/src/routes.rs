@@ -49,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         // The run contract's reads; the middleware leaves the other methods alone.
         .route("/runs", get(runs::list).post(runs::create))
         .route("/runs/{run_id}", get(runs::detail).delete(runs::cancel))
+        .route("/runs/{run_id}/replay", post(runs::replay_run))
         .route("/runs/{run_id}/logs", get(runs::logs))
         .route("/logs/{run_id}", get(inspect::logs))
         // The run queue: what waits to start, and pausing it.
@@ -61,6 +62,7 @@ pub fn router(state: AppState) -> Router {
         .route_layer(axum::middleware::from_fn(etag));
     Router::new()
         .merge(reads)
+        .route("/cached", post(crate::cached::get))
         .route("/auth/status", get(crate::auth_http::status))
         .route("/auth/bootstrap", post(crate::auth_http::bootstrap))
         .route(
@@ -75,6 +77,7 @@ pub fn router(state: AppState) -> Router {
         .route("/sql/query", post(crate::sql_query::query))
         // The ledger: what a local run on another machine asks and posts (RFC-0007).
         .route("/ledger/lookup", post(ledger::lookup))
+        .route("/ledger/refresh", post(ledger::refresh))
         .route("/ledger/runs", post(ledger::post_run))
         // The rest of the run contract.
         .route("/runs/{run_id}/events", get(runs::events))

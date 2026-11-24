@@ -256,6 +256,7 @@ mod tests {
     fn step_fields_match_a_fully_populated_step() {
         let s = || Some(String::new());
         let step = barca_service::results::StepReport {
+            skip_reason: None,
             id: String::new(),
             kind: String::new(),
             action: s(),

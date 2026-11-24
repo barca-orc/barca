@@ -41,8 +41,9 @@ pub struct SharedBudget {
 pub trait RunHost: Send + Sync + std::fmt::Debug {
     /// Replace this run's snapshot of active worker steps, grouped by base node.
     fn set_executing(&self, _run_id: &str, _nodes: std::collections::HashMap<String, usize>) {}
-    /// Whether the run belongs to a server, which owns the final shutdown backup: the run's
-    /// own end takes a routine backup instead.
+    /// Whether the run belongs to a server, which owns terminal signals and the final
+    /// shutdown backup: workers stay outside the terminal's job to let the server drain,
+    /// and the run's own end takes a routine backup instead.
     fn server_owned(&self) -> bool;
 
     /// The capacity the host's runs share, if any.

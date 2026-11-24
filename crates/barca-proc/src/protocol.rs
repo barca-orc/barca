@@ -14,7 +14,7 @@ use std::io;
 use std::io::{Read, Write};
 
 /// Negotiated worker/transfer wire version, independent of package and DB versions.
-pub const PROTOCOL_VERSION: u32 = 5;
+pub const PROTOCOL_VERSION: u32 = 6;
 
 /// Negotiate before a helper can receive work. The caller bounds this together
 /// with connection startup and owns reaping the child on every error path.
@@ -86,6 +86,12 @@ pub enum WorkerMessage {
         /// worker; a name this barca does not know is read as unknown.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         phase: Option<String>,
+    },
+    /// A task explicitly chose not to do work. No result artifact or retry.
+    StepSkipped {
+        node_id: String,
+        reason: String,
+        elapsed: f64,
     },
     /// A step was blocked because an upstream failed.
     Blocked { node_id: String, reason: String },
@@ -166,6 +172,9 @@ pub struct ArtifactRef {
     /// Explicit sensor freshness signal, independent of the optional value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sensor_changed: Option<bool>,
+    /// Diagnostic hint: an explicit change accompanied by a non-None payload.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sensor_explicit_value: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_observation: Option<serde_json::Value>,
     /// When the step finished (Unix seconds, worker clock) and how long it took, for telemetry.

@@ -16,6 +16,7 @@ pub use host::ServeHost;
 
 /// A run the server accepted and never started, as [`record_unstarted_run`] records it.
 pub struct UnstartedRun<'a> {
+    pub scope: Option<&'a crate::run_scope::RunScope>,
     pub run_id: &'a str,
     pub command: &'a str,
     pub files: &'a [String],
@@ -44,9 +45,67 @@ pub async fn record_unstarted_run(
             job: None,
             trigger: run.trigger,
             traced: false,
+            scope: run.scope,
         },
         status,
         outcome_json,
+    )
+    .await
+}
+
+/// Record a get served entirely from cache, including its ordinary history counters.
+pub async fn record_cached_run(
+    db_path: &str,
+    run: UnstartedRun<'_>,
+    job: &str,
+    steps: usize,
+    elapsed_seconds: f64,
+    outcome_json: &str,
+) -> Result<(), crate::BarcaError> {
+    crate::db::record_cached_run(
+        db_path,
+        crate::db::NewRun {
+            run_id: run.run_id,
+            command: run.command,
+            files: &crate::db::encode_files(run.files),
+            target: run.target,
+            steps_total: Some(steps),
+            job: Some(job),
+            trigger: run.trigger,
+            traced: false,
+            scope: run.scope,
+        },
+        elapsed_seconds,
+        outcome_json,
+    )
+    .await
+}
+
+/// Accept a queue entry and its pending history record in one transaction.
+pub async fn record_queued_run(
+    db_path: &str,
+    run: UnstartedRun<'_>,
+    spec: &str,
+    queued_at: &str,
+    slot: Option<(&str, i64)>,
+) -> Result<i64, crate::BarcaError> {
+    run_queue::push_with_record(
+        db_path,
+        run.run_id,
+        spec,
+        queued_at,
+        slot,
+        Some(crate::db::NewRun {
+            run_id: run.run_id,
+            command: run.command,
+            files: &crate::db::encode_files(run.files),
+            target: run.target,
+            steps_total: None,
+            job: None,
+            trigger: run.trigger,
+            traced: false,
+            scope: run.scope,
+        }),
     )
     .await
 }

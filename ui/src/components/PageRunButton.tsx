@@ -1,10 +1,19 @@
 import { useState } from 'react'
 import { Play } from 'lucide-react'
 import { Button } from './Button'
+import { RunOptions } from './RunOptions'
 import { ConfirmDialog } from './ConfirmDialog'
 
 /** What a page's toolbar runs (`useTopbarRun`'s `scopeRun`). */
+export interface RunOptionsControl {
+  includeManual: boolean
+  onIncludeManual: (value: boolean) => void
+  onRefresh: () => void
+  manualNames: readonly string[]
+}
+
 export interface PageRun {
+  options?: RunOptionsControl
   onRun: () => void
   /** What it runs and how much: the accessible name, and the words when there is room. */
   label: string
@@ -41,6 +50,7 @@ export function PageRunButton({ run }: { run: PageRun | null | undefined }) {
       >
         {run.short}
       </Button>
+      {run.options && <RunOptions {...run.options} disabled={run.disabled || run.loading} />}
       {run.confirm && confirming && (
         <ConfirmDialog
           {...run.confirm}

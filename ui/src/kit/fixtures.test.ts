@@ -39,8 +39,8 @@ describe('kit fixtures', () => {
   it('has a run in each status, with an outcome this UI reads', () => {
     for (const status of variants(runByStatus)) {
       const run = runByStatus[status]
-      expect(parseRunStatus(run.status)).toBe(status)
-      if (run.outcome) expect(parseOutcome(run.outcome)).not.toBeNull()
+      expect(parseRunStatus(run.run.status)).toBe(status)
+      if (run.run.outcome) expect(parseOutcome(run.run.outcome)).not.toBeNull()
     }
   })
 })

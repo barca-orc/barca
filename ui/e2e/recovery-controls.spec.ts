@@ -38,7 +38,7 @@ test('cancel a queued run confirms, reports an error, and allows retry', async (
   await request.post(`${api}/queue/pause`, { data: {} })
   let id = ''
   try {
-    const started = await request.post(`${api}/runs`, { data: { command: 'get', targets: ['numbers'] } })
+    const started = await request.post(`${api}/runs`, { data: { command: 'get', targets: ['numbers'], refresh_all: true } })
     expect(started.ok()).toBeTruthy()
     id = (await started.json()).run_id
     let deletes = 0
@@ -60,7 +60,7 @@ test('cancel a queued run confirms, reports an error, and allows retry', async (
     await page.getByRole('dialog').getByRole('button', { name: 'Cancel run', exact: true }).click()
     await expect(panel).toContainText('cancelled')
     await expect(panel.getByRole('button', { name: 'Cancel run', exact: true })).toHaveCount(0)
-    expect((await (await request.get(`${api}/runs/${id}`)).json()).status).toBe('cancelled')
+    expect((await (await request.get(`${api}/runs/${id}`)).json()).run.status).toBe('cancelled')
   } finally {
     if (id) await request.delete(`${api}/runs/${id}`)
     await request.post(`${api}/queue/resume`, { data: {} })

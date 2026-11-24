@@ -118,8 +118,8 @@ export function scheduleRows(
       // same values as `barca status`): nothing here compares times.
       const stands = st?.schedule
       const standing = stands?.state
-      const nextRunSecs = st?.next_run ?? null
-      const nextRunMs = nextRunSecs !== null ? nextRunSecs * 1000 : null
+      const nextRun = st?.next_run ?? null
+      const nextRunMs = nextRun !== null ? parseTime(nextRun) : null
       const lateSinceMs = stands?.late && stands.late_since ? parseTime(stands.late_since) : null
       const pausedUntilMs = stands?.paused_until ? parseTime(stands.paused_until) : null
       return [

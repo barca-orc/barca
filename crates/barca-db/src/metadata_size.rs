@@ -239,7 +239,7 @@ async fn row_batch(conn: &Connection, step: u8, from: i64) -> Result<u64, BarcaE
 /// One batch of step 4: the oldest runs that may go, logs first.
 async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
     let sql = format!(
-        "SELECT run_id FROM runs WHERE id < (SELECT id FROM runs ORDER BY id DESC LIMIT 1 \
+        "SELECT run_id FROM runs WHERE parent_run_id IS NULL AND id < (SELECT id FROM runs WHERE parent_run_id IS NULL ORDER BY id DESC LIMIT 1 \
          OFFSET {}) AND status != 'running' AND run_id NOT IN (SELECT run_id FROM run_queue) \
          ORDER BY id LIMIT {RUN_BATCH}",
         KEPT_RUNS - 1
@@ -253,12 +253,16 @@ async fn run_batch(conn: &Connection) -> Result<u64, BarcaError> {
     let started = Instant::now();
     let mut deleted = 0;
     for run in &runs {
-        db::runs::delete_logs(conn, run)
-            .await
-            .map_err(failed("delete logs"))?;
-        db::runs::delete_run(conn, run)
-            .await
-            .map_err(failed("delete runs"))?;
+        db::with_tx(conn, "BEGIN IMMEDIATE", "prune run and attempts", async {
+            db::runs::delete_logs(conn, run)
+                .await
+                .map_err(failed("delete logs"))?;
+            db::runs::delete_run(conn, run)
+                .await
+                .map_err(failed("delete runs"))?;
+            Ok(())
+        })
+        .await?;
         deleted += 1;
         // The rest are found again by the next batch, under its own hold of the lock.
         if started.elapsed() >= RUN_BATCH_TIME {
@@ -629,6 +633,55 @@ mod tests {
             "INSERT INTO logs (run_id, node_id, seq, line) VALUES ('r1','n',0,'old')",
         )
         .await;
+    }
+
+    #[tokio::test]
+    async fn archived_executions_follow_their_parents_retention() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("m.db").display().to_string();
+        db::init_db(&path).await.unwrap();
+        exec(&path, "INSERT INTO runs (run_id, command, files, status, parent_run_id, run_attempt) VALUES ('attempt', 'get', '[]', 'interrupted', 'parent', 1)").await;
+        exec(
+            &path,
+            "INSERT INTO logs (run_id, node_id, seq, line) VALUES ('attempt', 'n', 0, 'evidence')",
+        )
+        .await;
+        exec(&path, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1001) INSERT INTO runs (run_id, command, files, status) SELECT 'r' || i, 'get', '[]', 'success' FROM n").await;
+        exec(&path, "INSERT INTO runs (run_id, command, files, status) VALUES ('parent', 'get', '[]', 'success')").await;
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            run_batch(&conn).await.unwrap();
+        }
+        assert_eq!(
+            count(&path, "SELECT COUNT(*) FROM logs WHERE run_id = 'attempt'").await,
+            1
+        );
+        assert_eq!(
+            count(
+                &path,
+                "SELECT COUNT(*) FROM runs WHERE parent_run_id = 'parent'"
+            )
+            .await,
+            1
+        );
+        // The parent falls out of the logical run window; its attempt and logs go with it.
+        exec(&path, "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 1000) INSERT INTO runs (run_id, command, files, status) SELECT 'new' || i, 'get', '[]', 'success' FROM n").await;
+        {
+            let (_db, conn) = db::open_conn(&path).await.unwrap();
+            while run_batch(&conn).await.unwrap() != 0 {}
+        }
+        assert_eq!(
+            count(
+                &path,
+                "SELECT COUNT(*) FROM runs WHERE run_id IN ('parent', 'attempt')"
+            )
+            .await,
+            0
+        );
+        assert_eq!(
+            count(&path, "SELECT COUNT(*) FROM logs WHERE run_id = 'attempt'").await,
+            0
+        );
     }
 
     #[test]

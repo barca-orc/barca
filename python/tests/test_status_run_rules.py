@@ -6,8 +6,8 @@ reads `stale` once its inputs move on, and decides everything below it against t
 run reads. So status, `barca get --dry-run`, a real `get` and a tick's recorded outcome say
 the same thing for every node below a held one, with and without a cutoff asset in between.
 
-A paused node is held by ticks only: a request recomputes it, so status (and the dry run)
-say what a request would do, and the tick's outcome is in `last_check`.
+A paused node is held by ticks and server requests. Local requests recompute paused
+inputs, and status predicts that local behavior; the tick outcome is in `last_check`.
 """
 
 import json
@@ -230,8 +230,8 @@ def test_status_agrees_with_what_each_tick_records(project, serve):
     local = _status(project)
     assert {n: local[n]["cache"]["state"] for n in BELOW} == dict.fromkeys(BELOW, "cached")
 
-    # A paused node is read as it is by ticks only. A request would recompute it, so status
-    # and the dry run say `stale` for what is below it, and the tick's outcome is the check.
+    # Ticks and server requests hold paused inputs. Status predicts a local request,
+    # which can recompute them, while last_check records the tick.
     _ok(barca(project, "pause", "plain", "--server", server.url, "--json"))
     _feed(project, 3)
 
@@ -244,5 +244,9 @@ def test_status_agrees_with_what_each_tick_records(project, serve):
     nodes = wait_until(paused, "a tick to read the paused node as it is")
     cache = nodes["under_plain"]["cache"]
     assert (cache["state"], cache["reason"]) == ("stale", "upstream_stale"), cache
-    dry = _steps(project, "under_plain", "--dry-run")
+    served_dry = _steps(project, "under_plain", "--dry-run")
+    assert [served_dry[n]["action"] for n in ("plain", "under_plain")] == ["cached", "cached"], (
+        served_dry
+    )
+    dry = _steps(project, "under_plain", "--dry-run", "--local")
     assert [dry[n]["action"] for n in ("plain", "under_plain")] == ["run", "run"], dry

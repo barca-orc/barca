@@ -1,0 +1,11 @@
+# barca get per_key pipeline.py --cached-only=local --partition k=a,b --json  (stderr, exit 1)
+code : integer
+error : string
+kind : string
+outcomes : array
+outcomes[] : object
+outcomes[].node : string
+outcomes[].partition : string
+outcomes[].reason : string
+outcomes[].status : string
+remediation : null

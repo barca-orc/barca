@@ -1,14 +1,8 @@
 """Ctrl-C and the workers (#292), end to end through the binary.
 
-A terminal sends Ctrl-C to every process of the job, workers included. What a worker does with
-it depends on where it is (`python/barca/_worker.py`, "What a worker does with Ctrl-C"):
-
-- its interpreter is starting or it is importing barca: it does not get the signal (it is in
-  a process group of its own until it handles the signal itself); connecting: nothing;
-- it is importing a step's module, or is idle between steps: nothing;
-- it is running a step: the step gets `KeyboardInterrupt`, as before. (The coordinator stops
-  the worker right after, so the end-to-end test does not assert that the step's own handling
-  of the interrupt ran to its end.)
+A terminal sends Ctrl-C to the coordinator's job. Workers keep private process groups,
+so the coordinator cancels the run and terminates those groups. A directly delivered
+worker SIGINT still interrupts only the step body (tested separately below).
 
 In every case the command exits 130 promptly with the `cancelled` error, prints no traceback,
 records the run as cancelled and leaves no process behind. Before the fix, an interrupt during
@@ -185,9 +179,9 @@ def test_ctrl_c_while_a_worker_starts(root, point):
     job = Job(root, "held", hold=point)
     job.wait((job.hold_dir / f"{point}.started").exists, f"a worker reached '{point}'")
     worker = int((job.hold_dir / f"{point}.started").read_text())
-    # Until it handles the signal itself the worker is outside the terminal's job; by the
-    # time it connects it has joined.
-    assert (worker in job.group()) == (point == "worker-connect"), job.group()
+    # Workers remain isolated through startup and execution.
+    assert worker not in job.group(), job.group()
+    assert os.getpgid(worker) == worker
     job.ctrl_c()
     cancelled_promptly_and_quietly(job)
     assert not (root / "step.started").exists()
@@ -209,7 +203,8 @@ def test_ctrl_c_while_a_worker_is_idle_between_steps(root):
     job = Job(root, None, pool=2, pool_fixed=True)
     job.wait((root / "step.started").exists, "the held step to start")
     job.wait(lambda: "quick completed" in job.err_path.read_text(), "the quick step to be reported")
-    assert len(job.group()) == 3, job.group()  # barca and two workers
+    assert job.group() == [job.proc.pid], job.group()
+    assert len(job.workers()) == 2
     job.ctrl_c()
     cancelled_promptly_and_quietly(job)
 

@@ -13,6 +13,7 @@ pub use barca_service::served::{QueueEntry, QueueView};
 
 fn entry(state: &AppState, run: &RunState, position: Option<usize>, draining: bool) -> QueueEntry {
     QueueEntry {
+        control: barca_service::outcome::RunControl::server("running"),
         run_id: run.handle.clone(),
         status: if run.status == RunStatus::Running {
             "running"

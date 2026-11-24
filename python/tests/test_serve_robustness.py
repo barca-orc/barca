@@ -1,5 +1,7 @@
 """`barca serve` started and stopped the way a supervisor or a container does it (#289)."""
 
+import datetime
+
 import json
 import re
 import signal
@@ -126,7 +128,10 @@ def test_the_server_reports_next_fire_in_its_own_timezone(serve):
     server = serve("--timezone", "Asia/Kolkata")
     jobs = wait_until(lambda: server.request("GET", "/schedule")[1], "the scheduler to publish")
     assert [j["id"] for j in jobs] == ["pipeline.py:nightly"]
-    assert jobs[0]["next_fire"] % 86400 == 23 * 3600 + 1800
+    assert (
+        int(datetime.datetime.fromisoformat(jobs[0]["next_fire"]).timestamp()) % 86400
+        == 23 * 3600 + 1800
+    )
     status, nodes = server.request("GET", "/state")
     assert status == 200
     next_run = {n["id"]: n["next_run"] for n in nodes}
@@ -184,7 +189,7 @@ def test_a_trigger_for_a_target_that_cannot_run_is_an_error_response(project, se
 
     # A full id picks one of two nodes with the same name, and that run happens.
     result = client.get("other.py:quick").wait(timeout=30)
-    assert result["status"] == "complete", result
+    assert result["run"]["status"] == "success", result
     # It is the only run there has been: the refused requests started none.
     assert [r["status"] for r in history(project)] == ["success"]
 
@@ -209,18 +214,22 @@ def run_logs(cwd: Path, run_id: str) -> str:
     return out.stdout + out.stderr
 
 
-@pytest.mark.parametrize("sig", [signal.SIGTERM, signal.SIGINT])
-def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig):
+@pytest.mark.parametrize(
+    "sig,new_session",
+    [(signal.SIGTERM, False), (signal.SIGINT, False), (signal.SIGINT, True)],
+    ids=["sigterm", "sigint", "terminal-sigint"],
+)
+def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig, new_session):
     """#190: the first signal pauses the queue and waits for the runs in flight. SIGTERM used
     to be discarded when barca was process 1 of a container (#289), and an open /events
     stream kept a stopped server alive for ever."""
-    server = serve("--no-schedule")
+    server = serve("--no-schedule", new_session=new_session)
 
     # A run that has finished and one that is in the middle of a step, each with a client
     # that keeps its event stream open the way a browser tab on a run page does.
     done = server.request("POST", "/get/quick")[1]["run_id"]
     wait_until(
-        lambda: server.request("GET", f"/status/{done}")[1]["status"] == "complete",
+        lambda: server.request("GET", f"/status/{done}")[1]["run"]["status"] == "success",
         "the quick run to complete",
     )
     going = start_slow_run(server, project)
@@ -235,13 +244,13 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     server.send(sig)
     wait_until(lambda: draining(server), "/health to report draining")
 
-    # New runs are accepted into the queue for the next start, whatever the route, and none
-    # starts; reads and the run in flight go on.
-    for path in ("/run", "/get/quick", "/run/nightly"):
+    # Work needing execution is queued for the next start, whatever the route. The slow
+    # asset is still a cache miss; valid cached reads may finish while draining.
+    for path in ("/run", "/get/slow", "/run/nightly"):
         status, body = server.request("POST", path)
         assert status == 200, (path, body)
-        assert server.request("GET", f"/status/{body['run_id']}")[1]["status"] == "pending"
-    assert server.request("GET", f"/status/{going}")[1]["status"] == "running"
+        assert server.request("GET", f"/status/{body['run_id']}")[1]["run"]["status"] == "pending"
+    assert server.request("GET", f"/status/{going}")[1]["run"]["status"] == "running"
     assert server.proc.poll() is None, "the server waits for the run"
 
     (project / "release").write_text("")
@@ -256,44 +265,50 @@ def test_a_stop_signal_drains_the_runs_in_flight_and_exits_0(project, serve, sig
     assert '"status":"success"' in tails[1], "with its outcome"
 
     # The run finished and was recorded; the queued ones wait for the next server.
-    assert [r["status"] for r in history(project)] == ["success", "success"]
+    assert sorted(r["status"] for r in history(project)) == ["pending"] * 3 + ["success"] * 2
     assert "3 runs wait in the queue for the next start" in log, log
 
 
-@pytest.mark.parametrize("setting", ["flag", "barca.toml"])
+@pytest.mark.parametrize("setting", ["flag", "barca.toml", "terminal-sigint"])
 def test_the_drain_timeout_requeues_the_runs_left_and_exits_0(project, serve, setting):
-    if setting == "flag":
-        server = serve("--no-schedule", "--drain-timeout", "1")
+    if setting != "barca.toml":
+        server = serve(
+            "--no-schedule", "--drain-timeout", "1", new_session=setting == "terminal-sigint"
+        )
     else:
         (project / "barca.toml").write_text("[server]\ndrain_timeout = 1\n")
         server = serve("--no-schedule")
     going = start_slow_run(server, project)
 
     started = time.monotonic()
-    server.send(signal.SIGTERM)
+    server.send(signal.SIGINT if setting == "terminal-sigint" else signal.SIGTERM)
     assert server.exited() == 0, server.stderr
     assert time.monotonic() - started < 15
     log = server.stderr
     assert "the drain timeout (1s) passed: stopping 1 run and putting it back in the queue" in log
     assert f"[barca] run {going} stopped and put back in the queue" in log, log
 
-    # Not recorded as an attempt that ended: the next server starts it again (its first step,
-    # which finished, is a cache hit then).
-    assert history(project) == []
+    # The accepted request remains pending; the next server resumes it and reuses its
+    # completed first step.
+    [pending] = history(project)
+    assert pending["run_id"] == going and pending["status"] == "pending"
+    assert pending["finished_at"] is None
     (project / "release").write_text("")
     restarted = serve("--no-schedule")
     assert "[barca] resuming 1 queued run" in restarted.stderr
     run = wait_until(
-        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
+        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["run"]["status"] == "success"
+        and r,
         "the requeued run to finish",
     )
     assert {s["node_id"].rsplit(":", 1)[1] for s in run["steps"]} >= {"quick", "slow"}, run
 
 
-def test_a_second_signal_stops_the_drain_at_once(project, serve):
-    server = serve("--no-schedule")  # the default drain timeout: 30 s
+@pytest.mark.parametrize("new_session", [False, True], ids=["pid", "terminal"])
+def test_a_second_signal_stops_the_drain_at_once(project, serve, new_session):
+    server = serve("--no-schedule", new_session=new_session)  # the default drain timeout: 30 s
     start_slow_run(server, project)
-    server.send(signal.SIGTERM)
+    server.send(signal.SIGINT if new_session else signal.SIGTERM)
     wait_until(lambda: draining(server), "/health to report draining")
 
     started = time.monotonic()

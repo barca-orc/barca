@@ -3,7 +3,7 @@
 /**
  * A node's steps in one run: its keys, however many `steps` lists.
  */
-export type RunNodeSummary = { node_id: string, keys: number, failed: number,
+export type RunNodeSummary = { node_id: string, keys: number, failed: number, skipped?: number,
 /**
  * Summed over its keys, which may have overlapped.
  */

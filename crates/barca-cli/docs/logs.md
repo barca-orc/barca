@@ -1,6 +1,6 @@
 # Recorded step output
 
-`barca logs RUN_ID` reads what a run's steps wrote, line by line: their stdout, and their
+`barca logs RUN_ID` reads what a run's steps wrote: their stdout, and their
 Python stderr (`logging`, `warnings`, `print(..., file=sys.stderr)` and the traceback of each
 failed attempt). It loads no pipeline code and contacts no store. Find the exact id in get/run
 JSON or history. Without a run id, `barca logs` reads the most recent run: the newest row of
@@ -25,9 +25,13 @@ barca logs 7f30b3e9 --env dev --json
 ```
 
 Replace the example id with an actual run id. `--pretty` prints just the recorded lines,
-with a newline after each; `--timestamps` puts each line's time before it. Blank lines and
-flushed trailing partial lines are preserved. `--json` returns one object per line, in
-recorded arrival order; simultaneous workers can interleave lines:
+with a newline after each; `--timestamps` puts each entry's time before it. Blank lines and
+flushed trailing partial lines are preserved. `--json` returns one object per entry in recorded arrival order. A multiline stderr write
+and each failed attempt's traceback are single entries whose `line` contains newlines.
+Complete lines in a single stderr write stay together; a trailing partial line waits for
+a later newline or flush. Separate writes are separate entries. Stdout stays line-oriented.
+Simultaneous workers can interleave entries. For a readable pager, use
+`barca logs --pretty | less` (piped output otherwise defaults to JSON):
 
 ```json
 [{"node_id":"pipeline.py:report","stream":"stdout","ts":"2026-10-22T10:04:31.207Z","line":"loading 3 files"},
@@ -49,6 +53,20 @@ exact id. Unknown runs, unknown/unrecorded steps and ambiguous names exit 2, and
 `barca logs` without a run id when no run is recorded yet. A recorded execution that printed
 nothing returns `[]` (JSON) or empty stdout (text). `--env` reads that environment's history.
 
+## Server restarts and execution attempts
+
+A requeued request keeps its original run ID. `barca logs RUN_ID` includes the stopped
+executions in order, with `attempt N stopped: server restart (requeued)` boundaries before
+the next execution. `barca history RUN_ID` lists their IDs and stop reasons; use one of
+those IDs with `barca logs` to read just that execution. The UI's original run panel links
+each previous execution's logs and steps. These execution attempts are separate from a
+step's `retries=` attempts.
+
+A local `barca logs RUN_ID -f --local` stays attached while the request is queued again,
+prints `requeued; waiting for the server` on stderr, and continues with the next execution.
+It exits on the request's final result, not the stopped execution's result. Filters still
+apply to each line; attempt boundary notes are on stderr with no step ID.
+
 ## What is recorded
 
 - **stdout**: everything a step prints, attributed to the step, including what its module
@@ -59,7 +77,7 @@ nothing returns `[]` (JSON) or empty stdout (text). `--env` reads that environme
   that is running when it logs. A progress bar that redraws its line with `\r` is recorded as
   the line it ended up showing.
 - **The traceback of a failed attempt**: `Traceback (most recent call last):`, the frames of
-  your code (barca's own are left out) and `ErrorType: message`, as `stderr` lines of the step,
+  your code (barca's own are left out) and `ErrorType: message`, as one multiline `stderr` entry of the step,
   once per attempt.
 
 Not recorded: writes straight to file descriptors 1 and 2 (native code, C extensions,
@@ -159,15 +177,15 @@ the metadata database in one transaction and the file is deleted. A run whose pr
 leaves the file, and `barca logs` reads its lines from it.
 
 Recorded lines are kept with the run's history: `barca gc` evicts results, not history or
-logs. A run records complete user lines until their text reaches or exceeds 16 MiB. The
-whole crossing line is retained and followed by one `stderr` line,
+logs. A run records complete user entries until their text reaches or exceeds 16 MiB. The
+whole crossing entry is retained and followed by one `stderr` line,
 
 ```text
 [barca] log cap reached: this run recorded 16 MiB of output; later lines were shown live but not recorded
 ```
 
 Later user lines are not recorded, but framework notes may still be appended. This is a soft
-threshold: a single line can exceed 16 MiB, and the marker names the threshold rather than
+threshold: a single entry can exceed 16 MiB, and the marker names the threshold rather than
 the exact final byte count. Every line is still shown live, as before.
 
 Recording costs time in proportion to the lines: about 3 µs a line while the step runs and 6 µs

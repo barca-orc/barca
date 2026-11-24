@@ -45,8 +45,11 @@ pub(crate) fn cache_policy(
 ) -> barca_service::cache::CachePolicy {
     use barca_service::cache::CachePolicy;
     match (refresh_all, refresh) {
-        (true, _) => CachePolicy::RefreshAll,
+        (true, _) => CachePolicy::RefreshAll {
+            since: barca_service::time::now_secs_f64(),
+        },
         (false, Some(names)) => CachePolicy::RefreshSelective {
+            since: barca_service::time::now_secs_f64(),
             names,
             cascade: !no_cascade,
         },
@@ -372,6 +375,7 @@ pub(crate) fn get_run_mode(
 /// What `barca get` prints: its shape on stdout and whether it returns paths or values.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct GetMode {
+    pub cached_only: Option<barca_service::cached::Tier>,
     pub shape: barca_service::report::GetShape,
     pub values: bool,
     /// `-o url`: sign each returned artifact for this many seconds.
@@ -489,6 +493,7 @@ pub(crate) fn get_mode(
         );
     }
     Ok(GetMode {
+        cached_only: None,
         shape,
         values,
         url_expires,

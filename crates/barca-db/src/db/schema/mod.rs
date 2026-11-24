@@ -8,6 +8,7 @@ use super::*;
 /// Tables, columns, indexes and the format version: what [`init_schema`] creates and
 /// the migrations add.
 pub mod ddl;
+pub(super) mod writer;
 
 pub async fn init_db(db_path: &str) -> Result<(), BarcaError> {
     init_db_as(db_path, db_path).await.map(|_| ())
@@ -169,6 +170,11 @@ pub async fn probe_metadata(path: &str) -> Result<Option<i64>, BarcaError> {
 /// migration as a legacy database, in one transaction, and an older release still reads the
 /// result.
 pub async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
+    init_schema_inner(conn).await?;
+    writer::install(conn).await
+}
+
+async fn init_schema_inner(conn: &libsql::Connection) -> Result<(), BarcaError> {
     let version = crate::db::schema::ddl::check(conn).await?;
     if version == crate::db::schema::ddl::VERSION {
         // Read once and judged twice: this runs at the start of every run.
@@ -195,7 +201,7 @@ pub async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
         )
         .await
         .map_err(|e| BarcaError::Db(format!("failed to record schema version: {e}")))?;
-        Ok(())
+        writer::record(conn).await
     })
     .await
 }
@@ -205,10 +211,12 @@ pub async fn init_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
 /// was. The format stays version 1 (see `specs/interfaces/metadata-schema.md`).
 async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaError> {
     with_tx(conn, "BEGIN IMMEDIATE", "schema migration", async {
+        // An additive column may belong to a table the older release did not have yet.
+        // Create missing tables before trying to extend the ones already present.
+        crate::db::schema::ddl::add_tables(conn).await?;
         for (table, definitions) in crate::db::schema::ddl::ADDED_COLUMNS {
             crate::db::schema::ddl::add_columns(conn, table, definitions).await?;
         }
-        crate::db::schema::ddl::add_tables(conn).await?;
         for index in crate::db::schema::ddl::INDEXES {
             conn.execute(index, ())
                 .await
@@ -217,7 +225,7 @@ async fn add_to_current_schema(conn: &libsql::Connection) -> Result<(), BarcaErr
         crate::state_validate::usable_schema(conn)
             .await?
             .map_err(unusable)?;
-        Ok(())
+        writer::record(conn).await
     })
     .await
 }

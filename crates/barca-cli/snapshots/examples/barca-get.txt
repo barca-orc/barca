@@ -7,6 +7,11 @@ Arguments:
           Target(s), then optional files/directories; omit files to discover the project
 
 Options:
+      --cached-only[=<CACHED_ONLY>]
+          Read completed results without execution; local excludes every store call
+
+          [possible values: store, local]
+
   -o, --output <OUTPUT>
           Choose the result output mode (see possible values)
 
@@ -78,6 +83,8 @@ Options:
           Show all command examples without running anything
 
 Examples:
+  barca get total pipeline.py --cached-only          # latest completed result: disk, then store, else CacheMiss
+  barca get total pipeline.py --cached-only=local    # disk only; no store calls or computation
   BARCA_REMOTE=off barca get total pipeline.py   # local artifacts and history for this process
   barca get total                          # find `total` anywhere in the project and get it
   barca get total pipeline.py --json --fields id,status,elapsed_seconds,attempts   # timing and retries

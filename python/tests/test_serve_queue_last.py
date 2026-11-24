@@ -168,8 +168,8 @@ def test_a_run_queued_last_starts_with_the_scheduled_runs_in_the_order_accepted(
     assert [e["position"] for e in waiting] == [1, 2, 3, 4, 5], waiting
     assert [e["queue"] for e in waiting] == [None, None, None, "last", None], waiting
     assert [e["triggered_by"] for e in waiting] == ["api", "api", "schedule", "api", "schedule"]
-    assert server.run(last["run_id"])["queue"] == "last"
-    assert server.run(first["run_id"])["queue"] is None
+    assert server.run(last["run_id"])["run"]["queue"] == "last"
+    assert server.run(first["run_id"])["run"]["queue"] is None
 
     # `barca queue`: the same key in --json, and the row says so in the table.
     listed = barca(project, "queue", "--server", server.url, "--json")
@@ -189,9 +189,9 @@ def test_a_run_queued_last_starts_with_the_scheduled_runs_in_the_order_accepted(
     assert server.request("POST", "/queue/resume")[0] == 200
     wait_until(lambda: len(order(project)) >= before + 5, "the five runs to start")
     assert order(project)[before : before + 5] == ["one", "two", "tick_a", "three", "tick_b"]
-    assert server.finished(last["run_id"])["status"] == "success"
+    assert server.finished(last["run_id"])["run"]["status"] == "success"
     # Not recorded with the run: the key is `null` once it has finished.
-    assert server.run(last["run_id"])["queue"] is None
+    assert server.run(last["run_id"])["run"]["queue"] is None
 
 
 def test_a_run_queued_last_takes_no_extra_slot_and_a_request_runs_past_it(project, serve):
@@ -207,11 +207,11 @@ def test_a_run_queued_last_takes_no_extra_slot_and_a_request_runs_past_it(projec
     assert (waiting["status"], waiting["position"]) == ("pending", 1), waiting
     # A default request starts beside the run queued last, in the extra slot.
     asked = submit(server, "two")
-    assert server.finished(asked["run_id"])["status"] == "success"
+    assert server.finished(asked["run_id"])["run"]["status"] == "success"
     assert order(project) == ["two"]
     assert names(queue(server)["queued"]) == ["one"]
     release(project, "long")
-    assert server.finished(waiting["run_id"])["status"] == "success"
+    assert server.finished(waiting["run_id"])["run"]["status"] == "success"
     assert order(project) == ["two", "long", "one"]
 
 
@@ -251,7 +251,7 @@ def test_a_run_queued_last_starts_under_a_steady_stream_of_scheduled_runs(projec
     last = submit(server, "one", queue="last")
     assert last["position"] == ahead + 1, last
     assert server.request("POST", "/queue/resume")[0] == 200
-    assert server.finished(last["run_id"])["status"] == "success"
+    assert server.finished(last["run_id"])["run"]["status"] == "success"
     ran = order(project)[before:]
     assert ran.index("one") == ahead, (ahead, ran)
     wait_until(lambda: len(order(project)) > before + ahead + 2, "the schedules to carry on")
@@ -281,12 +281,12 @@ def test_the_place_survives_a_restart_while_the_run_waits(project, serve):
     waiting = queue(restarted)["queued"]
     assert names(waiting) == ["two", "one"], waiting
     assert [e["queue"] for e in waiting] == [None, "last"], waiting
-    assert restarted.run(last["run_id"])["queue"] == "last"
+    assert restarted.run(last["run_id"])["run"]["queue"] == "last"
     assert restarted.request("POST", "/queue/resume")[0] == 200
-    assert restarted.finished(last["run_id"])["status"] == "success"
-    assert restarted.finished(asked["run_id"])["status"] == "success"
+    assert restarted.finished(last["run_id"])["run"]["status"] == "success"
+    assert restarted.finished(asked["run_id"])["run"]["status"] == "success"
     assert order(project) == ["long", "two", "one"], "accepted: long, one (last), two"
-    assert restarted.run(long["run_id"])["status"] == "success"
+    assert restarted.run(long["run_id"])["run"]["status"] == "success"
 
 
 def test_a_read_only_server_lists_the_recorded_queue_in_the_same_order(project, serve):
@@ -391,8 +391,8 @@ def test_the_steps_of_a_run_queued_last_wait_for_capacity_as_scheduled_steps_do(
     running = {e["run_id"]: e["queue"] for e in queue(server)["running"]}
     assert (running[last["run_id"]], running[asked["run_id"]]) == ("last", None), running
     release(project, "s1")
-    assert server.finished(asked["run_id"])["status"] == "success"
-    assert server.finished(last["run_id"])["status"] == "success"
+    assert server.finished(asked["run_id"])["run"]["status"] == "success"
+    assert server.finished(last["run_id"])["run"]["status"] == "success"
     assert order(project)[:9] == ["s1", "r1", "r2", "r3", "s2", "s3", "q1", "q2", "q3"]
 
 
@@ -420,8 +420,8 @@ def test_a_step_queued_last_that_has_waited_long_enough_goes_ahead_of_requests(p
         "the aged step to be first in line",
     )
     release(project, "holder")
-    assert server.finished(asked["run_id"])["status"] == "success"
-    assert server.finished(last["run_id"])["status"] == "success"
+    assert server.finished(asked["run_id"])["run"]["status"] == "success"
+    assert server.finished(last["run_id"])["run"]["status"] == "success"
     assert order(project) == ["holder", "q1", "r1", "r2", "r3", "q2", "q3"]
 
 

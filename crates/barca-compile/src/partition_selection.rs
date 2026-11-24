@@ -78,6 +78,12 @@ impl PartitionSelection {
         })
     }
 
+    /// Exact coordinate tuples, when this selection is not a rectangular filter.
+    /// Readers can enumerate a sparse selection without expanding its cross-product.
+    pub fn exact_keys(&self) -> Option<&[BTreeMap<String, String>]> {
+        self.exact_keys.as_deref()
+    }
+
     /// Preserve tuples in queued requests; legacy rectangular selections remain objects.
     pub fn to_json(&self) -> serde_json::Value {
         match &self.exact_keys {
@@ -130,6 +136,39 @@ impl PartitionSelection {
             dimensions,
             exact_keys: Some(keys.into_iter().collect()),
         })
+    }
+
+    /// Narrow a replay to one step's key without dropping filters on dimensions that
+    /// step does not have. Sparse tuples stay correlated instead of becoming a cross-product.
+    pub fn narrowed_to(&self, key: &PartitionKey) -> Result<Self, String> {
+        if !self.matches(key) {
+            return Err("the recorded step is outside the original partition selection".into());
+        }
+        if let Some(keys) = &self.exact_keys {
+            let selected: Vec<_> = keys
+                .iter()
+                .filter(|selected| {
+                    selected
+                        .iter()
+                        .all(|(dim, value)| key.0.get(dim).is_none_or(|v| v == value))
+                })
+                .map(|selected| {
+                    let mut selected = selected.clone();
+                    selected.extend(key.0.clone());
+                    selected
+                })
+                .collect();
+            return Self::parse(
+                &serde_json::to_string(&selected).expect("partition keys are JSON"),
+            );
+        }
+        let mut narrowed = self.clone();
+        for (dim, value) in &key.0 {
+            narrowed
+                .dimensions
+                .insert(dim.clone(), BTreeSet::from([value.clone()]));
+        }
+        Ok(narrowed)
     }
 
     /// Whether `key` is selected: each named dimension that `key` has holds one of its listed
@@ -195,5 +234,31 @@ impl PartitionSelection {
         dims: &HashMap<String, barca_model::model::PartitionSpec>,
     ) -> bool {
         self.dimensions.keys().any(|d| dims.contains_key(d))
+    }
+}
+
+#[cfg(test)]
+mod replay_tests {
+    use super::*;
+
+    #[test]
+    fn retry_retains_other_dimensions_and_sparse_correlations() {
+        let (_, key) = PartitionKey::parse_from_id("p.py:regional[region=emea]");
+        let rectangular =
+            PartitionSelection::parse(r#"{"region":["emea","amer"],"day":["1","2"]}"#).unwrap();
+        assert_eq!(
+            rectangular.narrowed_to(&key).unwrap().to_json(),
+            serde_json::json!({"region":["emea"],"day":["1","2"]})
+        );
+        let sparse = PartitionSelection::parse(
+            r#"[{"region":"emea","day":"1"},{"region":"amer","day":"2"}]"#,
+        )
+        .unwrap();
+        assert_eq!(
+            sparse.narrowed_to(&key).unwrap().to_json(),
+            serde_json::json!([{"region":"emea","day":"1"}])
+        );
+        let (_, outside) = PartitionKey::parse_from_id("p.py:regional[region=apac]");
+        assert!(sparse.narrowed_to(&outside).is_err());
     }
 }

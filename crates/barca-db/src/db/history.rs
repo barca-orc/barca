@@ -20,6 +20,8 @@ pub struct MaterializationRecord {
     /// `success` or `failed`.
     pub status: String,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub skip_reason: Option<String>,
     pub created_at: String,
     /// Rows of a successful tabular result, when its worker counted them (#925).
     #[serde(default)]
@@ -1070,16 +1072,23 @@ async fn reported_rows(
     ids: impl IntoIterator<Item = i64>,
 ) -> Result<HashMap<i64, ReportedRow>, BarcaError> {
     let failure = |e| BarcaError::Db(format!("failed to query materializations: {e}"));
+    let skip_reason = if schema::has_column(conn, "materializations", "skip_reason").await? {
+        "m.skip_reason"
+    } else {
+        "NULL"
+    };
     let ids: Vec<i64> = ids.into_iter().collect();
     let mut out = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(1000) {
         let list = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string());
         let mut rows = conn
             .query(
-                "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
+                &format!(
+                    "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
                  m.artifact_size_bytes, m.elapsed_seconds, m.status, m.error_message, \
-                 m.created_at, m.output_hash, m.rows \
-                 FROM json_each(?1) j JOIN materializations m ON m.id = j.value",
+                 m.created_at, m.output_hash, m.rows, {skip_reason} \
+                 FROM json_each(?1) j JOIN materializations m ON m.id = j.value"
+                ),
                 [list],
             )
             .await
@@ -1100,6 +1109,7 @@ async fn reported_rows(
                         elapsed_seconds: row.get::<f64>(6).ok(),
                         status: opt(7).unwrap_or_else(|| "success".to_string()),
                         error_message: opt(8),
+                        skip_reason: opt(12),
                         created_at: row.get::<String>(9).unwrap_or_default(),
                         rows: row.get::<i64>(11).ok(),
                     },

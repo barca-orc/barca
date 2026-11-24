@@ -79,7 +79,7 @@ def test_runs_serve_started_are_in_the_clis_history_and_logs(tmp_path):
         run_id = started["run_id"]
         serve.wait(
             "the run to finish",
-            lambda: serve.get(f"/runs/{run_id}")["status"] not in served.LIVE,
+            lambda: serve.get(f"/runs/{run_id}")["run"]["status"] not in served.LIVE,
         )
     # The id the server answered with is the one the CLI reads, by default_env, --env and
     # BARCA_ENV alike: serve and the CLI share .barca/envs/staging/metadata.db.

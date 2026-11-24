@@ -159,6 +159,9 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     .await;
     assert_eq!(status, StatusCode::ACCEPTED, "{body}");
     let run_id = body["run_id"].as_str().unwrap().to_string();
+    let (_, detail) = send(&app, "GET", &format!("/runs/{run_id}"), None).await;
+    assert_eq!(detail["run"]["control"]["cancellable"], true, "{detail}");
+    assert_eq!(detail["run"]["control"]["owner"], "this server", "{detail}");
 
     // `first` finishes at once; `slow` then runs for seconds, and `after` waits for it.
     let running = wait_for(&app, "slow", "ran", |r| r["step"] == "running").await;
@@ -167,6 +170,7 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     assert_eq!(after["run_id"], run_id.as_str(), "{after}");
     assert_eq!(running["run_id"], run_id.as_str(), "{running}");
     assert_eq!(running["triggered_by"], "api", "{running}");
+    assert_eq!(running["control"]["cancellable"], true, "{running}");
     assert!(running["partitions"].is_null(), "{running}");
     assert!(
         running["started_at"].as_str().unwrap().ends_with('Z'),
@@ -183,7 +187,7 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     // The in-flight list has the run with the node it is working on.
     let runs = in_flight(&app).await;
     assert_eq!(runs.len(), 1, "{runs:?}");
-    assert_eq!(runs[0]["id"], run_id.as_str());
+    assert_eq!(runs[0]["run_id"], run_id.as_str());
     assert_eq!(runs[0]["status"], "running");
     let steps = runs[0]["active_steps"].as_array().unwrap();
     assert!(
@@ -209,7 +213,7 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
             break;
         }
         assert_eq!(runs.len(), 1, "{runs:?}");
-        assert_eq!(runs[0]["id"], run_id.as_str(), "{runs:?}");
+        assert_eq!(runs[0]["run_id"], run_id.as_str(), "{runs:?}");
         assert!(
             finishing.elapsed() < Duration::from_secs(60),
             "run never cleared: {runs:?}"
@@ -218,8 +222,11 @@ async fn a_post_runs_run_shows_as_running_with_its_steps_and_clears_when_it_ends
     }
     let (status, finished) = send(&app, "GET", &format!("/runs/{run_id}"), None).await;
     assert_eq!(status, StatusCode::OK, "{finished}");
-    assert_eq!(finished["status"], "success", "{finished}");
-    assert_eq!(finished["outcome"]["status"], "success", "{finished}");
+    assert_eq!(finished["run"]["status"], "success", "{finished}");
+    assert_eq!(
+        finished["run"]["outcome"]["status"], "success",
+        "{finished}"
+    );
     assert!(running_of(&app, "slow").await.is_null());
     let (_, detail) = send(&app, "GET", "/assets/slow", None).await;
     assert!(detail["running"].is_null(), "{detail}");
@@ -243,7 +250,7 @@ async fn a_cached_upstream_step_is_not_executing_and_its_dependant_is() {
     let t0 = Instant::now();
     loop {
         let (_, run) = send(&app, "GET", &format!("/runs/{first}"), None).await;
-        if run["status"] == "success" {
+        if run["run"]["status"] == "success" {
             break;
         }
         assert!(t0.elapsed() < Duration::from_secs(60), "{run}");
@@ -310,7 +317,10 @@ async fn a_scheduler_run_shows_as_running_and_clears_when_it_ends() {
     assert_eq!(running["triggered_by"], "schedule", "{running}");
     let run_id = running["run_id"].as_str().unwrap().to_string();
     let runs = in_flight(&app).await;
-    assert!(runs.iter().any(|r| r["id"] == run_id.as_str()), "{runs:?}");
+    assert!(
+        runs.iter().any(|r| r["run_id"] == run_id.as_str()),
+        "{runs:?}"
+    );
 
     // Stop the scheduler, so no next tick starts another run, then end this one.
     scheduler.abort();
@@ -421,33 +431,33 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
         .find(|r| is_ticking(&r["schedule_id"]))
         .cloned()
         .unwrap_or_else(|| panic!("no scheduled run listed: {runs}"));
-    let rfc = |secs: &Value| Value::from(barca_service::outcome::rfc3339(secs.as_i64().unwrap()));
+    let epoch = |value: &Value| {
+        value
+            .as_str()
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+            .map(|t| t.timestamp())
+    };
 
     // The last tick and its run: the queued run, by the same id and status everywhere.
-    assert_eq!(entry["last_run_id"], run["id"], "{entry} {run}");
+    assert_eq!(entry["last_run_id"], run["run_id"], "{entry} {run}");
     assert_eq!(entry["last_run"], entry["last_run_id"], "{entry}");
-    assert_eq!(block["last_run_id"], run["id"], "{block}");
+    assert_eq!(block["last_run_id"], run["run_id"], "{block}");
     assert_eq!(run["status"], "pending", "{run}");
     assert_eq!(entry["last_status"], "pending", "{entry}");
     assert_eq!(block["last_status"], "pending", "{block}");
-    assert_eq!(
-        rfc(&entry["last_fired"]),
-        run["scheduled_at"],
-        "{entry} {run}"
-    );
+    assert_eq!(entry["last_fired"], run["scheduled_at"], "{entry} {run}");
     assert_eq!(block["last_fired"], run["scheduled_at"], "{block}");
     // A slot skipped while this run waited was decided. The first undecided slot
     // follows the newest decision on every surface.
     assert_eq!(
-        entry["late_since"].as_i64(),
-        entry["last_fired"]
-            .as_i64()
-            .max(entry["last_skipped"].as_i64())
+        epoch(&entry["late_since"]),
+        epoch(&entry["last_fired"])
+            .max(epoch(&entry["last_skipped"]))
             .map(|t| t + 1),
         "{entry}"
     );
     assert_eq!(row["late_since"], entry["late_since"], "{row}");
-    assert_eq!(block["late_since"], rfc(&entry["late_since"]), "{block}");
+    assert_eq!(block["late_since"], entry["late_since"], "{block}");
     for (surface, late) in [
         ("/schedule", &entry["late"]),
         ("/state", &row["schedule"]["late"]),
@@ -470,9 +480,9 @@ async fn a_queued_tick_reads_the_same_on_every_surface() {
         stable_fields(block.clone())
     );
     assert_eq!(block["live"], true, "{block}");
-    assert_eq!(rfc(&row["next_run"]), row["schedule"]["next_fire"], "{row}");
+    assert_eq!(row["next_run"], row["schedule"]["next_fire"], "{row}");
 
-    for id in [run["id"].as_str().unwrap(), blocker.as_str()] {
+    for id in [run["run_id"].as_str().unwrap(), blocker.as_str()] {
         let (status, body) = send(&app, "DELETE", &format!("/runs/{id}"), None).await;
         assert_eq!(status, StatusCode::OK, "{body}");
     }

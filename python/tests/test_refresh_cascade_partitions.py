@@ -122,7 +122,7 @@ def test_server_refresh_cascades_to_consumer_keys(project, tmp_path_factory, evi
         stage = serve.post(
             "/runs", {"command": "get", "targets": ["drivers", "cutoffs"], "refresh_all": True}
         )
-        assert serve.finished(stage["run_id"])["status"] == "success"
+        assert serve.finished(stage["run_id"])["run"]["status"] == "success"
         calls(project)
         if evict:
             for artifacts in (project / ".barca").rglob("artifacts"):
@@ -131,7 +131,7 @@ def test_server_refresh_cascades_to_consumer_keys(project, tmp_path_factory, evi
         (project / "data.txt").write_text("v3")
         request = {"command": "get", "targets": ["app"], "refresh": ["drivers", "cutoffs"]}
         answer = serve.post("/runs", request)
-        assert serve.finished(answer["run_id"])["status"] == "success"
+        assert serve.finished(answer["run_id"])["run"]["status"] == "success"
         ran = calls(project)
         assert [line for line in ran if line.startswith("monetized")] == [
             f"monetized {k}" for k in KEYS

@@ -42,6 +42,10 @@ const HELP_WIDTH: usize = 100;
 /// `docs <TOPIC>`); `barca` is the top level.
 pub const EXPERIMENTAL: &[(&str, &str)] = &[
     (
+        "get --cached-only",
+        "new in 0.47: completed-result reads and per-key outcome shapes may evolve",
+    ),
+    (
         "tokens",
         "new in 0.36 (RFC-0016): local bootstrap for opt-in project token access",
     ),
@@ -631,6 +635,7 @@ fn exit_codes_block() -> String {
         String::from("| Code | `kind` | Stability |\n|---|---|---|\n| 0 | (success) | stable |\n");
     for kind in [
         ErrorKind::StepFailed,
+        ErrorKind::CacheMiss,
         ErrorKind::Usage,
         ErrorKind::Infra,
         ErrorKind::Cancelled,

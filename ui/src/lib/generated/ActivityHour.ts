@@ -26,7 +26,7 @@ runs: number,
  */
 ok: number,
 /**
- * Of `runs`, the ones that ended otherwise: failed, error, cancelled or interrupted.
+ * Of `runs`, the ones that ended otherwise: failed, cancelled or interrupted.
  */
 not_successful: number,
 /**

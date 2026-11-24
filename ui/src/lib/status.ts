@@ -19,7 +19,7 @@ interface StatusMeta extends ToneMeta {
  */
 export function statusMeta(status: StatusKind): StatusMeta {
   const [tone, label, live, glyph] = match<StatusKind, [Tone, string, boolean, Glyph]>(status)
-    .with('queued', () => ['queued', 'queued', false, 'queued'])
+    .with('queued', () => ['queued', 'pending', false, 'queued'])
     .with('running', () => ['running', 'running', true, 'running'])
     .with('success', () => ['success', 'success', false, 'fresh'])
     .with('failed', () => ['failed', 'failed', false, 'failed'])

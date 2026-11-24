@@ -12,10 +12,12 @@ pub fn utc_cell(ts: &str) -> String {
     if ts.is_empty() {
         return String::new();
     }
-    format!(
-        "{} UTC",
-        ts.strip_suffix('Z').unwrap_or(ts).replacen('T', " ", 1)
-    )
+    let canonical = barca_model::time::sql_datetime_rfc3339(ts);
+    let utc = canonical.strip_suffix('Z').unwrap_or(&canonical);
+    // Whole-second database rows gain .000 on the wire. Show the same timestamp locally
+    // and remotely, preserving nonzero millisecond precision.
+    let utc = utc.strip_suffix(".000").unwrap_or(utc);
+    format!("{} UTC", utc.replacen('T', " ", 1))
 }
 
 /// How long ago, in the largest whole unit: `45s ago`, `3m ago`, `2h ago`, `6d ago`. A time

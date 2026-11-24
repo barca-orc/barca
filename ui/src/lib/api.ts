@@ -22,6 +22,7 @@ import type {
   NodeStatus,
   RunHandle,
   RunRequest,
+  ReplayRequest,
   ServerHealth,
   RunList,
   RunView,
@@ -43,6 +44,8 @@ import type {
   TokenList,
 } from './types'
 
+
+export type RunSettings = Pick<RunRequest, 'include_manual' | 'refresh_all'>
 
 class ApiError extends Error {
   status: number
@@ -175,17 +178,18 @@ export const api = {
   /** The runs in flight, each with the nodes it is working on now (`active_steps`). */
   runsInFlight: () => request<RunList>('/runs?status=running'),
   startRun,
+  replayRun: (id: string, body: ReplayRequest) => request<RunHandle>(`/runs/${encodeURIComponent(id)}/replay`, { method: 'POST', body: JSON.stringify(body) }),
   /** `barca get` for every asset and sensor. */
-  getAll: () => startRun({ command: 'get', targets: [] }),
+  getAll: (options: RunSettings = {}) => startRun({ command: 'get', targets: [], ...options }),
   /** `barca get` for every asset and sensor of one deployed file. */
-  getFile: (file: string) => startRun({ command: 'get', targets: [], files: [file] }),
+  getFile: (file: string, options: RunSettings = {}) => startRun({ command: 'get', targets: [], files: [file], ...options }),
   /** `barca get <target>`: a cache-aware materialization of one asset or sensor. `allowPaused`
    * is `--allow-paused`: without it the server refuses a paused target. */
-  getTarget: (target: string, allowPaused = false) =>
-    startRun({ command: 'get', targets: [target], ...(allowPaused ? { allow_paused: true } : {}) }),
-  /** `barca run <task> --refresh-all`: the task re-executes along with its upstream assets. */
-  runTarget: (target: string, allowPaused = false) =>
-    startRun({ command: 'run', targets: [target], refresh_all: true, ...(allowPaused ? { allow_paused: true } : {}) }),
+  getTarget: (target: string, allowPaused = false, options: RunSettings = {}) =>
+    startRun({ command: 'get', targets: [target], ...options, ...(allowPaused ? { allow_paused: true } : {}) }),
+  /** `barca run <task>`: the task runs; upstream assets are brought up to date using the cache. */
+  runTarget: (target: string, allowPaused = false, options: RunSettings = {}) =>
+    startRun({ command: 'run', targets: [target], ...options, ...(allowPaused ? { allow_paused: true } : {}) }),
   cancelRun: (runId: string) =>
     request<RunCancelling>(`/runs/${encodeURIComponent(runId)}`, { method: 'DELETE' }),
   schedule: () => request<ScheduleJob[]>('/schedule'),

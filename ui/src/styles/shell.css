@@ -270,6 +270,11 @@
 @container (max-width: 900px) {
   .barca-chip-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
+/* Explicit refresh controls keep their space while the scope loads. */
+.barca-view-actions > .barca-run-options { flex: none; flex-wrap: nowrap; }
+@container (max-width: 1200px) {
+  .barca-view-bar:has(.barca-run-options) .barca-chip-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 /* The table's text lines up with the title above it (24px); its hover runs 12px further out. */
 .barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 24px; scrollbar-gutter: stable; }
 .barca-view-body > .barca-table-empty, .barca-view-body > .barca-note, .barca-view-body > p { margin-left: 12px; margin-right: 12px; }

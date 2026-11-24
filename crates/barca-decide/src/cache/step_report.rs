@@ -51,6 +51,9 @@ pub fn merge_partition_reports(reports: Vec<StepReport>) -> Vec<StepReport> {
                     // What changed in the first key that ran before, whichever chunk it is in.
                     m.detail = r.detail;
                 }
+                if m.warning.is_none() {
+                    m.warning = r.warning;
+                }
                 if m.changed.is_none() {
                     m.changed = r.changed;
                 }
@@ -159,6 +162,9 @@ pub fn report_for(
             r.artifact = Some(oref.path.clone());
             if let Some(held) = held {
                 r.detail = Some(held.detail().to_string());
+                if *held == super::Held::RefreshedByThisRun {
+                    r.reason = Some("refreshed_by_this_run".to_string());
+                }
                 if *held == super::Held::Pinned {
                     r.reason = Some(super::PINNED_REASON.to_string());
                 }
@@ -173,9 +179,18 @@ pub fn report_for(
             missing,
             refresh,
             cutoff_stopped,
+            refreshed,
+            stale_root,
         } => {
+            if let Some(root) = stale_root {
+                r.warning = Some(stale_warning(base_id, root, dry));
+            }
             if *cutoff_stopped {
                 r.detail = Some("unchanged cutoff bytes: refresh propagation stopped".to_string());
+            }
+            if *refreshed && missing.is_empty() {
+                r.reason = Some("refreshed_by_this_run".to_string());
+                r.detail = Some(super::Held::RefreshedByThisRun.detail().to_string());
             }
             let total = cached.len() + missing.len();
             r.partitions = Some(PartitionSummary {

@@ -52,6 +52,7 @@ pub(crate) async fn run(server: &Server, args: RunArgs, ctx: &Context) -> Result
         files,
         refresh: args.refresh.clone().unwrap_or_default(),
         refresh_all: args.refresh_all,
+        include_manual: false,
         cascade: !args.no_cascade,
         dry_run: args.dry_run,
         agent: args.agent,
@@ -259,7 +260,9 @@ async fn stream(
                 return Outcome::from_text(outcome.get().to_string())
                     .map_err(|e| server.unexpected(&format!("GET {path}"), &e));
             }
-            RunEvent::RunStarted { .. } | RunEvent::StepFinished { .. } => {}
+            RunEvent::RunStarted { .. }
+            | RunEvent::StepFinished { .. }
+            | RunEvent::StepSkipped { .. } => {}
         }
     }
 }

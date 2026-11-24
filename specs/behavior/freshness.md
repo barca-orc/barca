@@ -29,6 +29,13 @@ identity, byte identity and observation order are different concepts.
 | `False` or `(False, value)` | Retain the previous observation and payload, when present | Previous payload; the tuple's new value is ignored |
 | A non-boolean value | Compare its content with the previous observation | The returned value |
 
+A sensor returning `(True, value)` with a non-`None` value prints a warning once per node
+per CLI or server process: it always counts as changed. Return the value alone to compare
+its content, or `(True, None)` to signal a change without data and silence this warning.
+Successive server polls and replacement workers do not repeat it.
+
+Conformance: `test_explicit_changed_value_warning` and `test_serve_warns_once_per_node_across_polls` in `python/tests/test_sensor_observations.py`.
+
 The boolean is orchestration metadata, not downstream data. With no previous observation,
 `False` supplies `None`, while `(False, value)` supplies `value`; there is no previous payload
 to retain. A two-item tuple must start with a boolean; an invalid flag is an error, not

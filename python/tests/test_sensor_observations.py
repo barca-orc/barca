@@ -132,3 +132,42 @@ def report(source):
         )
         assert result.returncode == 0, result.stdout + result.stderr
         assert json.loads(result.stdout)["final_output"] == value
+
+
+@pytest.mark.parametrize(
+    "observation, warned",
+    [
+        ("(True, 'etag')", True),
+        ("(True, None)", False),
+        ("'etag'", False),
+        ("(False, 'etag')", False),
+    ],
+)
+def test_explicit_changed_value_warning(tmp_path, observation, warned):
+    (tmp_path / "pipeline.py").write_text(
+        f"from barca import sensor\n@sensor()\ndef source(): return {observation}\n"
+    )
+    result = barca(tmp_path, "get", "pipeline.py", "--json")
+    assert result.returncode == 0, result.stderr
+    assert ("always counts as changed" in result.stderr) is warned
+    if warned:
+        assert "pipeline.py:source" in result.stderr
+        assert "value alone" in result.stderr
+
+
+def test_serve_warns_once_per_node_across_polls(serve, tmp_path):
+    (tmp_path / "pipeline.py").write_text(
+        "from barca import sensor\n"
+        "@sensor()\ndef first(): return True, 'etag'\n"
+        "@sensor()\ndef second(): return True, 'etag'\n"
+    )
+    server = serve("--no-schedule")
+    for node in ("first", "first", "second", "second"):
+        run_id = server.submit(node, command="get")["run_id"]
+        server.wait(
+            "sensor poll", lambda: server.run(run_id)["run"]["status"] not in ("pending", "running")
+        )
+        assert server.run(run_id)["run"]["status"] == "success"
+    assert server.stderr.count("always counts as changed") == 2
+    assert server.stderr.count("sensor pipeline.py:first returned") == 1
+    assert server.stderr.count("sensor pipeline.py:second returned") == 1

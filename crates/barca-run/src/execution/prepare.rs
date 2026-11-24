@@ -74,7 +74,14 @@ pub(super) async fn prepare_run(
     );
     let dag = match supplied_dag {
         Some(dag) => dag,
-        None => std::sync::Arc::new(build_dag(file_args, python).await?),
+        None => std::sync::Arc::new(
+            build_dag_until(
+                file_args,
+                python,
+                barca_model::process::Until::cancelled(&request.interrupt.cancel),
+            )
+            .await?,
+        ),
     };
     trace("dag_built");
 

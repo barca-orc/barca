@@ -34,7 +34,7 @@ export function affectedSchedules(cover: PauseCover | undefined, jobs: readonly 
       const job = byId.get(id)
       return job ? [{ job, relation }] : []
     })
-    .sort((a, b) => (a.job.next_fire ?? Infinity) - (b.job.next_fire ?? Infinity))
+    .sort((a, b) => (a.job.next_fire === null ? Infinity : Date.parse(a.job.next_fire)) - (b.job.next_fire === null ? Infinity : Date.parse(b.job.next_fire)))
 }
 
 /** The ids of `GET /pauses`, for a lookup. */

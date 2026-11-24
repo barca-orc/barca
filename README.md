@@ -30,6 +30,7 @@ with `inputs={"parameter": upstream_function}`.
 | You want to | Start with |
 |---|---|
 | Get an asset and reuse unchanged results | `barca get summary` |
+| Read the latest completed result without computation | `barca get summary --cached-only` |
 | Run a task and reuse its cached inputs | `barca run publish` |
 | Refresh a partition set and publish the complete result | `barca get final --refresh 'source[account=A],source[account=C]'` |
 | Query cached results from Python | `barca.sql("select * from summary")` |

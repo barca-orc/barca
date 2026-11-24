@@ -101,7 +101,8 @@ def test_a_restart_keeps_a_finished_step_whose_upload_was_in_flight(tmp_path, se
     (root / "release").write_text("")
     restarted = serve("--no-schedule", root=root, env=env(store))
     run = wait_until(
-        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["status"] == "success" and r,
+        lambda: (r := restarted.request("GET", f"/runs/{going}")[1])["run"]["status"] == "success"
+        and r,
         "the requeued run to finish",
     )
     # The requeued run executed only the interrupted step; the finished one is a cache hit,

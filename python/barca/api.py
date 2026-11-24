@@ -43,6 +43,16 @@ class BarcaError(Exception):
         self.traceback: str | None = env.get("traceback")
         self.artifact_dir: str | None = env.get("artifact_dir")
         self.phase: str | None = env.get("phase")
+        self.reason: str | None = env.get("reason")
+
+
+class CacheMiss(BarcaError):
+    """A cached-only lookup missed at least one selected key; no work was started."""
+
+    def __init__(self, message: str, envelope: dict | None = None, stderr: str | None = None):
+        super().__init__(message, envelope, stderr)
+        self.outcomes = (envelope or {}).get("outcomes", [])
+        self.missing = [outcome for outcome in self.outcomes if outcome.get("status") == "miss"]
 
 
 def _error_envelope(stderr: str) -> dict | None:
@@ -73,7 +83,8 @@ def _failure(result: "subprocess.CompletedProcess[str]") -> BarcaError:
         parts.append(envelope["traceback"])
     if envelope.get("remediation"):
         parts.append(envelope["remediation"])
-    return BarcaError("\n".join(parts), envelope=envelope, stderr=stderr)
+    error_type = CacheMiss if envelope.get("kind") == "cache_miss" else BarcaError
+    return error_type("\n".join(parts), envelope=envelope, stderr=stderr)
 
 
 _cached_binary: str | None = None
@@ -259,6 +270,7 @@ def _batch_args(batch) -> list[str]:
 def get(
     target_or_file: str,
     *extra_files: str,
+    cached_only: bool | str = False,
     refresh: list[str] | None = None,
     refresh_all: bool = False,
     cascade: bool = True,
@@ -272,6 +284,16 @@ def get(
     returns the last asset's value. Tasks are never run (use ``run``); a file
     with only tasks returns None.
     Otherwise, treats it as a target asset name and remaining args as files.
+
+    ``cached_only=True`` reads the latest successful result, even stale, from disk then
+    the configured store. ``cached_only="local"`` excludes all store calls. Neither mode
+    executes or imports pipeline code, starts a run, or publishes anything. A missing
+    selected key raises :class:`CacheMiss`, whose ``outcomes`` includes every selected key.
+    Corruption, inaccessible files and store failures raise :class:`BarcaError` instead.
+    Explicit coordinates select dynamic keys without evaluating their expressions.
+    Plain-data pickle values retain their types; executable pickle reconstruction is refused
+    with ``reason="cached_value_unsupported"`` (use artifact path access instead).
+    Remote table values are JSON rows.
 
     Assets come from cache when fresh. ``refresh=["asset", ...]`` re-materializes
     those assets (the target may be one of them) and everything downstream of
@@ -306,18 +328,48 @@ def get(
     Returns the deserialized value of the target asset directly.
     """
     args: list[str] = ["get", target_or_file, *extra_files, "--json"]
+    if cached_only is not False:
+        if cached_only is not True and cached_only != "local":
+            raise ValueError('cached_only must be False, True, or "local"')
+        args += ["--cached-only=local" if cached_only == "local" else "--cached-only"]
+        if server:
+            args += ["-o", "value"]
     args += _refresh_args(refresh, refresh_all, cascade)
     args += _batch_args(batch)
     if partition is not None:
         args += ["--partition", partition if isinstance(partition, str) else json.dumps(partition)]
-        if server:
+        if server and not cached_only:
             # A server returns the selected keys' values read on it (``-o value``), as JSON.
             args += ["-o", "value"]
     args += _server_args(server)
     result = _exec(args)
     output = result.get("final_output")
+    if cached_only and not server:
+        return _read_cached_output(output)
     if output is not None:
         return _read_final_output(output, server, result.get("run_id"))
+    return output
+
+
+def _read_cached_output(output: Any) -> Any:
+    from barca import _cached_value
+
+    if isinstance(output, dict) and "_barca_artifact" in output:
+        meta = output["_barca_artifact"]
+        try:
+            with _cached_value.retain_reference(meta["path"]) as retained:
+                return _cached_value.deserialize(retained, meta["format"])
+        except Exception as exc:
+            reason = (
+                "cached_value_unsupported"
+                if isinstance(exc, _cached_value.UnsupportedValue)
+                else None
+            )
+            raise BarcaError(
+                str(exc), envelope={"kind": "infra", "code": 3, "error": str(exc), "reason": reason}
+            ) from exc
+    if isinstance(output, dict):
+        return {key: _read_cached_output(value) for key, value in output.items()}
     return output
 
 

@@ -295,6 +295,7 @@ impl Request {
     pub(crate) fn of(cli: Cli, side: Side) -> Result<Request, CliError> {
         Ok(match cli {
             Cli::Get {
+                cached_only,
                 args,
                 output,
                 expires,
@@ -314,11 +315,24 @@ impl Request {
             } => {
                 check_order("get", &args)?;
                 let queue = queue_place("get", queue, side)?;
-                let mode = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
+                let mut mode = get_mode(output, expires.as_deref(), format, fields.as_deref())?;
+                mode.cached_only = cached_only.as_deref().map(|s| {
+                    if s == "local" {
+                        barca_service::cached::Tier::Local
+                    } else {
+                        barca_service::cached::Tier::Store
+                    }
+                });
+                if mode.cached_only == Some(barca_service::cached::Tier::Local)
+                    && mode.url_expires.is_some()
+                {
+                    return Err(usage_error("--cached-only=local cannot sign URLs"));
+                }
                 // A served `get` returns the server's artifact pointers (its paths), or with
                 // `-o value` the values the server read. Signed links are not in the run
                 // contract yet.
-                if side == Side::Server && mode.url_expires.is_some() {
+                if side == Side::Server && mode.url_expires.is_some() && mode.cached_only.is_none()
+                {
                     return Err(CliError::from_prose(
                         ErrorKind::Usage,
                         "error: -o url cannot be used on a server yet\nRun the command on this \

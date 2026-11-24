@@ -9,7 +9,6 @@ use serde::Serialize;
 
 /// Lifecycle of an async run tracked by the server.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 #[serde(rename_all = "snake_case")]
 pub enum RunStatus {
     /// Accepted, not yet started.
@@ -17,7 +16,8 @@ pub enum RunStatus {
     /// Executing in a background task.
     Running,
     /// Finished successfully.
-    Complete,
+    Success,
+    Skipped,
     /// Finished with an error.
     Failed,
     /// Stopped mid-flight via `DELETE /runs/{id}` or server shutdown.
@@ -27,7 +27,6 @@ pub enum RunStatus {
 /// In-memory record of a single run, kept while it runs and for a while after. `handle` is
 /// the database run id, allocated when the run is accepted.
 #[derive(Clone, Debug, Serialize)]
-#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
 pub struct RunState {
     /// The run id (see `/runs/{run_id}`); the older `/status/{run_id}` calls it the handle.
     pub handle: String,
@@ -58,7 +57,7 @@ pub struct RunState {
     #[serde(skip)]
     pub files: Vec<String>,
     pub status: RunStatus,
-    /// Populated when `status == Complete` for a single-target run. Carries the DB run id,
+    /// Populated when `status == Success` for a single-target run. Carries the DB run id,
     /// timing, output.
     pub result: Option<GetResult>,
     /// Populated when the run did not succeed.
@@ -84,6 +83,7 @@ pub struct RunState {
 }
 
 /// A run to start: what to run, how, and what asked for it.
+#[derive(Clone)]
 pub(crate) struct RunSpec {
     pub command: RunCommand,
     /// As given (`[]`: every asset and sensor).
@@ -114,6 +114,37 @@ pub(crate) struct RunSpec {
 }
 
 impl RunSpec {
+    pub fn scope(&self, default_files: &[String]) -> barca_service::run_scope::RunScope {
+        let (refresh, refresh_all, cascade) = match &self.policy {
+            CachePolicy::CacheAware => (Vec::new(), false, false),
+            CachePolicy::RefreshAll { .. } => (Vec::new(), true, false),
+            CachePolicy::RefreshSelective { names, cascade, .. } => {
+                (names.clone(), false, *cascade)
+            }
+        };
+        barca_service::run_scope::RunScope {
+            command: self.command.as_str().to_owned(),
+            targets: self.targets.clone(),
+            files: if self.files.is_empty() {
+                default_files.to_vec()
+            } else {
+                self.files.clone()
+            },
+            refresh,
+            refresh_all,
+            cascade,
+            partition: self.partition.as_ref().map(|p| p.to_json().to_string()),
+            batch: self.batch.clone(),
+            pin_manual: self.rules.pin_manual,
+            hold_paused: self.rules.hold_paused,
+            allow_paused_targets: self.rules.allow_paused_targets,
+            tick: self.rules.tick.clone(),
+            values: self.values,
+            timeout: self.timeout,
+            queue: self.queue.as_str().to_owned(),
+        }
+    }
+
     /// A run started over HTTP.
     pub fn api(command: RunCommand, targets: Vec<String>, nodes: Vec<String>) -> Self {
         Self {

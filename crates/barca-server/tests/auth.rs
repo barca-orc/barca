@@ -85,6 +85,7 @@ async fn every_api_path_and_method_authenticates_before_dispatch_or_etag() {
             "/state",
             "/ledger/lookup",
             "/ledger/runs",
+            "/ledger/refresh",
             "/runs/missing/events",
             "/events/missing",
             "/queue",
@@ -364,17 +365,17 @@ async fn a_run_records_its_requesting_token_and_reason_and_who_cancelled_it() {
         .to_string();
     let path = format!("/runs/{run_id}");
     let queued = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
-    assert_eq!(queued["principal"], "token:ci-bot");
-    assert_eq!(queued["trigger_reason"], "backfill");
+    assert_eq!(queued["run"]["principal"], "token:ci-bot");
+    assert_eq!(queued["run"]["trigger_reason"], "backfill");
     let cancel = call(&router, "DELETE", &path, Some(&token), None).await;
     assert_eq!(cancel.status(), StatusCode::OK);
     let run = json_body(call(&router, "GET", &path, Some(&token), None).await).await;
     validate("RunView", &run);
-    assert_eq!(run["status"], "cancelled");
-    assert_eq!(run["principal"], "token:ci-bot");
-    assert_eq!(run["trigger_reason"], "backfill");
+    assert_eq!(run["run"]["status"], "cancelled");
+    assert_eq!(run["run"]["principal"], "token:ci-bot");
+    assert_eq!(run["run"]["trigger_reason"], "backfill");
     assert_eq!(
-        run["cancellation"],
+        run["run"]["cancellation"],
         json!({"by": "request", "principal": "token:ci-bot", "started": false, "waiting_behind": [], "same_as": null})
     );
     let list = json_body(call(&router, "GET", "/runs", Some(&token), None).await).await;

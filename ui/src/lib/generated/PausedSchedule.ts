@@ -2,6 +2,6 @@
 
 /**
  * One paused schedule (`barca pause --schedule`, `POST /schedule/{id}/pause`): since when,
- * and until when (unix seconds; `None`: until it is resumed).
+ * and until when (RFC 3339 UTC; `None`: until it is resumed).
  */
-export type PausedSchedule = { id: string, paused_at: number, until: number | null, };
+export type PausedSchedule = { id: string, paused_at: string, until: string | null, };

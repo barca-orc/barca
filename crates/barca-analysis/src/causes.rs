@@ -952,6 +952,7 @@ def hourly(below_loose): ...
     fn fired(at: i64) -> Ticks {
         Ticks {
             newest: Some(TickRun {
+                task_skip_reason: None,
                 run_id: "r1".into(),
                 scheduled_at: at,
                 status: "success".into(),
@@ -1054,6 +1055,7 @@ def rows(feed): ...
             false,
             Some(Ticks {
                 newest: Some(TickRun {
+                    task_skip_reason: None,
                     run_id: "r2".into(),
                     scheduled_at: slot,
                     status: "pending".into(),
@@ -1525,6 +1527,7 @@ def pulse(): ...
                     false,
                     Some(Ticks {
                         newest: Some(TickRun {
+                            task_skip_reason: None,
                             run_id: "r1".into(),
                             scheduled_at: slot,
                             status: "pending".into(),
@@ -1693,6 +1696,7 @@ def pulse(): ...
                 false,
                 Some(Ticks {
                     newest: Some(TickRun {
+                        task_skip_reason: None,
                         run_id: "r1".into(),
                         scheduled_at: slot,
                         status: "pending".into(),

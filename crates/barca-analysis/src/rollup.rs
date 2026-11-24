@@ -961,6 +961,7 @@ mod tests {
 
     fn failed(mut n: NodeStatus, error: &str) -> NodeStatus {
         n.last_materialization = Some(LastMaterialization {
+            skip_reason: None,
             content_hash: None,
             status: "failed".to_string(),
             created_at: "2026-11-16 10:00:00".to_string(),

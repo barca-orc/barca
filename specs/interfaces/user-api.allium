@@ -1,5 +1,5 @@
 -- allium: 3
--- Specification version: 3
+-- Specification version: 4
 -- Status: implemented declaration concepts; human-readable behavioral model.
 -- Scope: Python node declarations and graph validation, not runtime state machines.
 -- Grammar conformance: crates/barca-service/tests/grammar_spec.rs and decorator_args.rs.
@@ -191,3 +191,14 @@ surface PythonDecorators {
         -- Unsupported argument behavior is checked by grammar_spec.rs.
         -- This overview does not enumerate every argument or define CLI wire messages.
 }
+
+-- Public Python exception: barca.Skip(reason: str), raised from task user code only.
+-- No retry or produced/cacheable artifact; explicit skip reason belongs to the attempt.
+-- Runtime transitions and mixed-run aggregation: ../behavior/execution.md, Explicit task skips.
+-- Cached-only reads (experimental, 0.47): get(cached_only=True) reads disk then store;
+-- get(cached_only="local") makes no store calls. Neither imports pipeline source or
+-- executes/enqueues/publishes work. CacheMiss extends BarcaError and exposes outcomes
+-- for every selected key plus missing, the subset with status miss. Any miss fails the
+-- call with code 1 / kind cache_miss. Other read failures remain BarcaError/code 3.
+-- CLI/HTTP ownership: contract.md and server-api.openapi.yaml /cached.
+-- Conformance: python/tests/test_cached_only.py.

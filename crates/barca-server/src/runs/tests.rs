@@ -48,6 +48,29 @@ fn live(handle: &str) -> RunState {
     }
 }
 #[tokio::test]
+async fn logs_keep_live_completion_when_the_database_snapshot_is_older() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let path = &state.config.resolved.db_path;
+    db::init_db(path).await.unwrap();
+    db::create_run(path, "done", "get", "[]", Some("first"), Some(1))
+        .await
+        .unwrap();
+    // The snapshot still says running when the registry has observed completion.
+    let mut run = live("done");
+    run.status = RunStatus::Success;
+    state.runs.registry.insert(run.handle.clone(), run);
+    let Json(logs) = super::handlers::logs(
+        State(state),
+        axum::extract::Path("done".to_string()),
+        Query(serde_json::from_value(serde_json::json!({})).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(logs.status, "success");
+}
+
+#[tokio::test]
 async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let state = state(dir.path());
@@ -57,7 +80,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .await
         .unwrap();
     assert_eq!(queued.runs.len(), 1);
-    assert_eq!(queued.runs[0].id, "durable");
+    assert_eq!(queued.runs[0].run_id, "durable");
     assert_eq!(queued.runs[0].status, "pending");
     let path = &state.config.resolved.db_path;
     db::init_db(path).await.unwrap();
@@ -72,7 +95,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     state.runs.registry.insert(run.handle.clone(), run.clone());
     let wrapping_up = view(&state, "durable").await.unwrap();
     assert_eq!(
-        wrapping_up.status, "running",
+        wrapping_up.run.status, "running",
         "a persisted terminal row must not stop live polling before wrap-up"
     );
     run.status = RunStatus::Failed;
@@ -83,7 +106,7 @@ async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
         .unwrap();
     assert_eq!(history.total, 1);
     assert_eq!(history.runs.len(), 1);
-    assert_eq!(history.runs[0].id, "durable");
+    assert_eq!(history.runs[0].run_id, "durable");
     assert_eq!(history.runs[0].error.as_deref(), Some("boom"));
 }
 
@@ -119,7 +142,12 @@ async fn a_run_in_progress_older_than_the_page_is_still_listed_first() {
         status: status.map(str::to_string),
         ..Default::default()
     };
-    let ids = |list: &RunList| list.runs.iter().map(|r| r.id.clone()).collect::<Vec<_>>();
+    let ids = |list: &RunList| {
+        list.runs
+            .iter()
+            .map(|r| r.run_id.clone())
+            .collect::<Vec<_>>()
+    };
     let Json(page) = list(State(state.clone()), Query(query(2, None, None)))
         .await
         .unwrap();
@@ -193,7 +221,7 @@ fn finished_runs_past_the_memory_budget_are_dropped_oldest_first() {
     // Five finished runs whose event backlogs hold about 10 KB each, and one still running.
     for (i, handle) in ["r1", "r2", "r3", "r4", "r5"].iter().enumerate() {
         let mut run = live(handle);
-        run.status = RunStatus::Complete;
+        run.status = RunStatus::Success;
         run.finished_at = Some(1000.0 + i as f64);
         state.runs.registry.insert(handle.to_string(), run);
         let channel = RunChannel::new();

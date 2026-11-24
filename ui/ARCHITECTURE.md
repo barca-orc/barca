@@ -51,8 +51,9 @@ page), listed in `crates/barca-cli/ui-layering.json` and checked by
 
 **Regenerating types:** annotate the Rust type with
 `#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]`, then run
-`pnpm gen:types` (which runs `cargo test --features ts export_bindings` with the
-output dir set to `lib/generated/`). The `ts` feature is off by default, so
+`pnpm gen:types` (which runs the library `export_bindings` tests for all exporting
+crates in one Cargo invocation, with their `ts` features and the output directory
+set to `lib/generated/`). The `ts` feature is off by default, so
 `ts-rs` stays out of the production binary. CI's merge tier runs it and then
 `git diff --exit-code` on `lib/generated`, so drift fails the build.
 

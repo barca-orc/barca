@@ -26,10 +26,10 @@ export function useRunDetail(id: string | null) {
     queryFn: () => api.runDetail(id!),
     enabled: id !== null,
     // Continue polling while queued/running, also when a transient fetch fails.
-    refetchInterval: recovering<RunView>((q) => !q.state.data || runIsLive(q.state.data.status) ? 1_000 : false),
+    refetchInterval: recovering<RunView>((q) => !q.state.data || runIsLive(q.state.data.run.status) ? 1_000 : false),
     retry: false,
   })
-  const status = query.data?.status
+  const status = query.data?.run.status
   useEffect(() => {
     if (status && !runIsLive(status)) {
       void client.invalidateQueries({ queryKey: ['state'] })

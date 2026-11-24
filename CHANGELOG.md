@@ -8,12 +8,96 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- Run details (including the deprecated `/status/{run_id}` alias and Python `Client.status`/`Run.wait`) now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
+
+- Run infrastructure and request failures now use `failed` instead of `error`, including restored outcomes and history filters. Error envelopes retain their cause and exit codes; use `--status failed` to include legacy error records. Activity status counts use `pending` and fold former `error` counts into `failed`.
+
+- Schedule API timestamps (`next_fire`, `last_fired`, `last_skipped`, `late_since`, and `paused_until`, plus `/state` `next_run`, `prev_run`, and `late_since`, and `/pauses` schedule `paused_at` and `until`) now use RFC 3339 UTC strings instead of Unix seconds. Parse them as timestamps rather than multiplying by 1,000.
+
+- Server requests now hold paused inputs even during hard refresh. `allow_paused` overrides paused targets only; paused inputs without a readable result fail instead of being recomputed (#937).
+
+- Worker protocol version 6 adds explicit task-skip completions; worker helpers and coordinator must come from the same release (#811).
+
+- `barca logs` and server logs now keep each multiline stderr write and failed-attempt traceback in one entry, with newlines in `line`, instead of one entry per physical line (#671). Stdout and old recorded logs keep their boundaries. Use `--pretty` when piping to a pager.
+
+- Completed queued cancellation (`DELETE /runs/{id}` and `barca cancel --json`) now returns `status: "cancelled"`; running cancellations still return `"cancelling"` (#936).
+
+### Features
+
+- Run controls offer Including Manual (off by default) and explicit hard refresh with a scope confirmation. Server runs hold paused inputs across these options, dry runs, and queue recovery; an override permits only named paused targets (#937).
+
+- Tasks can raise `barca.Skip(reason)` to record skipped work without retrying or producing a result. Scheduled skips preserve the failure streak; history, run outcomes and schedule inspection distinguish them from success and failure (#811).
+
+- Read latest completed results without execution using `barca get --cached-only` and `barca.get(cached_only=True)`, locally or on a server. Disk then store lookup, strict `--cached-only=local`, typed `CacheMiss` (exit 1), and per-key outcomes preserve explicit selection.
+
+- Run history and the run page retain the original worker-fatal cause and distinguish recovery after worker replacement from terminal retry failure, without hiding independent failures (#1106).
+
 ### Bug Fixes
 
 - Compress served responses and poll visible asset rows, preserve readable health and schedule details, and expose empty results and row counts in the key explorer. Respect the OS theme and explain empty projects and worktree builds without the UI (#1044).
 
+- Run-log polling preserves live completion when the database snapshot is older. Toolbar refresh controls reserve their space during loading, preventing the asset table and graph from shifting.
+
+- A refresh killed before recording a new result no longer leaves an incremental freshness proof that can serve pre-refresh data. Bulk incremental reads also exclude invalidated results.
+
+- Older metadata databases migrate newly added tables before extending their columns, so databases predating schedule tick history remain readable.
+
+- Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
+
+- Cache-aware retries after a failed refresh no longer revive pre-refresh downstream results. Invalidation survives restart and repeated failure, respects partition/cutoff/pin scope, and is acknowledged before computation against a remote ledger; remote refresh requires a server with this support (#939).
+
+- Preserve the original partition, refresh, batch, pause and tick scope when replaying a run; retry task followers using their task kind (#938).
+
+- The UI’s Run button for tasks now brings upstream assets up to date using the cache, like `barca run`, instead of implicitly forcing `--refresh-all` and recomputing Manual upstreams (#937).
+
+- Cancel live server-owned runs directly from run-list rows, running and queued entries, run notices, and running badges. Unknown write access keeps Cancel visible but disabled with an explanation (#933).
+
+- Run detail identifies cancellation ownership. CLI-owned and interrupted runs explain where to stop or reconcile them instead of offering a Cancel action that fails with “already finished (running)” (#934).
+
+- Live runs report cached steps as phases are decided, including expanded partition keys; CLI, history and UI progress include them before completion without double-counting recovery (#942).
+
+- Warn once per partitioned node when `--refresh --no-cascade` serves cached keys downstream of refreshed assets, including downstream fan-ins and dry-run reports (#940).
+
+- Ordinary server gets of provably fresh cached targets now read independently of saturated pipeline capacity, using bounded I/O and GC-protected artifacts. Missing/stale results and explicit refreshes retain execution admission (#1133).
+
+- Recover queue-owned predecessor runs even when their host or PID cannot be checked. Retain stopped executions and their logs across server requeues, link them from run detail, and keep local log followers waiting for the next execution (#930, #931).
+
+- Cancel, drain timeout, forced stop and local SIGTERM now stop worker process groups, including inherited subprocesses and suspended `parallel()` callers. Children that ignore TERM are killed after the grace period even when their worker has exited (#935).
+
+- Cancelling a run just requeued by server drain durably removes it so a restart cannot run it. Hanging partition-key and `batches_by` resolvers stop on cancellation, with a bounded subprocess shutdown (#936).
+
+- Record a successful retry after a server requeue even when the same run id and run hash already have a failed step. Earlier failure evidence remains in history, and the successful result is cached (#929).
+
+- Terminal Ctrl-C now drains server-owned workers instead of interrupting their running steps; the drain deadline requeues remaining work and a second signal still cancels it (#926).
+
+- A server refresh resumed after a drain/restart reuses completed assets and partition keys whose current-hash success was recorded since the original request was accepted. Tasks can still repeat, including side effects (#928).
+
+### Documentation
+
+- Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
+
+## 0.46.4 (2026-11-22)
+
 ### Bug Fixes
 
+- Warn when metadata was last written by a newer barca, and have `barca doctor` check the running version against `pyproject.toml`'s barca dependency (#672).
+- Warn once per sensor per CLI/server process when `(True, value)` supplies a non-`None` value: it always counts as changed. Return the value alone for comparison or `(True, None)` for a silent explicit change (#673).
+- Refresh locked OAuthLib, OpenTelemetry API and Astro dependencies to their patched versions (#1112).
+
+### Performance
+
+- Share transactional metadata writer-version trigger programs and move doctor requirement parsing into its finite Python helper, reducing coordinator memory without external Python dependencies.
+
+## 0.46.3 (2026-11-22)
+
+### Bug Fixes
+
+- Prevent DuckDB 1.x from hanging while binding batched inputs that read multiple remote Parquet files.
+- Wait for observed server queries in the Runs UI filter test, so loading rows cannot race its request assertions.
+- Generate UI bindings in one library-only Cargo invocation, avoiding duplicate feature builds and unrelated integration binaries that exhausted release CI disk (#1121).
+- Make the overlapping-refresh release check respect the five-minute store-check window before requiring repair, and cover the deferred repair and changed-bytes warning against real object stores.
 - A loopback server refuses foreign HTTP Host names before dispatch, preventing DNS rebinding. Trusted reverse proxies can list exact DNS names in `[server] allowed_hosts`; loopback CLI/UI access and the owner-only project socket keep working (#998).
 - Pinning an asset no longer removes unrelated partitioned nodes from status prediction: their cache state and partition counts remain visible (#1069).
 - Make the owner-server and estimate checks wait for observed progress on loaded runners, measure estimate error against recorded completion, and keep interrupted event streams scoped to deliberate server stops (#1096).

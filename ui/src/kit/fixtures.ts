@@ -170,9 +170,9 @@ export const neverSucceededNode: NodeState = node('fx_rates_live', {
 export const failedTask: NodeState = row('check__invoices')
 
 export const runningByStep = {
-  waiting: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
-  queued: { run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', label: 'in a queued run', partitions: null },
-  running: { run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', label: 'running', partitions: null },
+  waiting: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'waiting', label: 'in this run', partitions: null },
+  queued: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '128', triggered_by: 'schedule', started_at: ago(8), step: 'queued', label: 'in a queued run', partitions: null },
+  running: { control: { cancellable: true, owner: 'this server', reason: null }, run_id: '127', triggered_by: 'client', started_at: ago(192), step: 'running', label: 'running', partitions: null },
 } satisfies Record<RunningStep, NodeRunning>
 
 export const runningPartitioned: NodeRunning = {
@@ -262,7 +262,7 @@ export const resetPhases = {
  * it, the explanation `barca-service` gives for them, and the rest of a `RunView` (ids, steps,
  * logs) spelled here. No count, line or reason of the explanation is written in this file.
  */
-function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunView {
+function runView(name: RunScenarioName, overrides: Partial<RunView['run']> = {}): RunView {
   const { run, nodes, explanation } = scenario(name)
   const { first_failure, ...facts } = run
   const live = run.status === 'pending' || run.status === 'running'
@@ -271,6 +271,9 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     step('pipeline.py:orders_clean', 'success'),
   ]
   return {
+    run: {
+    scope: null,
+    control: { cancellable: live, owner: live ? 'this server' : 'not running', reason: live ? null : `The run already finished (${run.status}).` },
     run_id: '127',
     command: 'get',
     files: ['pipeline.py'],
@@ -284,14 +287,15 @@ function runView(name: RunScenarioName, overrides: Partial<RunView> = {}): RunVi
     waiting_for: null,
     queue: null,
     outcome: null,
+    ...facts,
+    ...overrides,
+    },
     steps: listed,
     steps_page: { total: listed.length, truncated: false, ...(nodes.length > 0 ? { nodes } : {}) },
     logs: listed.length === 0 ? [] : logLines.map((l, seq) => ({
       node_id: l.nodeId, seq, line: l.text, stream: l.stream ?? 'stdout', ts: l.ts ?? null,
     })),
-    ...facts,
     explanation,
-    ...overrides,
   }
 }
 
@@ -315,15 +319,18 @@ export const runByStatus = {
   pending: runView('queued'),
   running: runView('running'),
   success: runDetail(RUN_IDS.first),
+  skipped: runView('interrupted', { status: 'skipped', skip_reason: 'another copy holds the lock', outcome: { status: 'skipped', run_id: 'skipped', final_output: null } }),
   failed: runDetail(RUN_IDS.failed),
   cancelled: runView('cancelled by the server stopping', {
     outcome: { status: 'cancelled', envelope: envelope('cancelled', 'cancelled by DELETE /runs/127', null) },
   }),
-  error: runView('error', {
-    outcome: { status: 'error', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
-  }),
   interrupted: runView('interrupted'),
 } satisfies Record<RunViewStatus, RunView>
+
+export const runInfrastructureFailure = runView('error', {
+  status: 'failed',
+  outcome: { status: 'failed', envelope: envelope('infra', 'could not start a worker: python3 not found', 'Set [python] interpreter in barca.toml.') },
+})
 
 const runTruncated: RunView = {
   ...runDetail(RUN_IDS.failed),
@@ -342,9 +349,7 @@ const manyKeys = Array.from({ length: 1000 }, (_, i) => {
 })
 const runManyKeys: RunView = {
   ...runDetail(RUN_IDS.failed),
-  error: 'invoices_by_account: 1,250 keys failed',
-  steps_total: 7644,
-  steps_executed: 5021,
+  run: { ...runDetail(RUN_IDS.failed).run, error: 'invoices_by_account: 1,250 keys failed', steps_total: 7644, steps_executed: 5021 },
   steps: manyKeys,
   steps_page: {
     total: 5885,
@@ -366,12 +371,12 @@ function summary(name: RunScenarioName, id: string, overrides: Partial<RunSummar
   const view = runView(name)
   const { run, line } = scenario(name)
   return {
-    id, handle: null, run_id: id, command: view.command, files: view.files, target: view.target,
-    status: view.status, triggered_by: view.triggered_by, scheduled_at: null, schedule_id: null,
-    started_at: view.started_at, finished_at: view.finished_at, elapsed_seconds: view.elapsed_seconds,
-    steps_total: view.steps_total, steps_executed: view.steps_executed, steps_cached: view.steps_cached,
-    error: view.error, first_failure: run.first_failure, principal: view.principal, trigger_reason: view.trigger_reason,
-    cancellation: view.cancellation, line,
+    control: view.run.control, run_id: id, command: view.run.command, files: view.run.files, target: view.run.target,
+    status: view.run.status, triggered_by: view.run.triggered_by, scheduled_at: null, schedule_id: null,
+    started_at: view.run.started_at, finished_at: view.run.finished_at, elapsed_seconds: view.run.elapsed_seconds,
+    steps_total: view.run.steps_total, steps_executed: view.run.steps_executed, steps_cached: view.run.steps_cached,
+    error: view.run.error, failure: run.first_failure ? {node: run.first_failure.node_id, error: run.first_failure.error} : null, principal: view.run.principal, trigger_reason: view.run.trigger_reason,
+    cancellation: view.run.cancellation, line,
     ...overrides,
   }
 }
@@ -430,6 +435,7 @@ export const runDetails: Record<string, Remote<RunView>> = {
 // ── Queue ─────────────────────────────────────────────────────────────────────
 
 const queued = (n: number, overrides: Partial<QueueEntry> = {}): QueueEntry => ({
+  control: { cancellable: true, owner: 'this server', reason: null },
   run_id: `a8ba${String(n).padStart(4, '0')}`, status: 'pending', position: n, command: 'get',
   target_line: overrides.target ?? `web.py:sessions_${String(n).padStart(2, '0')}`,
   target: `web.py:sessions_${String(n).padStart(2, '0')}`, triggered_by: n % 3 === 0 ? 'schedule' : 'api',
@@ -487,7 +493,7 @@ const rebuildNow: RunNow = {
  */
 export const runOverviews: Record<string, { run: RunView; now: RunNow | null; nowMs: number }> = {
   'full rebuild in flight': {
-    run: runView('full rebuild in flight', { trigger_reason: 'backfill after the bucket_ltv fix', steps_page: { total: 19_399, truncated: true, nodes: scenario('full rebuild in flight').nodes } }),
+    run: { ...runView('full rebuild in flight', { trigger_reason: 'backfill after the bucket_ltv fix' }), steps_page: { total: 19_399, truncated: true, nodes: scenario('full rebuild in flight').nodes } },
     now: rebuildNow, nowMs: NOW_MS,
   },
   'just started': { run: runView('just started'), now: null, nowMs: NOW_MS },

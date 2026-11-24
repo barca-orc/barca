@@ -8,7 +8,7 @@ import { IconButton } from './IconButton'
 export function IncidentSummaryButton({ run, datadogUrl }: { run: RunView; datadogUrl?: string | null }) {
   const [state, setState] = useState<'idle' | 'copied' | 'failed'>('idle')
   const copy = () => {
-    const text = incidentSummary(run, runLink(run.run_id), datadogUrl)
+    const text = incidentSummary(run, runLink(run.run.run_id), datadogUrl)
     const done = (s: 'copied' | 'failed') => { setState(s); setTimeout(() => setState('idle'), 1500) }
     if (!navigator.clipboard) return done('failed')
     navigator.clipboard.writeText(text).then(() => done('copied'), () => done('failed'))
