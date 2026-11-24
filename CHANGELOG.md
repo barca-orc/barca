@@ -78,6 +78,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 - Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
 
+### Performance
+
+- Compile CLI and run orchestration for smaller resident code, restoring incremental coordination memory headroom without changing performance budgets or worker parallelism.
+
 ## 0.46.4 (2026-11-22)
 
 ### Bug Fixes
