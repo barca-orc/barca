@@ -167,12 +167,19 @@ fn undeclared_env_message(id: &str, names: &[String]) -> String {
 /// warning, except `undeclared_env`, which is one summary line for the whole command
 /// ([`undeclared_env_summary`]); its per-step detail is in the JSON.
 pub fn print(warnings: &[PlanWarning]) {
-    for w in warnings.iter().filter(|w| w.kind != UNDECLARED_ENV) {
-        warn_once(&w.message);
+    for message in messages(warnings) {
+        warn_once(&message);
     }
-    if let Some(line) = undeclared_env_summary(warnings) {
-        warn_once(&line);
-    }
+}
+
+/// The same command-level warning messages for a caller emitting its own event stream.
+pub fn messages(warnings: &[PlanWarning]) -> Vec<String> {
+    warnings
+        .iter()
+        .filter(|w| w.kind != UNDECLARED_ENV)
+        .map(|w| w.message.clone())
+        .chain(undeclared_env_summary(warnings))
+        .collect()
 }
 
 /// `N steps read environment variables not declared in env=: A, B, C (+K more); barca status

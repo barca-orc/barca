@@ -31,7 +31,6 @@ export type { GetResult } from './generated/GetResult'
 export type { OutputRef } from './generated/OutputRef'
 export type { RunEvent } from './generated/RunEvent'
 export type { LineWhen } from './generated/LineWhen'
-export type { FirstFailure } from './generated/FirstFailure'
 export type { FailureFacts } from './generated/FailureFacts'
 import type { FailureFacts } from './generated/FailureFacts'
 export type { RunSummary } from './generated/RunSummary'
@@ -129,7 +128,7 @@ export interface ErrorEnvelope {
  * The generated type is an untyped object; `parseOutcome` (lib/runs.ts) narrows it.
  */
 export type RunOutcome =
-  | { status: 'success'; run_id: string; final_output?: unknown; targets?: Record<string, unknown> }
+  | { status: 'success' | 'skipped'; run_id: string; final_output?: unknown; targets?: Record<string, unknown> }
   | { status: 'failed' | 'cancelled' | 'error'; envelope: ErrorEnvelope }
 
 /** `barca stats --json`: the generated `AssetStats` with `id` in place of `node_id`. */
@@ -167,3 +166,5 @@ export type StatusKind =
 
 export type { TokenMetadata } from './generated/TokenMetadata'
 export type { IssuedToken } from './generated/IssuedToken'
+
+export type { ReplayRequest } from './generated/ReplayRequest'

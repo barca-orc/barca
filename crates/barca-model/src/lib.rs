@@ -40,6 +40,7 @@ pub mod node_estimate;
 pub mod process;
 pub mod reports;
 pub mod run_explain;
+pub mod run_scope;
 #[doc(hidden)]
 pub mod source_observation;
 // The lexer the source-scanning guards of every crate share (layering, write boundary, status
@@ -80,6 +81,14 @@ pub fn bounded_ids(ids: &str) -> String {
 /// Top-level error type for barca engine operations.
 #[derive(Debug, thiserror::Error)]
 pub enum BarcaError {
+    /// A read-only lookup has no artifact for one or more selected keys.
+    #[error("cached result unavailable for one or more selected keys")]
+    CacheMiss(Vec<serde_json::Value>),
+
+    /// Cached value access would invoke executable pickle reconstruction.
+    #[error("{0}")]
+    CachedValueUnsupported(String),
+
     #[error("{0}")]
     Io(#[from] std::io::Error),
 

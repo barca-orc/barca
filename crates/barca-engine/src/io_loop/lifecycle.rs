@@ -101,69 +101,24 @@ impl WorkerPool {
             let mut children: Vec<Child> =
                 Vec::with_capacity(workers.len() + frozen.len() + pending.len());
 
-            // Started and never connected (a cancelled run, or one that ended first): not
-            // members of the pool, and still stopped and reaped here.
-            #[cfg(unix)]
-            for (_, p) in pending {
-                unsafe {
-                    libc::kill(p.child.id() as i32, libc::SIGTERM);
-                }
-                children.push(p.child);
-            }
-            #[cfg(not(unix))]
-            for (_, p) in pending {
-                children.push(p.child);
-            }
-
-            #[cfg(unix)]
-            for (_, w) in workers {
-                unsafe {
-                    libc::kill(w.child.id() as i32, libc::SIGTERM);
-                }
+            children.extend(pending.into_values().map(|p| p.child));
+            // Keep the command channels open until TERM has ended the workers: closing
+            // them first races a noisy "executor disconnected" against normal shutdown.
+            let mut connections = Vec::with_capacity(workers.len() + frozen.len());
+            for w in workers.into_values() {
                 children.push(w.child);
+                connections.push(w.cmd_tx);
             }
-            #[cfg(not(unix))]
-            for (_, w) in workers {
+            for w in frozen {
                 children.push(w.child);
+                connections.push(w.cmd_tx);
             }
-
-            #[cfg(unix)]
-            for fw in frozen {
-                unsafe {
-                    libc::kill(fw.child.id() as i32, libc::SIGCONT);
-                    libc::kill(fw.child.id() as i32, libc::SIGTERM);
-                }
-                children.push(fw.child);
-            }
-            #[cfg(not(unix))]
-            for fw in frozen {
-                children.push(fw.child);
-            }
-
-            #[cfg(unix)]
-            {
-                let deadline = std::time::Instant::now() + Duration::from_millis(200);
-                while std::time::Instant::now() < deadline
-                    && children
-                        .iter_mut()
-                        .any(|c| !matches!(c.try_wait(), Ok(Some(_))))
-                {
-                    // A worker exits within a millisecond or two of SIGTERM: polling every
-                    // 5 ms made each run's shutdown about 5 ms (#560).
-                    std::thread::sleep(Duration::from_millis(1));
-                }
-            }
-
-            for mut c in children {
-                if !matches!(c.try_wait(), Ok(Some(_))) {
-                    let _ = c.kill();
-                }
-                let _ = c.wait();
-            }
+            stop_workers(&mut children);
+            drop(connections);
         });
         let _ = kill_task.await;
-        // Rejected starts have already left `pending`. Their off-loop kill/wait
-        // jobs still belong to this pool, including when the CLI is about to exit.
+        // Rejected starts and retired/replaced workers have already left the pool.
+        // Their off-loop cleanup still belongs to this run, including at CLI exit.
         for task in self.reaping {
             let _ = task.await;
         }
@@ -194,11 +149,8 @@ impl WorkerPool {
             else {
                 return;
             };
-            if let Some(mut handle) = self.workers.remove(&idle) {
-                tokio::task::spawn_blocking(move || {
-                    let _ = handle.child.kill();
-                    let _ = handle.child.wait();
-                });
+            if let Some(handle) = self.workers.remove(&idle) {
+                self.reap(handle.child, Some(handle.cmd_tx));
             }
         }
     }
@@ -315,7 +267,7 @@ impl WorkerPool {
             Ok(stream) => stream,
             Err(e) => {
                 barca_model::errln!("[barca] failed to spawn worker: worker {wid} {e}");
-                self.reap(pending.child);
+                self.reap(pending.child, None);
                 return false;
             }
         };
@@ -371,19 +323,24 @@ impl WorkerPool {
             .map(|(wid, why)| {
                 barca_model::errln!("[barca] failed to spawn worker: {why}");
                 if let Some(p) = self.pending.remove(&wid) {
-                    self.reap(p.child);
+                    self.reap(p.child, None);
                 }
                 why
             })
             .collect()
     }
 
-    /// Kill and reap a worker that is not part of the pool, off the event loop.
-    pub(super) fn reap(&mut self, mut child: Child) {
+    /// Stop a worker removed from the pool, off the event loop. Keep its connection
+    /// open until exit so normal retirement is not reported as a broken coordinator.
+    pub(super) fn reap(
+        &mut self,
+        mut child: Child,
+        connection: Option<mpsc::Sender<serde_json::Value>>,
+    ) {
         self.reaping.retain(|task| !task.is_finished());
         self.reaping.push(tokio::task::spawn_blocking(move || {
-            let _ = child.kill();
-            let _ = child.wait();
+            graceful_kill(&mut child);
+            drop(connection);
         }));
     }
 }
@@ -420,11 +377,13 @@ pub(super) fn worker_command(config: &IoConfig, socket_path: &Path, worker_id: u
         cmd.env_remove("BARCA_UPLOAD_SNAPSHOT_PREFIX");
     }
 
-    // Ctrl-C means something to a worker only while it runs a step. It starts outside the
-    // terminal's job, so that one arriving while the interpreter starts is not a traceback,
-    // and joins the job once it handles the signal itself.
+    // Keep each worker and its inherited descendants in a private group for shutdown.
+    // The coordinator owns terminal cancellation (and, for serve, the drain deadline).
     #[cfg(unix)]
-    barca_proc::helper_proc::start_outside_the_job(&mut cmd);
+    {
+        barca_proc::helper_proc::start_outside_the_job(&mut cmd);
+        cmd.env_remove("BARCA_JOB_PGID");
+    }
     cmd
 }
 
@@ -513,27 +472,54 @@ pub(super) fn disconnect_message(
     format!("worker for {node} exited with {how}{waiting}")
 }
 
-/// Gracefully terminate a child process. Sends SIGTERM first to let the process
-/// flush buffered stdout/stderr, then falls back to SIGKILL after a brief wait.
+/// Stop a worker and its inherited process group, even if the leader already exited.
 pub(super) fn graceful_kill(child: &mut Child) {
+    stop_workers(std::slice::from_mut(child));
+}
+
+/// One shared grace window for all groups. Reaping a leader does not establish that its
+/// descendants exited: keep signalling its original PGID through the KILL escalation.
+fn stop_workers(children: &mut [Child]) {
     #[cfg(unix)]
     {
-        // Send SIGTERM for a graceful shutdown.
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
+        for child in children.iter() {
+            signal_worker(child, libc::SIGCONT);
+            signal_worker(child, libc::SIGTERM);
         }
-        // Give the process a moment to flush and exit.
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+        let deadline = std::time::Instant::now() + Duration::from_millis(200);
+        loop {
+            let mut alive = false;
+            for child in children.iter_mut() {
+                let leader_alive = !matches!(child.try_wait(), Ok(Some(_)));
+                // SAFETY: a negative PID addresses only the private group created at spawn.
+                let group_alive = unsafe { libc::kill(-(child.id() as i32), 0) == 0 };
+                alive |= leader_alive || group_alive;
+            }
+            if !alive || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(1));
         }
-        std::thread::sleep(Duration::from_millis(200));
-        if let Ok(Some(_)) = child.try_wait() {
-            return;
+        for child in children.iter() {
+            signal_worker(child, libc::SIGKILL);
         }
     }
-    // Fallback: SIGKILL (or platform kill on non-unix).
-    let _ = child.kill();
-    let _ = child.wait();
+    for child in children {
+        if !matches!(child.try_wait(), Ok(Some(_))) {
+            let _ = child.kill();
+        }
+        let _ = child.wait();
+    }
+}
+
+#[cfg(unix)]
+fn signal_worker(child: &Child, signal: i32) {
+    // Never discover a group with getpgid here: user code could have moved the leader.
+    // The group we own is the original PID, not the server's or another job's group.
+    // SAFETY: plain syscall; Child IDs are positive and the spawn creates PGID == PID.
+    unsafe {
+        libc::kill(-(child.id() as i32), signal);
+    }
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

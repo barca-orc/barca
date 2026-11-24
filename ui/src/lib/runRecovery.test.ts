@@ -41,18 +41,18 @@ describe('log filters', () => {
   })
 })
 
-const run = { command: 'get', target: 'a,b', files: [] } as Pick<RunView, 'command' | 'target' | 'files'>
+const run = { run_id: 'original' }
 
 describe('re-run requests', () => {
-  it('re-runs the same target cache-aware, or refreshed', () => {
-    expect(rerunFailedRequest(run)).toEqual({ command: 'get', targets: ['a', 'b'], files: [] })
-    expect(rerunAllRequest({ ...run, target: null })).toEqual({ command: 'get', targets: [], files: [], refresh_all: true })
+  it('references the recorded request instead of inferring scope from its display target', () => {
+    expect(rerunFailedRequest(run)).toEqual({ runId: 'original', body: { cache: 'cached', step: null } })
+    expect(rerunAllRequest(run)).toEqual({ runId: 'original', body: { cache: 'refresh_all', step: null } })
   })
-  it('retries one step, one key of a partitioned node by its key', () => {
-    expect(splitStepId('p.py:r[region=amer]')).toEqual({ node: 'p.py:r', key: 'region=amer' })
-    expect(retryStepRequest(run, 'p.py:r[region=amer]')).toEqual({ command: 'get', targets: ['p.py:r'], files: [], partition: 'region=amer' })
+  it('passes the exact step identity to the server, including compound partition keys', () => {
+    const step = 'p.py:r[region=amer,day=1]'
+    expect(retryStepRequest(run, step)).toEqual({ runId: 'original', body: { cache: 'cached', step } })
+    expect(splitStepId(step)).toEqual({ node: 'p.py:r', key: 'region=amer,day=1' })
     expect(partitionArg('region=amer,day=1')).toBe('{"region":"amer","day":"1"}')
-    expect(retryStepRequest({ ...run, command: 'run', target: 'publish' }, 'p.py:publish').command).toBe('run')
   })
 })
 
@@ -60,8 +60,9 @@ describe('incident summary', () => {
   const tb = '  File "/x/p.py", line 3, in helper\n  File "/x/p.py", line 9, in load\n    raise ValueError("bad")'
   const step = { node_id: 'p.py:load', status: 'failed', error: 'ValueError: bad\nmore', error_type: 'ValueError', error_message: 'bad', error_traceback: tb } as RunStep
   const view = {
-    run_id: 'r1', status: 'failed', command: 'get', target: 'load,save', explanation: { target_line: 'load +1 more' }, triggered_by: 'schedule',
-    started_at: '2026-11-07T10:00:00Z', elapsed_seconds: 75, error: 'ValueError: bad', failure: null,
+    run: { run_id: 'r1', status: 'failed', command: 'get', target: 'load,save', triggered_by: 'schedule',
+    started_at: '2026-11-07T10:00:00Z', elapsed_seconds: 75, error: 'ValueError: bad', failure: null },
+    explanation: { target_line: 'load +1 more' },
     steps: [step, { node_id: 'p.py:ok', status: 'success' } as RunStep],
   } as unknown as RunView
   it('names the run, its link, target, trigger, timing and each failed step with where it raised', () => {
@@ -74,6 +75,17 @@ describe('incident summary', () => {
     expect(md).toContain('**Duration:** 1m 15s')
     expect(md).toContain('- `p.py:load`: ValueError: bad (raised at `/x/p.py:9 in load`)')
     expect(md).not.toContain('p.py:ok')
+  })
+  it('retains the original worker cause and recovery alongside independent failures', () => {
+    const diagnosed = { ...view, explanation: { ...view.explanation, worker_failures: [
+      { node_id: 'p.py:worker', first_error: 'FatalException: original', retry_error: 'RuntimeError: retry', recovered: false },
+      { node_id: 'p.py:recovered', first_error: 'FatalException: transient', retry_error: null, recovered: true },
+    ] } }
+    const md = incidentSummary(diagnosed, 'http://h/runs?run=r1')
+    expect(md).toContain('Original cause: FatalException: original')
+    expect(md).toContain('Later attempt: RuntimeError: retry')
+    expect(md).toContain('recovered after worker replacement')
+    expect(md).toContain('`p.py:load`: ValueError: bad')
   })
   it('links each failed step to its Datadog trace when the server names a site', () => {
     const traced = { ...view, steps: [{ ...step, trace_id: 'ab'.repeat(16) }] } as unknown as RunView

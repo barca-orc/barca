@@ -361,9 +361,9 @@ The SCHEDULE cell is `<cron>; held, failing 2/2` (held after `max_failures` fail
 `barca history` filters its runs; the filters combine with AND, and `--limit`, `total` and
 `truncated` count the runs they keep:
 
-- `--status success,failed,...`: any of `success`, `failed`, `cancelled`, `error`, `running`,
+- `--status success,failed,...`: any of `pending`, `running`, `success`, `skipped`, `failed`, `cancelled`,
   `interrupted`. `not_successful` is every one of a run that ended without succeeding
-  (`failed`, `error`, `cancelled`, `interrupted`).
+  (`failed`, `cancelled`, `interrupted`).
 - `--target NAME`: runs whose target (as typed) or job (resolved node ids) is that node, by
   function name or node id. A run of every node (`all`) is left out.
 - `--triggered-by manual,api,schedule,client`.
@@ -409,6 +409,12 @@ barca history --search daily_report --since 7d
 
 ### Runs in progress and the last day's activity
 
+Cached counts update as phases are decided, before their remaining steps execute. History,
+server run lists/details, and the web UI include those counts while a run is still running.
+Progress counts steps (one key of a partitioned node), not nodes or worker calls. Dynamic
+keys can increase the total; recovery of a missing artifact removes that step from the cached
+count before computing it. Repeated phases and restarted attempts do not add old counts.
+
 When `--status` names `running`, each listed run that is in progress also says what it is
 working on now (experimental): a `now: executing 3: orders, clean, report · 12 waiting ·
 240/900 keys` line under its row, and in JSON `now`, the object the web UI's run panel shows:
@@ -449,8 +455,8 @@ JSON is `{"activity": {...}}`: `since` and `until` (the window, RFC 3339 UTC: 24
 ending with the current one), `hours` (24 entries, oldest first, the empty hours included),
 `total` (the window as a whole) and `summary` (the line the table starts with). An hour has
 `at` (its start) and `until` (its end: `--since AT --until UNTIL` lists its runs), `runs`,
-`ok`, `not_successful` (failed, error, cancelled or interrupted), `in_progress`, `by_status`
-(`success`, `failed`, `error`, `cancelled`, `interrupted`, `running`), `by_trigger`
+`ok`, `not_successful` (failed, cancelled or interrupted), `in_progress`, `by_status`
+(`pending`, `running`, `success`, `skipped`, `failed`, `cancelled`, `interrupted`), `by_trigger`
 (`schedule`, `api`, `manual`, `client`, and `unknown` for runs recorded before barca stored
 what started them), `median_seconds` (the median time of its finished runs; `null` when none
 finished) and `failure` (`{text, runs}`: what most of its unsuccessful runs say went wrong,
@@ -528,6 +534,21 @@ existing 30-second polling window, plus recomputation time, even without a datab
 Remote stores, explicit key listings and invalid or unsupported evidence keep the full
 prediction path. Code, membership and failure changes still require matching current evidence.
 This reduces retained memory on proven chains; it is not a bound for all cold/refresh workloads.
+
+
+## Worker-fatal recovery
+
+When a worker-fatal error causes worker replacement, `barca history RUN_ID` names the
+original cause and whether the affected step recovered. A terminal retry error is shown as
+a later attempt of the same step. Independent failing steps and skipped dependents keep
+their own outcomes. The run page shows the same evidence, including after server restart.
+JSON exposes `explanation.worker_failures` when present: `node_id`, `first_error`,
+`retry_error` (null after recovery), and `recovered`. This diagnostic is experimental and
+recorded at run completion; older runs and abruptly killed coordinators may have none.
+
+Worker-fatal diagnostics retain at most 64 affected steps per run and 8 KiB per error,
+with a `[barca] diagnostic truncated` marker when error text is shortened. The list is
+not exhaustive at its limit; ordinary step outcomes still report independent failures.
 
 See also: [The Cache](/reference/cache/), [barca logs](/reference/cli/logs/), [barca sql](/reference/cli/sql/), [Scripts and AI Agents](/reference/agents/).
 

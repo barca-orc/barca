@@ -254,7 +254,7 @@ def test_a_light_run_proceeds_while_a_heavy_run_holds_the_rest(tmp_path):
         # The light run's steps run beside the heavy one, one after another.
         for _ in range(3):
             run_id = submit(server, "sync")
-            assert server.finished(run_id)["status"] == "success"
+            assert server.finished(run_id)["run"]["status"] == "success"
         assert len((project / "sync.runs").read_text().split()) == 3
         assert started(project, second) == 0, "the heavy steps stay serialized"
         view = queue(server)
@@ -266,7 +266,7 @@ def test_a_light_run_proceeds_while_a_heavy_run_holds_the_rest(tmp_path):
         release(project, first)
         wait_until(lambda: started(project, second) == 1, "the second heavy step")
         release(project, second)
-        assert server.finished(rebuild)["status"] == "success"
+        assert server.finished(rebuild)["run"]["status"] == "success"
         assert queue(server)["capacity"]["in_use"] == 0
 
 
@@ -290,7 +290,7 @@ def test_a_heavy_step_is_not_starved_by_light_ones(tmp_path):
         release(project, "heavy")
         release(project, "light_two")
         for run_id in (first, heavy, later):
-            assert server.finished(run_id)["status"] == "success"
+            assert server.finished(run_id)["run"]["status"] == "success"
         assert order(project) == ["light", "heavy", "light_two"]
 
 
@@ -363,7 +363,7 @@ def overlap(
         waiting = queue(server)["capacity"]["waiting"][0]
         assert (waiting["origin"], waiting["node"]) == ("requested", "pipeline.py:r1"), waiting
         release(project, "s1")
-        assert server.finished(requested)["status"] == "success"
+        assert server.finished(requested)["run"]["status"] == "success"
         wait_until(lambda: "s4" in order(project), "the scheduled run's last step")
         wait_until(
             lambda: any(
@@ -448,7 +448,7 @@ def ticking() -> None:
 
 def assert_timed_out(server: Serve, run_id: str, source: str) -> None:
     run = server.finished(run_id)
-    assert run["status"] == "error", run
+    assert run["run"]["status"] == "failed", run
     text = json.dumps(run)
     assert "run timed out after" in text and source in text, text
 
@@ -459,9 +459,9 @@ def test_no_run_timeout_by_default(tmp_path):
         run_id = submit(server, "slow")
         wait_until(lambda: started(project, "slow"), "the step to start")
         time.sleep(3)  # a fixed wait: no timeout may end the run
-        assert server.run(run_id)["status"] == "running"
+        assert server.run(run_id)["run"]["status"] == "running"
         release(project, "slow")
-        assert server.finished(run_id)["status"] == "success"
+        assert server.finished(run_id)["run"]["status"] == "success"
 
 
 def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
@@ -470,7 +470,7 @@ def test_the_run_timeout_flag_stops_a_long_run(tmp_path):
         run_id = submit(server, "slow")
         assert_timed_out(server, run_id, "run timed out after 2s (--run-timeout)")
     history = barca(project, "history", "--json", "--local", BARCA_REMOTE="off")
-    assert json.loads(history.stdout)["runs"][0]["status"] == "error", history.stdout
+    assert json.loads(history.stdout)["runs"][0]["status"] == "failed", history.stdout
     logs = barca(project, "logs", run_id, "--local", BARCA_REMOTE="off")
     assert "[barca] run cancelled: run timed out after 2s (--run-timeout)" in logs.stdout + (
         logs.stderr
@@ -486,9 +486,9 @@ def test_the_server_setting_stops_a_long_run_and_the_flag_wins(tmp_path):
         run_id = submit(server, "slow")
         wait_until(lambda: started(project, "slow") >= 2, "the step to start")
         time.sleep(3)  # a fixed wait: no timeout may end the run
-        assert server.run(run_id)["status"] == "running", "0 is no limit"
+        assert server.run(run_id)["run"]["status"] == "running", "0 is no limit"
         release(project, "slow")
-        assert server.finished(run_id)["status"] == "success"
+        assert server.finished(run_id)["run"]["status"] == "success"
 
 
 def test_a_schedule_timeout_stops_its_ticks(tmp_path):
@@ -571,7 +571,7 @@ def test_a_run_killed_during_the_drain_is_put_back_in_the_queue_once(tmp_path):
     try:
         assert f"run {run_id} was interrupted" in third.stderr, third.stderr
         run = third.finished(run_id)
-        assert run["status"] != "success", run
+        assert run["run"]["status"] != "success", run
     finally:
         third.kill()
     release(project, "slow")
@@ -624,7 +624,7 @@ def test_a_server_capacity_of_one_runs_one_worker_and_each_steps_peak_is_its_own
         status, body = server.request("POST", "/runs", {"command": "get", "targets": ["small"]})
         assert status == 202, body
         view = server.finished(body["run_id"])
-        assert view["status"] == "success", view
+        assert view["run"]["status"] == "success", view
         assert len(set((project / "pids").read_text().split())) == 1, "one worker"
         rss = {s["node_id"].split(":")[1]: s["max_rss_bytes"] for s in view["steps"]}
         assert rss["big"] > 300 * 1024 * 1024, rss
@@ -670,8 +670,8 @@ def test_a_cutoff_asset_gives_the_shared_capacity_back_between_its_phases(tmp_pa
         release(project, "light")
         wait_until(lambda: started(project, "after") == 1, "the next phase to start")
         release(project, "after")
-        assert server.finished(other)["status"] == "success"
-        assert server.finished(chain)["status"] == "success"
+        assert server.finished(other)["run"]["status"] == "success"
+        assert server.finished(chain)["run"]["status"] == "success"
         assert order(project) == ["gate", "light", "after"]
         capacity = queue(server)["capacity"]
         assert (capacity["in_use"], capacity["waiting"]) == (0, []), capacity

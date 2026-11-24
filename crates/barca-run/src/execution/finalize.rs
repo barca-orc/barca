@@ -377,6 +377,13 @@ pub(super) async fn finalize_run(
                 "cancelled"
             } else if phase_error.is_some() || step_failure.is_some() || transfer_error.is_some() {
                 "failed"
+            } else if !results.task_skips.is_empty()
+                && results
+                    .outputs
+                    .keys()
+                    .all(|id| cached_node_ids.contains(id))
+            {
+                "skipped"
             } else {
                 "success"
             },

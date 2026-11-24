@@ -185,26 +185,31 @@ GET /runs/{run_id}
 
 ```json
 {
-  "run_id": "1b942bb33182",
-  "status": "success",
-  "command": "get",
-  "target": "daily_report",
-  "files": ["pipeline.py"],
-  "triggered_by": "api",
-  "scheduled_at": null,
-  "schedule_id": null,
-  "started_at": "2026-10-20T05:00:00.000Z",
-  "finished_at": "2026-10-20T05:00:01.000Z",
-  "elapsed_seconds": 1.2,
-  "steps_total": 2, "steps_executed": 1, "steps_cached": 1,
-  "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
-  "error": null,
+  "run": {
+    "run_id": "1b942bb33182",
+    "status": "success",
+    "command": "get",
+    "target": "daily_report",
+    "files": ["pipeline.py"],
+    "triggered_by": "api",
+    "scheduled_at": null,
+    "schedule_id": null,
+    "started_at": "2026-10-20T05:00:00.000Z",
+    "finished_at": "2026-10-20T05:00:01.000Z",
+    "elapsed_seconds": 1.2,
+    "steps_total": 2, "steps_executed": 1, "steps_cached": 1,
+    "outcome": { "status": "success", "run_id": "1b942bb33182", "final_output": {"_barca_artifact": {"path": ".barca/default/artifacts/pipeline.py:daily_report/9f2c.json", "format": "json", "size_bytes": 8}}, "steps": [], "...": "..." },
+    "error": null
+  },
+  "steps_page": {"total": 1, "truncated": false},
+  "explanation": {},
   "steps": [{ "node_id": "pipeline.py:daily_report", "status": "success", "elapsed_seconds": 0.4, "error": null }],
   "logs": [{ "node_id": "pipeline.py:daily_report", "seq": 0, "line": "wrote 3 rows", "stream": "stdout", "ts": "2026-10-20T05:00:00.512Z" }]
 }
 ```
 
-`status` is `pending` or `running` while the run is live, then the outcome's status; a row the
+Execution fields are under `run`; `steps`, `steps_page`, `explanation`, and `logs` are siblings.
+`run.status` is `pending` or `running` while the run is live, then the outcome's status; a row the
 server did not start reads as the database has it (`success`, `failed`, `cancelled`,
 `interrupted`). `triggered_by` is `api` for a run started over HTTP, `schedule` for a cron
 tick (with the tick in `scheduled_at`, RFC 3339 in UTC, and the scheduled node in
@@ -243,11 +248,20 @@ and an unknown run are `404`; a run still going is `409`. It reads the server's 
 DELETE /runs/{run_id}
 ```
 
-Cancels a pending or running run. Its Python workers are terminated, the results of steps
+Cancels a pending or running run owned by this server. Its Python workers are terminated, the results of steps
 that had already finished are kept, and the run ends `cancelled` (in its events, in
 `GET /runs/{run_id}` and in `barca history`). The response is
-`{ "run_id": "...", "status": "cancelling" }`. Cancelling a run that already finished returns
-`409`, and an unknown id `404`.
+`{ "run_id": "...", "status": "cancelling" }` while execution stops. A queued run,
+including one just requeued by drain, is durably removed and returns `"status": "cancelled"`;
+a restart cannot resume it. Partition-key and `batches_by` resolvers also stop on cancellation:
+after one second without responding to SIGTERM they are killed and reaped.
+Cancelling a run that already finished returns
+`409`, and an unknown id `404`. Run detail's `control` contains `cancellable`, a human-readable
+`owner`, and a nullable refusal `reason`. CLI-owned live runs return 409 explaining where to
+stop them; interrupted runs point to `barca history --reconcile`. A recorded process ID never
+grants the server cancellation authority. Write permissions are checked independently. The same
+`control` is included on run-list rows, queue entries, and node `running` objects, so clients can
+render Cancel without fetching each run's full detail.
 
 The run records why it was cancelled as `cancellation` (experimental): `by` is `request` (this
 route: the web UI's Cancel, or the first Ctrl-C of a `--server` client) or `shutdown`,
@@ -301,9 +315,9 @@ and `slowest`. The `counts` object gives planned steps and nodes, attempts, retr
 newest first. `limit` defaults to 100 and is bounded to 1–1000. It includes runs from the CLI,
 HTTP and the scheduler in this environment's local metadata DB, plus queued server runs. There
 is no source filter: a historical run remains visible even when its pipeline is no longer served.
-Each row has `first_failure`: `{ node_id, error }`, the run's first failed step (with its partition
+Each row has `failure`: `{ node, error }`, the run's first failed step (with its partition
 key) and the first line of its error, or `null` when no step failed. `error` is only a run-level
-error, so a run whose steps failed usually has `first_failure` and `error: null`. Each row
+error, so a run whose steps failed usually has `failure` and `error: null`. Each row
 also has `line` (experimental), the run in the words of a list row, computed by the server and
 printed as is by the web UI and by `barca history --json`: `{ steps, steps_detail, failure,
 failure_detail }` (`7 ok · 1 failed · 0 cached`; `stopped at orders · KeyError: 'region'`, or
@@ -317,12 +331,13 @@ the nodes it is working on now as `[{node_id, step, partitions}]` (see `running`
 panel lists them: `running` (the nodes executing, the one furthest from done first, each
 `{node_id, keys, share}`), `queued` (how many wait), `keys` (`{done, total}` over the
 partitioned nodes in flight, or `null`) and `groups` (`[{id, group, running, queued}]`, busiest
-first, each node under the group the rollup counts it in). Any other `status` is a `400`.
+first, each node under the group the rollup counts it in). Other supported filters are
+`pending`, `success`, `skipped`, `failed`, `cancelled`, `interrupted`, and
+`not_successful` (failed, cancelled, or interrupted); unknown statuses are a `400`.
 
-Each summary has `id` and `run_id` (the database run id), `handle` (the same id while the
-server keeps the run in memory, `null` otherwise), `command`, `files`, `target`, `status`,
+Each summary has `run_id` (the database run id), `command`, `files`, `target`, `status`,
 `triggered_by`, `scheduled_at`, `schedule_id`, UTC `started_at` and `finished_at`,
-`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, `error`, `first_failure` and
+`elapsed_seconds`, `steps_total`, `steps_executed`, `steps_cached`, `error`, `failure` and
 `line`; with `?status=running`, also `active_steps` and `now`.
 
 The UI's **Runs** view lists this history and shows what started each run; each run opens its
@@ -402,3 +417,34 @@ never an HTTP error: it is a run whose outcome is `failed`. The Python client ra
 
 Every route, with health, state, the run queue and scheduling, is on
 [Server API Endpoints](/reference/server-api-endpoints/).
+
+
+### Manual and paused inputs
+
+`POST /runs` accepts `include_manual` (boolean, default false). It brings Manual assets and
+upstream tasks up to date without forcing current cached results to recompute. `refresh_all`
+still hard-refreshes the cone including Manual nodes. Paused inputs stay held under both
+options; no readable result means failure instead of computing a paused input. `allow_paused`
+permits named paused targets only. Whole-file/project runs skip paused targets. Dry runs and
+queue recovery preserve the same rules.
+
+### Remote refresh acceptance
+
+`POST /ledger/lookup` additionally accepts `nodes: [BASE_ID, ...]` and returns `identities`
+when these historical partition identities were requested. `POST /ledger/refresh` accepts
+`{run_id, accepted_at, nodes}` (Unix seconds and planned step identities) and returns
+`{run_id}` after making older successes ineligible for ordinary reuse. Clients must wait for
+acceptance before computing. Invalid requests return 400, read-only servers 403, and draining
+servers 503. Retrying with the original acceptance time preserves later successes. Explicit
+pins and history remain readable. Verified ledger posts can replace invalidated successes;
+ordinary conflicting posts retain the existing digest checks.
+
+### Replay a run
+
+`POST /runs/{run_id}/replay` accepts `cache` (`original`, the default; `cached`; or
+`refresh_all`) and optional `step` (an exact recorded step id). It preserves the recorded
+partition scope, batch overrides, Manual/pause rules and tick semantics, with a new run id,
+caller identity and refresh cutoff. Selecting one step makes it the replay root, so an
+explicitly retried task executes while upstream tasks retain tick freshness. Run detail
+exposes `scope`; older history without it returns 409 instead of guessing missing options.
+The response is the same 202 run handle as `POST /runs`.

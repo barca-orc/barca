@@ -20,6 +20,8 @@ pub struct MaterializationRecord {
     /// `success` or `failed`.
     pub status: String,
     pub error_message: Option<String>,
+    #[serde(default)]
+    pub skip_reason: Option<String>,
     pub created_at: String,
     /// Rows of a successful tabular result, when its worker counted them (#925).
     #[serde(default)]
@@ -344,11 +346,42 @@ impl NodeAgesIndex {
         // One snapshot for the mark and the rows, so a row written in between is either in both
         // or in neither.
         conn.execute("BEGIN", ()).await.map_err(failure)?;
-        let result = self.read_in(&conn, db_path).await;
+        let result = super::read_activity::local_read(self.read_in(&conn, db_path));
         let _ = conn.execute("COMMIT", ()).await;
         if result.is_err() {
             // Partly folded in: the next read starts again from nothing.
             *self = Self::default();
+        }
+        if is_read_view(db_path)
+            && matches!(&result, Err(BarcaError::Db(msg)) if msg.contains("interrupted"))
+        {
+            // A cold full-history scan can exceed the live ReadView budget on
+            // every retry. Release its reader, then rebuild on a private image.
+            drop(conn);
+            drop(_h);
+            let dir = tempfile::tempdir()?;
+            let stage = tempfile::NamedTempFile::new_in(dir.path())?;
+            {
+                let mut copy =
+                    super::online_backup::Backup::open(Path::new(db_path), stage.path()).await?;
+                let first = copy.step()?;
+                super::snapshots::finish_backup(
+                    &mut copy,
+                    first,
+                    barca_model::process::Until::done(),
+                )
+                .await?;
+            }
+            let path = stage
+                .path()
+                .to_str()
+                .ok_or_else(|| BarcaError::Db("invalid private snapshot path".into()))?;
+            let (_db, private) = super::connect_read_only(path).await?;
+            // Publish the rebuilt index only after the private scan succeeds.
+            let mut rebuilt = Self::default();
+            let ages = rebuilt.read_in(&private, path).await?;
+            *self = rebuilt;
+            return Ok(ages);
         }
         result
     }
@@ -738,7 +771,7 @@ pub async fn node_histories(
     // One snapshot for the mark and the rows, so a row written in between is either in both
     // or in neither.
     conn.execute("BEGIN", ()).await.map_err(failure)?;
-    let result = index.read(&conn, db_path, base_ids).await;
+    let result = super::read_activity::local_read(index.read(&conn, db_path, base_ids));
     let _ = conn.execute("COMMIT", ()).await;
     result
 }
@@ -1077,16 +1110,23 @@ async fn reported_rows(
     ids: impl IntoIterator<Item = i64>,
 ) -> Result<HashMap<i64, ReportedRow>, BarcaError> {
     let failure = |e| BarcaError::Db(format!("failed to query materializations: {e}"));
+    let skip_reason = if schema::has_column(conn, "materializations", "skip_reason").await? {
+        "m.skip_reason"
+    } else {
+        "NULL"
+    };
     let ids: Vec<i64> = ids.into_iter().collect();
     let mut out = HashMap::with_capacity(ids.len());
     for chunk in ids.chunks(1000) {
         let list = serde_json::to_string(chunk).unwrap_or_else(|_| "[]".to_string());
         let mut rows = conn
             .query(
-                "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
+                &format!(
+                    "SELECT m.id, m.node_id, m.run_hash, m.artifact_path, m.artifact_format, \
                  m.artifact_size_bytes, m.elapsed_seconds, m.status, m.error_message, \
-                 m.created_at, m.output_hash, m.rows \
-                 FROM json_each(?1) j JOIN materializations m ON m.id = j.value",
+                 m.created_at, m.output_hash, m.rows, {skip_reason} \
+                 FROM json_each(?1) j JOIN materializations m ON m.id = j.value"
+                ),
                 [list],
             )
             .await
@@ -1107,6 +1147,7 @@ async fn reported_rows(
                         elapsed_seconds: row.get::<f64>(6).ok(),
                         status: opt(7).unwrap_or_else(|| "success".to_string()),
                         error_message: opt(8),
+                        skip_reason: opt(12),
                         created_at: row.get::<String>(9).unwrap_or_default(),
                         rows: row.get::<i64>(11).ok(),
                     },
@@ -1219,6 +1260,25 @@ pub(super) async fn query_i64(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn interrupted_age_scan_rebuilds_the_same_index_on_a_private_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        {
+            let (_handle, conn) = open_conn(&path).await.unwrap();
+            conn.execute("INSERT INTO materializations (node_id, status, rows) VALUES ('p.py:a', 'success', 7)", ()).await.unwrap();
+        }
+        let expected = node_ages(&path).await.unwrap();
+        assert!(expected.contains_key("p.py:a"));
+        let view = ReadView::open(&path).await.unwrap().unwrap();
+        let mut index = NodeAgesIndex::default();
+        crate::db::read_activity::EXPIRE_NEXT_AGE_READ.set(true);
+        assert_eq!(index.read(view.path()).await.unwrap(), expected);
+        assert!(!crate::db::read_activity::EXPIRE_NEXT_AGE_READ.get());
+        assert_eq!(index.read(view.path()).await.unwrap(), expected);
+    }
 
     /// A small deterministic generator, so a failing seed can be replayed.
     struct Lcg(u64);

@@ -1,5 +1,5 @@
 import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, type RunSettings } from '@/lib/api'
 
 /**
  * Trigger a cache-aware materialization of a single target
@@ -10,8 +10,8 @@ export function useTriggerGet() {
   const queryClient = useQueryClient()
   return useMutation({
     /** `{ target, allowPaused }` runs a paused target, after the operator confirmed it. */
-    mutationFn: (target: string | { target: string; allowPaused: boolean }) =>
-      typeof target === 'string' ? api.getTarget(target) : api.getTarget(target.target, target.allowPaused),
+    mutationFn: (target: string | { target: string; allowPaused: boolean; options?: RunSettings }) =>
+      typeof target === 'string' ? api.getTarget(target) : api.getTarget(target.target, target.allowPaused, target.options),
     onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ['runs'] }) },
   })
 }

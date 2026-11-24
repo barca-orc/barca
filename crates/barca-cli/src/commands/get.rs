@@ -30,6 +30,18 @@ pub(crate) async fn get_cmd(
     allow_paused: bool,
 ) -> Result<(), barca_service::BarcaError> {
     let mut cfg = barca_service::config::resolve(env)?;
+    if let Some(tier) = mode.cached_only {
+        let request = barca_service::cached::Request {
+            targets,
+            files: files.iter().map(|p| p.display().to_string()).collect(),
+            tier,
+            partition: partition.map(|p| p.to_json().to_string()),
+            values: mode.values,
+            url_expires: mode.url_expires,
+        };
+        let answer = barca_service::cached::get(&cfg, python, &request).await?;
+        return crate::print::print_cached(&answer, mode, fields);
+    }
     // The configured server's ledger, unless --local (RFC-0007 section 4.1).
     cfg.ledger = ledger.map(barca_service::ledger::Ledger::attach);
     // The server backs up the ledger; this machine backs up nothing (barca docs server-mode).

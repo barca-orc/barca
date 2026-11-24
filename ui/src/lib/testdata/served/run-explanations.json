@@ -466,7 +466,7 @@
         "not_reached_line": null,
         "not_reached_nodes": null,
         "ok": 19399,
-        "outcome": "19,399 ok · 3,879 left",
+        "outcome": "19,399 ok · 0 cached · 3,879 left",
         "planned": "23,278 steps planned",
         "ran": 19399,
         "retries": 62,
@@ -496,7 +496,7 @@
           "seconds": 212.3
         }
       ],
-      "steps": "19,399 ok · 3,879 left",
+      "steps": "19,399 ok · 0 cached · 3,879 left",
       "target_line": "revenue_daily",
       "target_outcomes": [],
       "targets": [
@@ -582,7 +582,7 @@
     "line": {
       "failure": null,
       "failure_detail": null,
-      "steps": "19,399 ok · 3,879 left",
+      "steps": "19,399 ok · 0 cached · 3,879 left",
       "steps_detail": "A step is one node, or one key of a partitioned node · 23,278 steps planned",
       "target": "revenue_daily",
       "target_count": 1
@@ -735,7 +735,7 @@
         "not_reached_line": null,
         "not_reached_nodes": null,
         "ok": 0,
-        "outcome": "0 ok · 23,278 left",
+        "outcome": "0 ok · 0 cached · 23,278 left",
         "planned": "23,278 steps planned",
         "ran": 0,
         "retries": null,
@@ -754,7 +754,7 @@
       },
       "requested_by": "schedule",
       "slowest": [],
-      "steps": "0 ok · 23,278 left",
+      "steps": "0 ok · 0 cached · 23,278 left",
       "target_line": "revenue_daily",
       "target_outcomes": [],
       "targets": [
@@ -771,7 +771,7 @@
     "line": {
       "failure": null,
       "failure_detail": null,
-      "steps": "0 ok · 23,278 left",
+      "steps": "0 ok · 0 cached · 23,278 left",
       "steps_detail": "A step is one node, or one key of a partitioned node · 23,278 steps planned",
       "target": "revenue_daily",
       "target_count": 1
@@ -795,6 +795,80 @@
       "triggered_by": "schedule"
     }
   },
+  "mostly cached in flight": {
+    "explanation": {
+      "attempts": null,
+      "cancellation": null,
+      "counts": {
+        "attempts": null,
+        "attempts_line": null,
+        "cached": 364,
+        "failed": 0,
+        "nodes": null,
+        "not_reached": 1,
+        "not_reached_line": null,
+        "not_reached_nodes": null,
+        "ok": 0,
+        "outcome": "0 ok · 364 cached · 1 left",
+        "planned": "365 steps planned",
+        "ran": 0,
+        "retries": null,
+        "steps": 365,
+        "units": "A step is one node, or one key of a partitioned node"
+      },
+      "outputs": [],
+      "progress": {
+        "cached": 364,
+        "done": 364,
+        "eta": null,
+        "eta_seconds": null,
+        "executed": 0,
+        "percent": 99,
+        "total": 365
+      },
+      "requested_by": "client",
+      "slowest": [],
+      "steps": "0 ok · 364 cached · 1 left",
+      "target_line": "revenue_daily",
+      "target_outcomes": [],
+      "targets": [
+        "pipeline.py:orders_clean",
+        "pipeline.py:revenue_daily"
+      ],
+      "why": {
+        "groups": [],
+        "headline": "No step decided to run yet.",
+        "omitted": 0,
+        "partial": true
+      }
+    },
+    "line": {
+      "failure": null,
+      "failure_detail": null,
+      "steps": "0 ok · 364 cached · 1 left",
+      "steps_detail": "A step is one node, or one key of a partitioned node · 365 steps planned",
+      "target": "revenue_daily",
+      "target_count": 1
+    },
+    "nodes": [],
+    "run": {
+      "attempts": null,
+      "cancellation": null,
+      "error": null,
+      "first_failure": null,
+      "job": "pipeline.py:orders_clean,pipeline.py:revenue_daily",
+      "plan_reasons": null,
+      "principal": null,
+      "retries": null,
+      "started_at": "2026-11-17T14:56:48Z",
+      "status": "running",
+      "steps_cached": 364,
+      "steps_executed": 0,
+      "steps_total": 365,
+      "target": "revenue_daily",
+      "triggered_by": "client"
+    }
+  },
   "queued": {
     "explanation": {
       "attempts": null,
@@ -809,7 +883,7 @@
         "not_reached_line": null,
         "not_reached_nodes": null,
         "ok": 0,
-        "outcome": "0 ok",
+        "outcome": "0 ok · 0 cached",
         "planned": "0 steps planned",
         "ran": 0,
         "retries": null,
@@ -828,7 +902,7 @@
       },
       "requested_by": "client",
       "slowest": [],
-      "steps": "0 ok",
+      "steps": "0 ok · 0 cached",
       "target_line": "revenue_daily",
       "target_outcomes": [],
       "targets": [
@@ -845,7 +919,7 @@
     "line": {
       "failure": null,
       "failure_detail": null,
-      "steps": "0 ok",
+      "steps": "0 ok · 0 cached",
       "steps_detail": "A step is one node, or one key of a partitioned node",
       "target": "revenue_daily",
       "target_count": 1
@@ -883,7 +957,7 @@
         "not_reached_line": null,
         "not_reached_nodes": null,
         "ok": 1,
-        "outcome": "1 ok · 2 left",
+        "outcome": "1 ok · 1 cached · 2 left",
         "planned": "4 steps planned",
         "ran": 1,
         "retries": null,
@@ -902,7 +976,7 @@
       },
       "requested_by": "client",
       "slowest": [],
-      "steps": "1 ok · 2 left",
+      "steps": "1 ok · 1 cached · 2 left",
       "target_line": "revenue_daily",
       "target_outcomes": [],
       "targets": [
@@ -919,7 +993,7 @@
     "line": {
       "failure": null,
       "failure_detail": null,
-      "steps": "1 ok · 2 left",
+      "steps": "1 ok · 1 cached · 2 left",
       "steps_detail": "A step is one node, or one key of a partitioned node · 4 steps planned",
       "target": "revenue_daily",
       "target_count": 1

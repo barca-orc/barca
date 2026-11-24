@@ -39,13 +39,13 @@ def test_served_runs_share_cadence_and_shutdown_covers_every_run(tmp_path, inter
             view = wait_until(
                 lambda run_id=run_id: (
                     doc
-                    if (doc := server.request("GET", f"/runs/{run_id}")[1])["status"]
-                    not in ("pending", "running", "queued")
+                    if (doc := server.request("GET", f"/runs/{run_id}")[1])["run"]["status"]
+                    not in ("pending", "running")
                     else None
                 ),
                 "served task completion",
             )
-            assert view["status"] == "success", view
+            assert view["run"]["status"] == "success", view
         routine = sorted(backups.glob("*.db"))
         assert len(routine) == (0 if interval == "off" else 1), server.stderr
         assert server.stop() == 0, server.stderr
@@ -132,7 +132,7 @@ def test_off_keeps_the_final_backup_task_and_its_deadline_for_a_stalled_upload(t
     try:
         run_id = server.request("POST", "/run/tick")[1]["run_id"]
         wait_until(
-            lambda: server.request("GET", f"/runs/{run_id}")[1]["status"] == "success",
+            lambda: server.request("GET", f"/runs/{run_id}")[1]["run"]["status"] == "success",
             "task completion",
         )
         assert not (hold / "backup.started").exists()

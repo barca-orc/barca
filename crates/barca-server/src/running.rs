@@ -306,6 +306,15 @@ pub(crate) fn by_node(
                 }
             });
             let entry = NodeRunning {
+                control: if run.from_queue {
+                    barca_service::outcome::RunControl::server(if run.pending {
+                        "pending"
+                    } else {
+                        "running"
+                    })
+                } else {
+                    barca_service::outcome::RunControl::elsewhere()
+                },
                 run_id: run.run_id.clone(),
                 triggered_by: run.triggered_by,
                 started_at: run.started_at.clone(),

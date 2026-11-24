@@ -1,3 +1,4 @@
+import { runNodeTitle } from '@/lib/runTarget'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTriggerNode } from './useTriggerNode'
@@ -16,6 +17,9 @@ export interface NodeRunAction {
   fire: (allowPaused?: boolean) => void
   /** `barca get <node> --partition <key>`: one key of a partitioned node, across its cone. */
   fireKey: (key: string) => void
+  includeManual: boolean
+  setIncludeManual: (value: boolean) => void
+  hardRefresh: (allowPaused?: boolean) => void
   /** The key whose run is being started, while the request is in flight. */
   startingKey: string | null
   triggering: boolean
@@ -31,13 +35,15 @@ export interface NodeRunAction {
 export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTopbar = true, scopes = true } = {}) {
   const [run, setRun] = useState<{ handle: string; nodeId: string | null } | null>(null)
   const onTrigger = useCallback((handle: string, nodeId: string) => setRun({ handle, nodeId }), [])
-  const trigger = useTriggerNode(node, onTrigger)
+  const [includeManual, setIncludeManual] = useState(false)
+  const options = useMemo(() => includeManual ? { include_manual: true } : {}, [includeManual])
+  const trigger = useTriggerNode(node, onTrigger, options)
   const stream = useRunStream(run?.handle ?? null)
   const client = useQueryClient()
   const { fire, fireFor, follow, dismiss, notice } = trigger
   const keyRun = useMutation({
     mutationFn: ({ id, key }: { id: string; key: string }) =>
-      api.startRun({ command: 'get', targets: [id], partition: partitionSelection(key) }),
+      api.startRun({ command: 'get', targets: [id], partition: partitionSelection(key), ...options }),
     onSuccess: (data, { id }) => {
       setRun({ handle: data.run_id, nodeId: id })
       follow(data.run_id, id)
@@ -46,6 +52,9 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   })
   const { mutate: mutateKey } = keyRun
   const fireKey = useCallback((key: string) => { if (node) mutateKey({ id: node.id, key }) }, [node, mutateKey])
+  const hardRefresh = useCallback((allowPaused = false) => {
+    if (node) fireFor(node, allowPaused, { refresh_all: true })
+  }, [node, fireFor])
   const triggering = trigger.isPending || keyRun.isPending || stream.running
   const onStarted = useCallback((handle: string) => {
     setRun({ handle, nodeId: null })
@@ -53,7 +62,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   }, [follow])
   const topbar = useTopbarRun({ node, show: showTopbar, scopes, fireNode: fire, busy: triggering, onStarted })
   const { readOnly, writes } = topbar
-  const title = writes === 'disabled' ? topbar.title : node ? `Run ${shortName(node.id)}` : topbar.title
+  const title = writes === 'disabled' ? topbar.title : node ? runNodeTitle(shortName(node.id), includeManual) : topbar.title
 
   useEffect(() => {
     if (!run || stream.running) return
@@ -78,7 +87,7 @@ export function useNodeRun(node: Pick<ListNode, 'id' | 'kind'> | null, { showTop
   }, [stream.running, stream.statuses, target])
   const liveStatus = node ? statuses[node.id] : undefined
   const action: NodeRunAction = {
-    fire, fireKey, startingKey: keyRun.isPending ? keyRun.variables.key : null,
+    fire, fireKey, includeManual, setIncludeManual, hardRefresh, startingKey: keyRun.isPending ? keyRun.variables.key : null,
     triggering, writes, readOnly, title, error: trigger.error ?? (keyRun.error as Error | null) ?? topbar.error,
     liveState: liveStatus ? liveGraphState(liveStatus) : undefined,
   }

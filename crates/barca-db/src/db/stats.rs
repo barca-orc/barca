@@ -99,7 +99,7 @@ pub async fn recent_durations(
     super::history::make_room(&mut kept, &key);
     let index = kept.entry(key).or_default();
     conn.execute("BEGIN", ()).await.map_err(failure)?;
-    let result = index.read(&conn, db_path, base_ids, window).await;
+    let result = super::read_activity::local_read(index.read(&conn, db_path, base_ids, window));
     let _ = conn.execute("COMMIT", ()).await;
     result
 }

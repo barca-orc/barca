@@ -22,6 +22,7 @@ import { startsLabel,
 
 function entry(run_id: string, over: Partial<QueueEntry> = {}): QueueEntry {
   return {
+    control: { cancellable: true, owner: 'this server', reason: null },
     run_id,
     status: 'pending',
     position: 1,
@@ -102,8 +103,8 @@ describe('queueStateLabel', () => {
 
 describe('labels', () => {
   it('counts the waiting runs', () => {
-    expect(queuedLabel(0)).toBe('nothing queued')
-    expect(queuedLabel(3)).toBe('3 queued')
+    expect(queuedLabel(0)).toBe('nothing pending')
+    expect(queuedLabel(3)).toBe('3 pending')
   })
 })
 
@@ -130,6 +131,7 @@ describe('queueRows', () => {
     ] }), iso, now)
     expect(rows.map((r) => r.runId)).toEqual(['r1', 'r2'])
     expect(rows[0]).toEqual({
+      control: entry('r1').control,
       runId: 'r1',
       state: 'waiting',
       position: '#1',
@@ -232,8 +234,8 @@ describe('healthQueueLabel', () => {
   it('notes waiting runs and a pause; nothing for an empty open queue', () => {
     expect(healthQueueLabel(undefined)).toBeNull()
     expect(healthQueueLabel({ paused: false, queued: 0, running: 1, max_runs: 4, capacity: null })).toBeNull()
-    expect(healthQueueLabel({ paused: false, queued: 3, running: 4, max_runs: 4, capacity: null })).toBe('3 queued')
-    expect(healthQueueLabel({ paused: true, queued: 3, running: 0, max_runs: 4, capacity: null })).toBe('3 queued · paused')
+    expect(healthQueueLabel({ paused: false, queued: 3, running: 4, max_runs: 4, capacity: null })).toBe('3 pending')
+    expect(healthQueueLabel({ paused: true, queued: 3, running: 0, max_runs: 4, capacity: null })).toBe('3 pending · paused')
     expect(healthQueueLabel({ paused: true, queued: 0, running: 0, max_runs: 4, capacity: null })).toBe('queue paused')
   })
 })

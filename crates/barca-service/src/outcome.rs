@@ -82,6 +82,10 @@ pub struct RunRequest {
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<Vec<String>>"))]
     pub refresh: Vec<String>,
+    /// Bring Manual assets up to date and run Manual upstream tasks too, without forcing cached results.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
+    pub include_manual: bool,
     /// `--refresh-all`.
     #[serde(default)]
     #[cfg_attr(feature = "ts", ts(optional, as = "Option<bool>"))]
@@ -148,6 +152,7 @@ impl RunRequest {
             files: Vec::new(),
             refresh: Vec::new(),
             refresh_all: false,
+            include_manual: false,
             cascade: true,
             dry_run: false,
             agent: false,
@@ -160,12 +165,25 @@ impl RunRequest {
         }
     }
 
+    /// Server requests hold pauses unless explicitly overridden, including after a restart.
+    pub fn rules(&self) -> crate::freshness::RunRules {
+        crate::freshness::RunRules {
+            pin_manual: !self.include_manual,
+            hold_paused: true,
+            allow_paused_targets: self.allow_paused,
+            ..crate::freshness::RunRules::request()
+        }
+    }
+
     /// The cache policy the flags ask for, as the CLI derives it.
     pub fn policy(&self) -> CachePolicy {
         if self.refresh_all {
-            CachePolicy::RefreshAll
+            CachePolicy::RefreshAll {
+                since: barca_model::time::now_secs_f64(),
+            }
         } else if !self.refresh.is_empty() {
             CachePolicy::RefreshSelective {
+                since: barca_model::time::now_secs_f64(),
                 names: self.refresh.clone(),
                 cascade: self.cascade,
             }
@@ -192,21 +210,21 @@ impl RunRequest {
 pub enum OutcomeStatus {
     /// Every target succeeded. The outcome is the `--json` stdout body.
     Success,
-    /// A step failed. The outcome is the failed-run stdout body plus `envelope`.
+    /// Tasks explicitly skipped without successful work.
+    Skipped,
+    /// Execution failed. Step failures also carry the failed-run stdout body.
     Failed,
     /// Cancelled. The outcome is `envelope` only.
     Cancelled,
-    /// barca or the request failed (`usage` or `infra`). The outcome is `envelope` only.
-    Error,
 }
 
 impl OutcomeStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             OutcomeStatus::Success => "success",
+            OutcomeStatus::Skipped => "skipped",
             OutcomeStatus::Failed => "failed",
             OutcomeStatus::Cancelled => "cancelled",
-            OutcomeStatus::Error => "error",
         }
     }
 }
@@ -215,7 +233,7 @@ impl OutcomeStatus {
 ///
 /// - `success`: the exact `barca get --json` / `barca run --json` body;
 /// - `failed`: the CLI's failed-run stdout body plus `envelope`, the stderr error envelope;
-/// - `cancelled`, `error`: `{"status", "envelope"}`.
+/// - `cancelled`, or `failed` before step execution: `{"status", "envelope"}`.
 ///
 /// Kept as text, not a parsed value, so the order of a multi-target run's `targets` (the order
 /// they were given in) is what the client prints.
@@ -228,7 +246,13 @@ impl Outcome {
     pub fn from_text(text: impl Into<String>) -> Result<Self, String> {
         let raw = RawValue::from_string(text.into()).map_err(|e| e.to_string())?;
         let outcome = Self(raw);
-        outcome.parsed()?;
+        let mut value = outcome.parsed()?;
+        // Old metadata used `error` for infrastructure and request failures. Preserve the
+        // envelope (and its exit code), but expose the same status as new executions.
+        if value["status"] == "error" {
+            value["status"] = Value::String("failed".into());
+            return Ok(Self::of_text(value.to_string()));
+        }
         Ok(outcome)
     }
 
@@ -255,7 +279,7 @@ impl Outcome {
             .get("status")
             .and_then(Value::as_str)
             .ok_or_else(|| "an outcome has a string `status`".to_string())?;
-        if !["success", "failed", "cancelled", "error"].contains(&status) {
+        if !["success", "skipped", "failed", "cancelled", "error"].contains(&status) {
             return Err(format!("unknown outcome status '{status}'"));
         }
         Ok(value)
@@ -336,7 +360,7 @@ impl Outcome {
             }
             (ErrorKind::StepFailed, None) => Self::ended(OutcomeStatus::Failed, &envelope),
             (ErrorKind::Cancelled, _) => Self::ended(OutcomeStatus::Cancelled, &envelope),
-            _ => Self::ended(OutcomeStatus::Error, &envelope),
+            _ => Self::ended(OutcomeStatus::Failed, &envelope),
         }
     }
 
@@ -356,9 +380,10 @@ impl Outcome {
             .and_then(|v| v["status"].as_str())
         {
             Some("success") => OutcomeStatus::Success,
+            Some("skipped") => OutcomeStatus::Skipped,
             Some("failed") => OutcomeStatus::Failed,
             Some("cancelled") => OutcomeStatus::Cancelled,
-            _ => OutcomeStatus::Error,
+            _ => OutcomeStatus::Failed,
         }
     }
 
@@ -371,7 +396,7 @@ impl Outcome {
     /// The exit code a local run ending this way exits with.
     pub fn exit_code(&self) -> i32 {
         match self.status() {
-            OutcomeStatus::Success => 0,
+            OutcomeStatus::Success | OutcomeStatus::Skipped => 0,
             _ => self
                 .envelope()
                 .map_or(ErrorKind::Infra.exit_code(), |e| e.code()),
@@ -421,7 +446,14 @@ impl Outcome {
         let status = self.status();
         let multi = value.get("targets").is_some();
         let rendered = match status {
-            OutcomeStatus::Cancelled | OutcomeStatus::Error => RenderedOutput::default(),
+            OutcomeStatus::Cancelled => RenderedOutput::default(),
+            OutcomeStatus::Failed
+                if envelope
+                    .as_ref()
+                    .is_some_and(|e| e.kind != ErrorKind::StepFailed) =>
+            {
+                RenderedOutput::default()
+            }
             _ if multi => {
                 #[derive(Deserialize)]
                 struct Targets {
@@ -458,7 +490,7 @@ impl Outcome {
                 let returned = returned_of(target.and(value.get("final_output")));
                 report::render_get_body(&value, target, &returned, get_shape(mode), fields)
             }
-            OutcomeStatus::Success => {
+            OutcomeStatus::Success | OutcomeStatus::Skipped => {
                 let target = targets.first().map(String::as_str);
                 // The body says `null` both for a run with no value and for a target whose
                 // value is `None`; only a run with a target has one.
@@ -543,15 +575,94 @@ impl<'de> Deserialize<'de> for OrderedMap {
     }
 }
 
+/// Whether the answering server owns cancellation of this run. Process identity is
+/// descriptive only: the server never signals a PID read from history.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunControl {
+    pub cancellable: bool,
+    /// `this server`, a recorded process description, or `unknown`.
+    pub owner: String,
+    /// Why cancellation is unavailable; null when this server can cancel it.
+    pub reason: Option<String>,
+}
+
+impl RunControl {
+    /// A live run owned elsewhere: detailed identity is available on its run page.
+    pub fn elsewhere() -> Self {
+        Self {
+            cancellable: false,
+            owner: "another process".into(),
+            reason: Some(
+                "This server does not own this run. Open run details for its owner.".into(),
+            ),
+        }
+    }
+
+    /// Authority while a server holds a run, and its terminal refusal afterwards.
+    pub fn server(status: &str) -> Self {
+        let cancellable = matches!(status, "pending" | "running");
+        Self {
+            cancellable,
+            owner: if cancellable {
+                "this server"
+            } else {
+                "not running"
+            }
+            .into(),
+            reason: (!cancellable).then(|| format!("The run already finished ({status}).")),
+        }
+    }
+}
+
+/// How a replay changes the original request's cache policy.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(rename_all = "snake_case")]
+pub enum ReplayCache {
+    #[default]
+    Original,
+    Cached,
+    RefreshAll,
+}
+
+/// Replay a recorded request, optionally narrowed to one recorded step.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRequest {
+    #[serde(default)]
+    pub cache: ReplayCache,
+    #[serde(default)]
+    pub step: Option<String>,
+}
+
 /// One run as `GET /runs/{run_id}` shows it: what started it, where it is, and, once it has
 /// finished, its [`Outcome`]. A finished run is read from the metadata DB, so it is the same
 /// after the server restarts.
 #[derive(Clone, Debug, Serialize)]
 #[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
-pub struct RunView {
+pub struct RunInfo {
+    /// Exact request; null for older history whose scope cannot be replayed safely.
+    pub scope: Option<crate::run_scope::RunScope>,
+    pub control: RunControl,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub skip_reason: Option<String>,
+    /// Stopped server executions, oldest first, with ids for their own logs and steps.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub previous_attempts: Vec<crate::db::runs::RunAttempt>,
+    /// Original request id, on a retained stopped execution only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(type = "number | null", optional))]
+    pub run_attempt: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_reason: Option<String>,
     /// The database run id, the one `barca history` shows.
     pub run_id: String,
-    /// `pending`, `running`, `success`, `failed`, `cancelled`, `error` or `interrupted`.
+    /// `pending`, `running`, `success`, `failed`, `cancelled` or `interrupted`.
     pub status: String,
     /// `get` or `run`.
     pub command: String,
@@ -606,17 +717,25 @@ pub struct RunView {
     /// finished (it is not recorded with the run). Experimental.
     #[serde(default)]
     pub queue: Option<QueuePlace>,
-    /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
-    /// from its attempts, its targets as a list and what became of them, and how far a run in
-    /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
-    /// Experimental.
-    pub explanation: crate::run_explanation::RunExplanation,
     /// The run's full result once it finished; `null` while it runs, and for runs not started
     /// through `barca serve`.
     #[cfg_attr(feature = "ts", ts(type = "Record<string, unknown> | null"))]
     pub outcome: Option<Outcome>,
     /// The first error of the run, in one line, for a list or a page title.
     pub error: Option<String>,
+}
+
+/// The shared run-detail envelope. Facts about the execution live under `run`; step
+/// pagination and the explanation remain siblings, as in `barca history RUN_ID --json`.
+#[derive(Clone, Debug, Serialize)]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS), ts(export))]
+pub struct RunView {
+    pub run: RunInfo,
+    /// The run in words (#956): its steps grouped by the reason they ran, its retries apart
+    /// from its attempts, its targets as a list and what became of them, and how far a run in
+    /// progress is. The same object as `explanation` of `barca history RUN_ID --json`.
+    /// Experimental.
+    pub explanation: crate::run_explanation::RunExplanation,
     /// Each step the run recorded, then each step it streamed and has not recorded yet: at
     /// most `?limit=N` of them (default 1000, failed recorded steps first), every one with
     /// `?all=true`.
@@ -630,20 +749,21 @@ pub struct RunView {
 impl<'a> From<&'a RunView> for crate::run_explanation::RunFacts<'a> {
     fn from(r: &'a RunView) -> Self {
         crate::run_explanation::RunFacts {
-            status: &r.status,
-            target: r.target.as_deref(),
-            job: r.job.as_deref(),
-            triggered_by: r.triggered_by,
-            principal: r.principal.as_deref(),
-            attempts: r.attempts,
-            retries: r.retries,
-            steps_total: r.steps_total,
-            steps_executed: r.steps_executed,
-            steps_cached: r.steps_cached,
+            status: &r.run.status,
+            target: r.run.target.as_deref(),
+            job: r.run.job.as_deref(),
+            triggered_by: r.run.triggered_by,
+            principal: r.run.principal.as_deref(),
+            attempts: r.run.attempts,
+            retries: r.run.retries,
+            steps_total: r.run.steps_total,
+            steps_executed: r.run.steps_executed,
+            steps_cached: r.run.steps_cached,
             steps_failed: None,
-            started_at: &r.started_at,
-            plan_reasons: r.plan_reasons.as_ref(),
-            cancellation: r.cancellation.as_ref(),
+            steps_skipped: None,
+            started_at: &r.run.started_at,
+            plan_reasons: r.run.plan_reasons.as_ref(),
+            cancellation: r.run.cancellation.as_ref(),
         }
     }
 }
@@ -813,6 +933,34 @@ mod tests {
     }
 
     #[test]
+    fn legacy_infrastructure_outcomes_keep_their_cause_and_exit_code() {
+        let ctx = Context {
+            command: "get",
+            files: vec![],
+        };
+        let current = Outcome::of_error(BarcaError::Usage("invalid target".into()), &ctx);
+        let mut legacy: Value = serde_json::from_str(current.text()).unwrap();
+        legacy["status"] = Value::String("error".into());
+        let restored = Outcome::from_text(legacy.to_string()).unwrap();
+        assert_eq!(restored.status(), OutcomeStatus::Failed);
+        assert_eq!(restored.exit_code(), 2);
+        let normalized: Value = serde_json::from_str(restored.text()).unwrap();
+        assert_eq!(normalized["status"], "failed");
+        assert_eq!(normalized["envelope"], legacy["envelope"]);
+        let (output, error) = restored
+            .render(
+                RunCommand::Get,
+                &["invalid".into()],
+                ResultFormat::Json,
+                false,
+                None,
+            )
+            .unwrap();
+        assert_eq!(rendered(&output), rendered(&RenderedOutput::default()));
+        assert_eq!(error.unwrap().kind, ErrorKind::Usage);
+    }
+
+    #[test]
     fn cancels_and_errors_carry_only_the_envelope() {
         let ctx = Context {
             command: "get",
@@ -822,7 +970,7 @@ mod tests {
         assert_eq!(cancelled.status(), OutcomeStatus::Cancelled);
         assert_eq!(cancelled.exit_code(), 130);
         let usage = Outcome::of_error(BarcaError::Usage("no such thing".into()), &ctx);
-        assert_eq!(usage.status(), OutcomeStatus::Error);
+        assert_eq!(usage.status(), OutcomeStatus::Failed);
         assert_eq!(usage.exit_code(), 2);
         let value: Value = serde_json::from_str(usage.text()).unwrap();
         assert_eq!(value["envelope"]["kind"], "usage");
@@ -859,7 +1007,7 @@ mod tests {
             CachePolicy::RefreshSelective { cascade: false, .. }
         ));
         request.refresh_all = true;
-        assert!(matches!(request.policy(), CachePolicy::RefreshAll));
+        assert!(matches!(request.policy(), CachePolicy::RefreshAll { .. }));
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"get","invented":1}"#).is_err());
         assert!(serde_json::from_str::<RunRequest>(r#"{"command":"sql"}"#).is_err());
         assert_eq!(

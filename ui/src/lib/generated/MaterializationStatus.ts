@@ -6,4 +6,4 @@
  * key's attempts. The fields themselves are strings, served as the row recorded them; this
  * is their vocabulary, for a reader that switches on it.
  */
-export type MaterializationStatus = "success" | "failed";
+export type MaterializationStatus = "success" | "skipped" | "failed";

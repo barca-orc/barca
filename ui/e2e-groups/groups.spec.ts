@@ -140,7 +140,8 @@ test('groups open worst first, a sort is kept in the URL, and rows read by their
   const check = page.getByRole('row', { name: /check__clean_rows/ })
   await expect(check.locator('.barca-cause')).toHaveAttribute('data-cause', 'no_refresh_path')
   await expect(check).toContainText('no refresh path')
-  await expect(check).toContainText('no estimate: no refresh path')
+  await expect(check.locator('.barca-estimate')).toHaveText('no estimate')
+  await expect(check).not.toContainText('no estimate: no refresh path')
   await expect(page.getByRole('columnheader', { name: 'Fresh by' })).toBeVisible()
   await expect(page.getByRole('columnheader', { name: 'Last success' })).toHaveCount(0)
   await expect(check.locator('.barca-dag[data-failed], .barca-tag[data-tone="failed"]')).toHaveCount(0)
@@ -322,9 +323,9 @@ for (const view of ['list', 'graph']) {
   })
 }
 
-// `queued`, not `running`: a node runs when a worker holds its step (#1042), and until the run
+// `pending`, not `running`: a node runs when a worker holds its step (#1042), and until the run
 // reports on it the row says only that the click was taken.
-test('the grouped list shows an accepted run as queued before the first stream event arrives', async ({ page }) => {
+test('the grouped list shows an accepted run as pending before the first stream event arrives', async ({ page }) => {
   let release!: () => void
   const held = new Promise<void>((resolve) => { release = resolve })
   await page.route(/\/runs\/[^/]+\/events$/, async (route) => {
@@ -337,9 +338,9 @@ test('the grouped list shows an accepted run as queued before the first stream e
     await page.getByRole('complementary', { name: 'summary details' }).getByRole('button', { name: 'Run', exact: true }).click()
     expect((await started).status()).toBe(202)
     const row = page.getByRole('row').filter({ hasText: 'summary' })
-    await expect(row).toContainText('queued')
+    await expect(row).toContainText('pending')
     await expect(row).not.toContainText('running')
-    await expect(page.getByRole('complementary', { name: 'summary details' })).toContainText('queued')
+    await expect(page.getByRole('complementary', { name: 'summary details' })).toContainText('pending')
     // The breadcrumb's root is the open pipeline.
     await page.getByRole('navigation', { name: 'Group breadcrumb' }).getByRole('button', { name: FILE, exact: true }).click()
     // A group's counts are the server's (the rollup's entry), never the page's own tally of the

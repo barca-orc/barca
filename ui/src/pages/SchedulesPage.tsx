@@ -1,10 +1,12 @@
 import { useNavigate, useSearchParams } from "react-router";
 import { useAssets } from "@/hooks/useAssets";
-import { useAssetStates } from "@/hooks/useAssetStates";
+import { useQuery } from "@tanstack/react-query";
+import { api } from "@/lib/api";
+import { recovering } from "@/hooks/polling";
 import { useHealth } from "@/hooks/useHealth";
 import { usePageTopbarRun } from "@/hooks/useTopbarRun";
 import { useToggleSchedulePause } from "@/hooks/useSchedule";
-import { pipelineName } from "@/lib/pipeline";
+import { inPipeline, pipelineName } from "@/lib/pipeline";
 import { remote } from "@/lib/remote";
 import { PageRunButton } from "@/components";
 import { SchedulesView } from "./SchedulesView";
@@ -12,12 +14,19 @@ import { SchedulesView } from "./SchedulesView";
 /** The Schedules page's server data, as `SchedulesView` shows it. */
 export function SchedulesPage() {
   const assets = useAssets();
-  const { data: states, dataUpdatedAt } = useAssetStates();
+  const [params] = useSearchParams();
+  const pipeline = params.get("pipeline");
+  const targets = assets.data?.filter((a) => a.schedule && inPipeline(a.id, pipeline)).map((a) => a.id) ?? [];
+  const { data: states, dataUpdatedAt } = useQuery({
+    queryKey: ['state', { targets }],
+    queryFn: ({ signal }) => targets.length ? api.state({ targets }, signal) : Promise.resolve([]),
+    enabled: !!assets.data,
+    refetchInterval: recovering(10_000),
+    retry: false,
+  });
   const health = useHealth();
   const toggle = useToggleSchedulePause();
   const navigate = useNavigate();
-  const [params] = useSearchParams();
-  const pipeline = params.get("pipeline");
   const { scopeRun } = usePageTopbarRun((handle) => navigate(`/runs?run=${encodeURIComponent(handle)}`));
 
   const open = (id: string) => {

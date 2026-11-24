@@ -1437,3 +1437,21 @@ fn a_fresh_retry_is_one_attempt_beyond_retries_once() {
     );
     assert!(c.is_finished());
 }
+
+#[test]
+fn worker_failure_diagnostics_keep_first_cause_with_bounded_copies() {
+    use barca_model::run_explain::{WORKER_ERROR_BYTES, WORKER_FAILURE_LIMIT};
+    let mut c = Coordinator::new();
+    c.record_worker_failure(ItemId(0), "original");
+    c.record_worker_failure(ItemId(0), "secondary");
+    for n in 1..WORKER_FAILURE_LIMIT + 10 {
+        c.record_worker_failure(ItemId(n as u64), &"x".repeat(WORKER_ERROR_BYTES * 2));
+    }
+    assert_eq!(c.worker_failures().len(), WORKER_FAILURE_LIMIT);
+    assert_eq!(c.worker_failures()[&ItemId(0)], "original");
+    assert!(
+        c.worker_failures()
+            .values()
+            .all(|error| error.len() <= WORKER_ERROR_BYTES)
+    );
+}

@@ -1,6 +1,6 @@
 # The `.barca/` directory
 
-Status: implemented. Specification version: 2 (#800; `serve.sock`, #1056).
+Status: implemented. Specification version: 3 (#800; `serve.sock`, #1056).
 Scope: every path barca creates under a project's `.barca/`, which process owns it (creates
 and removes it), and whether `barca gc` and the cache size budget (`[cache] max_size`) count
 it. What the files contain is owned elsewhere: the metadata DB by
@@ -30,6 +30,28 @@ Everything else is shared by the project's environments.
 - **Evicted by `barca gc`** lists what eviction may delete (the tiers in `barca docs disk`). Everything else stays until its owner removes it or the user deletes it.
 - A name not in this table is not written by barca. Tests may create other files; barca
   measures them (as `other`) and never deletes them.
+
+## Cache eviction target
+
+`[cache] max_size` is an eviction target, not admission control or a hard disk cap (#1054,
+owner decision 2026-11-22). Unknown writes and protected bytes may overshoot without a fixed
+bound. Over-target automatic passes reconsider all older superseded generations and current
+protections, even with active runs and queued work; unchanged size is not evidence that an
+old protection still holds. Deletion remains bounded per pass and respects the same safety
+rules as manual GC. A later pass retries unfinished eligible work.
+
+Completed passes expose `pressure` in GC JSON and the latest completed pass in server health
+(`cache.pressure`, null initially). Budgeted bytes exclude backups. Protected reasons are
+disjoint, while eligible bytes are the planning observation less actual deletions. Pending
+bytes identify selected work left unfinished; overshoot measures remaining budget above the
+configured limit. A completed pass still over the limit warns immediately even if it freed
+nothing. The fields and meanings are documented in `barca docs disk`; the wire schema is in
+[server-api.openapi.yaml](server-api.openapi.yaml). This changes no staging or reader ownership.
+
+Conformance: `checkpoint_revisits_old_generations_when_busy_run_protections_change` and
+`pressure_accounts_for_protections_and_unfinished_backlog` in the GC tests, and
+`test_periodic_gc_revisits_released_generations_with_a_busy_queue` in
+`python/tests/test_cache_limit.py` (real server, CLI, overlapping readers and live staging).
 
 ## Top-level entries
 

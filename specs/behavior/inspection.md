@@ -41,7 +41,15 @@ are interchangeable statuses.
 The server caches inspected graphs, metadata snapshots and status results. Source and DB
 stamps, dynamic-key revalidation and background status refresh determine reuse. Inspection
 ETags permit HTTP revalidation; a 304 means that representation is unchanged, not that
-upstream external data was polled again.
+upstream external data was polled again. JSON responses support gzip negotiation with
+`Accept-Encoding: gzip`; validators are weak because compression changes representation
+bytes, and `Vary: Accept-Encoding` distinguishes encodings. The UI polls the rollup and
+visible table rows; changes to per-node rollup facts refresh the scope used for sorting and
+filtering. Hidden tabs do not poll.
+
+The key explorer's `empty=1` filter keeps keys with a recorded zero row count from their
+latest attempt, when it succeeded, (including stale results); unknown counts do not match. It combines
+with the other key filters before pagination. The Rows column distinguishes zero from unknown.
 
 Each `GET /state` row carries `last_success_at`, `failing_since` and `consecutive_failures`, from
 the node's materialization rows with partition keys folded into their base id. An attempt is a
@@ -221,6 +229,16 @@ Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [signal rules](../../crates/barca-analysis/src/health.rs), the
 [per-key row facts](../../crates/barca-db/src/db/history.rs) and
 [schedule slots](../../crates/barca-decide/src/schedule.rs).
+
+The #1044 HTTP/UI checks use a [reproducible equivalent fixture](../../ui/scripts/audit1044-fixture.py)
+and [live transfer/layout harness](../../ui/scripts/audit1044-measure.mjs). The original audit
+project was not preserved. A [plain 616-node uncompressed baseline](../../docs/engineering/evidence/1044/transfer-before.json)
+and the [initial request-scope failure](../../docs/engineering/evidence/1044/initial-acceptance-failure.json)
+are retained rather than replacing failed measurements with later results. The
+[embedded-UI measurement](../../docs/engineering/evidence/1044/production-result.json) records
+first-load bytes separately from each 30-second idle window, with a 500,000-byte idle limit.
+The [lifecycle integration recheck](../../docs/engineering/evidence/1044/integration-result.json)
+repeats those checks after the 0.47 run-contract changes.
 
 ## Open questions and gaps
 

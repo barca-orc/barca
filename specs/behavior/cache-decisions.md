@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 7. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
+Specification version: 10. Status: implemented; the concurrent-version ordering gap is tracked in [freshness](freshness.md).
 Scope: what a cache decision may rely on (complete upstream hashes, conservative dependency provenance), the order in which a
 run's results become durable, and when a run without a recorded outcome is reported as
 `interrupted`. The user-facing description is `barca docs cache`
@@ -77,7 +77,7 @@ What still differs between the prediction and a run, by design:
 | --- | --- | --- | --- |
 | The held node itself | `cached`, detail `Manual and stale: ...` or reason `pinned` | the same; it is never a target | its own state (`stale` when it moved on) |
 | Nodes above a held node | not planned | not planned | decided |
-| A node paused with `barca pause` | recomputed when it is read; refused as a target without `--allow-paused` | read as it is; skipped as a target | as a request: what is below a stale paused node is `stale`, and the tick's outcome is `last_check` ([health](health.md), "Last check") |
+| A node paused with `barca pause` | local requests recompute inputs; server requests hold them even under refresh and refuse paused targets without `--allow-paused` | read as it is; skipped as a target | as a local request: what is below a stale paused node is `stale`, and the tick's outcome is `last_check` ([health](health.md), "Last check") |
 | A task other than the scheduled one | runs | fires only when it is out of date | `always_runs` |
 | A sensor | polled | polled | `always_runs`; what reads it is predicted from its last recorded output |
 | A partitioned `Manual` node | computed | computed | computed (it is not held) |
@@ -189,6 +189,10 @@ run hash (`cutoff` does not count in its definition):
   and everything below it, `unknown` (`cutoff_pending`); it never predicts a hit or a miss for it.
 - A `--refresh` cascade does not pass a cutoff asset, and a consumer cached through one carries
   no `--no-cascade` warning: its hash already holds the bytes the refresh wrote.
+- Without cascade, a cached partitioned consumer carries the refreshed upstream's warning
+  just as an unpartitioned consumer does. Report once per node, not per key or worker chunk,
+  and propagate the warning through cached consumers to downstream fan-ins. A dry run
+  preserves the warning in its node report; a cutoff boundary still stops propagation.
 - A dict `partitions_from` source with `cutoff` contributes each key's value hash with the
   constant `cutoff` in place of its run hash.
 - In the dependency cone, a cutoff asset reached by name (a consumer's parameter named after
@@ -208,14 +212,16 @@ cutoff bytes preserve downstream cache hits. Complete fan-ins read every domain 
 validation/recovery computes missing or stale siblings or blocks publication on failure.
 Batching operates on the due keys. `--partition` retains its existing narrowing semantics.
 Conformance: `python/tests/test_keyed_refresh.py` (CLI and server, warm sets, cutoffs, batching,
-complete publication, invalid keys and missing siblings).
+complete publication, invalid keys and missing siblings), and
+`python/tests/test_refresh_clarity.py` (partitioned no-cascade warnings, downstream fan-ins,
+dry-run parity and warning deduplication across worker chunks).
 
 ### Recording progress
 
 - A completed local result is queued for recording after its artifact is completely written.
   With a remote artifact store it is queued only after its upload is confirmed; an unfinished
   upload is never recorded as reusable progress.
-- One recorder owns mid-run writes and commits queued rows at most twice a second. A batch
+- One recorder owns mid-run materialization writes and commits queued rows at most twice a second. A batch
   commits its successful step rows and the running run's progress count in one transaction;
   replaying a batch does not duplicate rows or count a step twice.
 - A failed batch is retained and retried at the same half-second interval, even when no further
@@ -226,6 +232,18 @@ complete publication, invalid keys and missing siblings).
   history and the previous run state (normally unfinished), and records no terminal outcome
   for a partially written ledger. Captured output is written separately, after the outcome
   transaction.
+
+### Live cached progress
+
+A run publishes its absolute cached-step count after each phase decision and before dispatch,
+including fresh keys represented by compact proofs. Expansion counts logical steps/keys,
+not decorated nodes. A later phase adds only its own decisions; seeding a proven key does not
+count it twice. A needed missing artifact retracts its cache hit before recomputation starts.
+The progress write preserves the recorder's executed count and cannot modify a terminal run.
+A restarted attempt starts with its own counts. Unreached phases are never inferred cached.
+CLI progress, history, server run lists/details and UI progress count decided cache reuse as
+completed work; no materialization is invented for it. Counts may decrease during artifact
+recovery, and totals may grow as dynamic keys become known.
 
 ### Explaining a run's executions
 
@@ -313,6 +331,7 @@ Conformance: cache decision tests in [cache.rs](../../crates/barca-decide/src/ca
 [unproven decorators](../../python/tests/test_decorator_names_not_barcas.py),
 [progress recording](../../python/tests/test_incremental_persist.py),
 [progress counts](../../python/tests/test_progress_counts.py),
+[live cached progress and recovery](../../python/tests/test_live_cached_progress.py),
 [terminal outcomes](../../python/tests/test_terminal_persist.py),
 early cutoff in [cache.rs](../../crates/barca-decide/src/cache.rs) (`cutoff_tests`),
 [cone.rs](../../crates/barca-python/src/cone.rs)
@@ -338,3 +357,47 @@ The concurrent-version ordering gap remains documented in [freshness](freshness.
 Ordered current selection, shared computation ownership and bounded full-domain retained
 state are approved requirements in [ownership](current-state-and-execution.md), not proved
 by the current cache engine or its warm incremental benchmarks.
+
+### Refresh acceptance boundary (#928)
+
+A refresh-all or selective refresh retains its original acceptance time across queue attempts.
+For each global asset or partition key selected by refresh/cascade, a success for its current
+run hash recorded at or after acceptance satisfies refresh. A result another run produced after
+acceptance qualifies. Failed rows, old hashes and earlier results do not. Cascade roots remain
+remembered even when their refresh is already satisfied; cutoff propagation stays unchanged.
+A fully cached step satisfied by this rule reports `refreshed_by_this_run`.
+
+Success timestamps preserve fractional seconds; legacy whole-second timestamps are accepted
+without rounding acceptance down. Tasks outside ticks and sensors can repeat after restart;
+this is not an exactly-once promise for side effects.
+
+Conformance: `python/tests/test_refresh_restart.py` drives real drain/restart requests and
+new CLI refreshes; `db::cache_reader::observation_tests::refresh_acceptance_is_precise_and_requires_matching_success`
+checks same-second before/equal/after, legacy timestamps, hash mismatch and failure controls.
+
+### Durable refresh invalidation
+
+A refresh supersedes pre-acceptance successes in its planned scope before execution starts,
+including blocked downstream phases. Ordinary single, batched and grouped cache lookups
+exclude those rows. A cache-aware retry cannot resurrect them after failure or restart;
+new successful results and results at or after the original acceptance boundary remain
+eligible. Retrying the same invalidation does not invalidate these later successes.
+Incremental proofs are scoped to a refresh-invalidation revision as well as appended history;
+a kill before any new result is recorded cannot preserve a pre-refresh proof. Incremental
+bulk reads exclude invalidated rows just like ordinary cache lookups.
+
+Scope follows partition-aligned refresh and cascade rules, cutoff boundaries, held nodes,
+explicit pins and request selection. No-cascade and out-of-cone consumers are not invalidated.
+Historical dynamic identities may be reconstructed from aligned consumers when upstream
+history was pruned; a pruned intermediate must not hide an old downstream fan-in. Explicit
+pins still read the historical rows.
+
+A remote-ledger client obtains historical identities from the server and must receive durable
+invalidation acceptance before computation. It discards and reloads pre-invalidation lookup
+answers. A verified post can replace an invalidated ledger result; ordinary conflicting
+posts still obey the ledger's digest rules. Unsupported acceptance fails before computation.
+This does not resolve the concurrent-version ordering gap tracked in freshness.
+
+Conformance: `python/tests/test_refresh_failure_retry.py`,
+`refresh_invalidations_survive_reopen_and_agree_across_lookup_paths`, and the ledger OpenAPI
+conformance test.

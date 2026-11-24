@@ -1,3 +1,5 @@
+import { RunOptions } from '@/components/RunOptions'
+import { manualInScope } from '@/lib/runTarget'
 import { actionWords } from '@/lib/causesView'
 import { keysHref } from '@/lib/keysPage'
 import { useEffect, useMemo, useState } from 'react'
@@ -126,6 +128,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
 
   const pausedSet = usePausedSet()
   const runGuard = usePausedRunGuard(node.id, runAction.fire)
+  const refreshGuard = usePausedRunGuard(node.id, runAction.hardRefresh)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose()
@@ -158,6 +161,9 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
         </>
       }
     >
+          {runAction.writes !== 'hidden' && <RunOptions includeManual={runAction.includeManual}
+            onIncludeManual={runAction.setIncludeManual} onRefresh={refreshGuard.onRun}
+            manualNames={manualInScope(graph, node.id)} disabled={runAction.writes === 'disabled' || runAction.triggering} />}
       <div className="barca-node-summary">
         {/* The state as the server says it, its reason verbatim, and the last attempt as its own fact. */}
         <div className="barca-state-line">
@@ -570,6 +576,7 @@ export function NodePanel({ node, nodes, graph, nowMs, onSelect, onOpenGraph, on
       <BlastRadius id={node.id} states={byId} paused={pausedSet} onSelect={onSelect} />
       </>}
       {runGuard.dialog}
+      {refreshGuard.dialog}
     </SidePanel>
   )
 }

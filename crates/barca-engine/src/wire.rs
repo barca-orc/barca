@@ -203,10 +203,10 @@ pub(crate) fn decode_results(
                     }
                     json!({"type":status,"node_id":ids[index],"artifact":detail})
                 }
-                "step_error" | "blocked" => {
+                "step_error" | "step_skipped" | "blocked" => {
                     detail["type"] = json!(status);
                     detail["node_id"] = ids[index].clone();
-                    if status == "step_error" {
+                    if matches!(status, "step_error" | "step_skipped") {
                         detail["elapsed"] = elapsed[index].clone();
                     }
                     detail

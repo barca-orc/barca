@@ -27,9 +27,9 @@ pub struct Proof {
     pub selected: HashMap<String, String>,
 }
 
-pub fn key(cfg: &barca_model::config::ResolvedConfig) -> String {
+pub fn key(cfg: &barca_model::config::ResolvedConfig, revision: i64) -> String {
     format!(
-        "freshness-v3:{:x}",
+        "freshness-v4:{revision}:{:x}",
         Sha256::digest(serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap())
     )
 }

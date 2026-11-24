@@ -56,6 +56,7 @@ def test_a_server_holds_its_connection_through_backups_trims_kills_and_a_restore
             "1",
             "--seconds",
             "20",
+            "--wait-for-coverage",
             "--kills",
             "1",
             "--limit-mb",
@@ -74,7 +75,7 @@ def test_a_server_holds_its_connection_through_backups_trims_kills_and_a_restore
         timeout=SERVE,
         check=False,
     )
-    assert out.returncode == 0, out.stderr[-4000:]
+    assert out.returncode == 0, out.stderr[-4000:] + "\n" + out.stdout[-6000:]
     done = json.loads(report.read_text())
     assert done["errors"] == [], done["errors"]
     counts = done["counts"]
@@ -94,6 +95,7 @@ def test_a_server_holds_its_connection_through_backups_trims_kills_and_a_restore
     assert done["clean stop"]["warnings from the next commands"] == []
 
 
+@pytest.mark.timeout(180)
 def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
     """`GET /runs` counts the runs and then lists them, and a run recorded between the two was
     listed without being counted: `total: 18` over 19 rows, `truncated: false`."""
@@ -101,40 +103,63 @@ def test_a_run_list_never_counts_fewer_runs_than_it_lists(tmp_path, serve):
     server = serve("--max-runs", "4", "--timezone", "utc")
     stop = threading.Event()
     torn: list[str] = []
-    samples_ready = threading.Event()
     sample_lock = threading.Lock()
     polls = 0
+    completed = 0
+    errors: list[str] = []
+
+    def enough() -> None:
+        # Both reads and writes must make progress; a fast reader alone is no coverage.
+        if polls > 100 and completed >= 20:
+            stop.set()
 
     def submit() -> None:
+        nonlocal completed
         while not stop.is_set():
-            server.request(
+            status, body = server.request(
                 "POST", "/runs", {"command": "get", "targets": ["last"], "refresh_all": True}
             )
+            assert status == 202, body
+            # Backpressure: two live producers, not an unbounded queue whose size depends
+            # on machine speed (the old loop accumulated >11,000 pending runs).
+            done = server.finished(body["run_id"])
+            assert done["run"]["status"] == "success", done
+            with sample_lock:
+                completed += 1
+                enough()
 
     def poll() -> None:
         nonlocal polls
         while not stop.is_set():
             status, listing = server.request("GET", "/runs?limit=1000")
-            if status != 200:
-                continue
+            assert status == 200, listing
             with sample_lock:
                 polls += 1
-                if polls > 100:
-                    samples_ready.set()
-            if listing["total"] < len(listing["runs"]):
-                torn.append(f"total {listing['total']} over {len(listing['runs'])} rows")
+                if listing["total"] < len(listing["runs"]):
+                    torn.append(f"total {listing['total']} over {len(listing['runs'])} rows")
+                enough()
 
-    threads = [threading.Thread(target=submit) for _ in range(2)]
-    threads += [threading.Thread(target=poll) for _ in range(4)]
+    def checked(work) -> None:
+        try:
+            work()
+        except Exception as error:  # Propagate worker failures to the test, not a warning.
+            with sample_lock:
+                errors.append(repr(error))
+            stop.set()
+
+    threads = [threading.Thread(target=checked, args=(submit,)) for _ in range(2)]
+    threads += [threading.Thread(target=checked, args=(poll,)) for _ in range(4)]
     for thread in threads:
         thread.start()
-    # Keep the original load window, extending it on slow runners to collect enough lists.
-    stop.wait(8)
-    samples_ready.wait(timeout=52)
-    stop.set()
-    for thread in threads:
-        thread.join()
-    assert polls > 100, polls
+    try:
+        stop.wait(60)
+    finally:
+        stop.set()
+        for thread in threads:
+            thread.join(timeout=65)  # server.finished has a bounded 60-second wait.
+    assert not any(thread.is_alive() for thread in threads), "traffic did not stop"
+    assert not errors, errors
+    assert polls > 100 and completed >= 20, (polls, completed)
     assert not torn, f"{len(torn)} of {polls} lists: {torn[:3]}"
 
 
@@ -160,3 +185,66 @@ def test_a_run_list_stays_prompt_beside_the_runs_a_server_remembers(tmp_path, se
     assert (listing["total"], len(listing["runs"])) == (2000, 50)
     median = sorted(took)[len(took) // 2]
     assert median < 0.5, f"GET /runs?limit=50 took {median * 1000:.0f} ms beside 2000 finished runs"
+
+
+@pytest.mark.parametrize("phase", ["", "kill"])
+def test_a_broken_event_stream_is_only_expected_during_a_stop(tmp_path, monkeypatch, phase):
+    """An abruptly killed chunked response raises HTTPException, not OSError."""
+    import http.client
+    import random
+    import runpy
+    import urllib.request
+    from argparse import Namespace
+
+    harness_type = runpy.run_path(str(SCRIPT))["Harness"]
+    harness = harness_type(
+        Namespace(barca=_find_binary(), limit_mb=6, backup_secs=2, trace=False, quiet=True),
+        tmp_path,
+    )
+    monkeypatch.setattr(harness, "submit", lambda *args, **kwargs: "run")
+    monkeypatch.setattr(harness, "follow", lambda *args, **kwargs: None)
+
+    def broken(*args, **kwargs):
+        raise http.client.IncompleteRead(b"partial event")
+
+    monkeypatch.setattr(urllib.request, "urlopen", broken)
+    if phase:
+        harness.enter(phase)
+    # Random(4)'s second draw takes the event-stream path.
+    harness.api_runs(random.Random(4))
+    if phase:
+        assert not harness.problems
+        assert sum(harness.explained.values()) == 1
+    else:
+        assert len(harness.problems) == 1
+        assert "IncompleteRead" in harness.problems[0]["detail"]
+        assert harness.problems[0]["class"] == "unexplained"
+
+
+@pytest.mark.parametrize("reason,errors", [("refreshed_by_this_run", 0), ("cache_hit", 1)])
+def test_local_refresh_check_requires_evidence_for_reused_steps(reason, errors):
+    """The stress check counts post-acceptance reuse, but rejects ordinary old cache hits."""
+    import random
+    import runpy
+    from types import SimpleNamespace
+
+    harness_type = runpy.run_path(str(SCRIPT))["Harness"]
+    harness = object.__new__(harness_type)
+    harness.pause_writers = threading.Event()
+    harness.lock = threading.Lock()
+    harness.local_runs = {}
+    harness.now = lambda: 0
+    problems = []
+    harness.problem = lambda *args: problems.append(args)
+    done = {
+        "run_id": "local-refresh",
+        "status": "success",
+        "steps_executed": 12,
+        "steps": [
+            {"id": node, "status": "cached", "reason": reason}
+            for node in ("pipeline.py:base", "pipeline.py:total", "pipeline.py:last")
+        ],
+    }
+    harness.cli = lambda *args: SimpleNamespace(stdout=json.dumps(done), stderr="")
+    harness.local_gets(random.Random(1))  # selects the whole 15-step pipeline
+    assert len(problems) == errors, problems

@@ -28,12 +28,20 @@ For parquet and CSV artifacts, the annotation on the *consuming* parameter selec
 | `pd.DataFrame` / `pandas.DataFrame` | pandas `DataFrame` |
 | `pl.DataFrame` / `polars.DataFrame` | polars `DataFrame` |
 | `pl.LazyFrame` / `polars.LazyFrame` | polars `LazyFrame` scanning the parquet file (lazy read) |
-| `pyarrow.Table` | pyarrow `Table` |
+| `pa.Table` / `pyarrow.Table` | pyarrow `Table` |
+| `ds.Dataset` / `pyarrow.dataset.Dataset` | pyarrow Dataset over local parquet files (downloaded first when only in the store) |
 | `duckdb.DuckDBPyRelation` | duckdb relation over the parquet file (lazy read) |
 
 The same upstream parquet can be read differently by different consumers. Annotations are
 parsed statically, so use the conventional names above (`pd`, `pl`, `pyarrow`, `duckdb`).
 json and pickle artifacts ignore annotations.
+
+Optional forms (`T | None`, `None | T`, `Optional[T]`, `Union[T, None]`, including
+`typing.Optional` and `typing.Union`) select the same reader as `T`. This also applies inside
+`list[T]` collect inputs and `dict[str, T]` batched inputs, and to quoted annotations. For
+example, `list[ds.Dataset] | None` still receives a list of Datasets. An optional annotation
+does not change input wiring: use `inputs=` to bind a parameter with a default value.
+Unions of different non-None types are not classified as a specific reader.
 
 **Lazy inputs read only what the step uses.** The eager readers load the whole file. A
 `pl.LazyFrame` or duckdb relation reads nothing up front: the query the step builds decides

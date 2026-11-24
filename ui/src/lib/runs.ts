@@ -6,7 +6,7 @@ import { shortName } from './graph'
 import type { ErrorEnvelope, RunNodeSummary, RunOutcome, RunViewStatus, StatusKind, TriggeredBy } from './types'
 
 const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
-  'pending', 'running', 'success', 'failed', 'cancelled', 'error', 'interrupted',
+  'pending', 'running', 'success', 'skipped', 'failed', 'cancelled', 'interrupted',
 ]
 
 /**
@@ -15,6 +15,7 @@ const RUN_VIEW_STATUSES: readonly RunViewStatus[] = [
  * older spellings of `success`.
  */
 export function parseRunStatus(status: string): RunViewStatus | null {
+  if (status === 'error') return 'failed'
   if (status === 'complete' || status === 'ran') return 'success'
   return (RUN_VIEW_STATUSES as readonly string[]).includes(status) ? (status as RunViewStatus) : null
 }
@@ -30,7 +31,8 @@ export function runStatus(status: string): StatusKind {
     .with('pending', () => 'queued')
     .with('running', () => 'running')
     .with('success', () => 'success')
-    .with('failed', 'error', () => 'failed')
+    .with('skipped', () => 'skipped')
+    .with('failed', () => 'failed')
     // Stopped by the operator or a server shutdown: inert, not an error.
     .with('cancelled', 'interrupted', () => 'cancelled')
     .exhaustive()
@@ -44,6 +46,11 @@ export function isSuccess(status: string): boolean {
   return status === 'success'
 }
 
+/** Whether an attempt explicitly skipped producing a result. */
+export function isSkipped(status: string): boolean {
+  return status === 'skipped'
+}
+
 /** Whether one recorded execution failed. A status that is neither is not counted as either. */
 export function isFailure(status: string): boolean {
   return status === 'failed'
@@ -54,14 +61,14 @@ export function runIsWaiting(status: string): boolean {
   return parseRunStatus(status) !== 'running'
 }
 
-/** The status of a tick's run in the page's words: a run that waits for a run slot is `queued`. */
+/** The canonical status of a tick's run. */
 export function lastStatusLabel(status: string): string {
-  return status === 'pending' ? 'queued' : status
+  return parseRunStatus(status) ?? status
 }
 
 /** The error envelope of an outcome that is not a success; null for a success or no outcome. */
 export function outcomeEnvelope(outcome: RunOutcome | null): ErrorEnvelope | null {
-  return outcome && outcome.status !== 'success' ? outcome.envelope : null
+  return outcome && 'envelope' in outcome ? outcome.envelope : null
 }
 
 /** The glyph of a run's status. */
@@ -77,6 +84,7 @@ export function stepGlyph(status: string): Glyph {
 /** `3,077 keys · 40 failed · 7 calls`. */
 export function runNodeLine(n: RunNodeSummary): string {
   const parts = [`${n.keys.toLocaleString()} key${n.keys === 1 ? '' : 's'}`]
+  if (n.skipped) parts.push(`${n.skipped.toLocaleString()} skipped`)
   if (n.failed) parts.push(`${n.failed.toLocaleString()} failed`)
   if (n.calls) parts.push(`${n.calls.toLocaleString()} call${n.calls === 1 ? '' : 's'}`)
   return parts.join(' · ')
@@ -96,12 +104,13 @@ export function runNodeOutcome(n: RunNodeSummary): { kind: StatusKind; label: st
   if (n.status === 'skipped') {
     return { kind: 'skipped', label: 'skipped', detail: n.blocked_by ? `upstream ${shortName(n.blocked_by)} failed` : 'the run stopped before it' }
   }
-  return { kind: n.failed ? 'failed' : 'success', label: runNodeLine(n), detail: null }
+  const skipped = n.skipped ?? 0
+  return { kind: n.failed ? 'failed' : skipped === n.keys && skipped > 0 ? 'skipped' : 'success', label: runNodeLine(n), detail: null }
 }
 
 export function runLabel(status: string): string {
   const known = parseRunStatus(status)
-  return known === 'pending' ? 'queued' : known ?? status
+  return known ?? status
 }
 
 /** The runs list's poll: every 2s while a listed run is live (its status changes), else every 10s. */
@@ -156,7 +165,7 @@ function parseEnvelope(value: unknown): ErrorEnvelope | null {
 export function parseOutcome(raw: Record<string, unknown> | null | undefined): RunOutcome | null {
   if (!raw) return null
   const status = raw.status
-  if (status === 'success') {
+  if (status === 'success' || status === 'skipped') {
     return {
       status,
       run_id: typeof raw.run_id === 'string' ? raw.run_id : '',
@@ -175,7 +184,7 @@ export function parseOutcome(raw: Record<string, unknown> | null | undefined): R
 export function outcomeResult(outcome: RunOutcome | null): unknown {
   if (outcome === null) return undefined
   return match(outcome)
-    .with({ status: 'success' }, (o) => o.final_output ?? o.targets)
+    .with({ status: 'success' }, { status: 'skipped' }, (o) => o.final_output ?? o.targets)
     .with({ status: 'failed' }, { status: 'cancelled' }, { status: 'error' }, () => undefined)
     .exhaustive()
 }
@@ -184,4 +193,14 @@ export function outcomeResult(outcome: RunOutcome | null): unknown {
 export function runTime(value: string | null, zone: TimeZone): string {
   if (!value) return '–'
   return formatAbsolute(value, zone)
+}
+
+/** Show control or ownership guidance for live runs and abandoned executions. */
+export function showRunControl(status: string): boolean {
+  return runIsLive(status) || parseRunStatus(status) === 'interrupted'
+}
+
+/** A node badge says queued only while its run waits for a slot. */
+export function runningIsQueued(step: string): boolean {
+  return step === 'queued'
 }

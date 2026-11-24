@@ -17,7 +17,7 @@ pub enum StepStatus {
     Ran,
     /// A partitioned step with some keys cached and the others run.
     Partial,
-    /// Planned but not run: a step it depends on failed, or the run stopped first.
+    /// Explicitly skipped by task code, or not run because an upstream failed/skipped or the run stopped.
     Skipped,
     /// A target blocked on a Manual node that has never been computed.
     Blocked,
@@ -36,6 +36,7 @@ pub enum StepStatus {
 #[serde(rename_all = "snake_case")]
 pub enum MaterializationStatus {
     Success,
+    Skipped,
     Failed,
 }
 

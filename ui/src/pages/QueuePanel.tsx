@@ -3,6 +3,7 @@ import { Link } from 'react-router'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Age, Button, IconButton, StatusBadge, StatusGlyph, Tag } from '@/components'
+import { CancelRun } from '@/components/RunActions'
 import { useQueue, useToggleQueuePause } from '@/hooks/useQueue'
 import { useTimeZone } from '@/context/timeZone'
 import { ApiError } from '@/lib/api'
@@ -102,7 +103,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
     <section className="barca-queue" aria-label="Queue" data-collapsed={collapsed || undefined}>
       <div className="barca-queue-bar">
         {listed > 0
-          ? <IconButton size="sm" label={collapsed ? 'Show the queued runs' : 'Hide the queued runs'} aria-expanded={!collapsed} onClick={() => onCollapse(!collapsed)}>
+          ? <IconButton size="sm" label={collapsed ? 'Show the pending runs' : 'Hide the pending runs'} aria-expanded={!collapsed} onClick={() => onCollapse(!collapsed)}>
             {collapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </IconButton>
           : null}
@@ -157,8 +158,8 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
           </table>
         )}
         {rows.length > 0 && (
-          <table className="barca-table barca-queue-table barca-queue-runs" aria-label="Queued runs">
-            <thead><tr><th>Place</th><th>Run</th><th>Target</th><th>Trigger</th><th>Queued</th><th className="num" title="How long it has run, or waited to start">Elapsed</th><th title="When a waiting run is expected to start: the server's estimate, from the typical run time of the runs ahead of it">Starts</th></tr></thead>
+          <table className="barca-table barca-queue-table barca-queue-runs" aria-label="Pending runs">
+            <thead><tr><th>Place</th><th>Run</th><th>Target</th><th>Trigger</th><th>Accepted</th><th className="num" title="How long it has run, or waited to start">Elapsed</th><th title="When a waiting run is expected to start: the server's estimate, from the typical run time of the runs ahead of it">Starts</th><th>Actions</th></tr></thead>
             <tbody>{rows.map(row => (
               <tr key={row.runId} data-state={row.state}>
                 <td>{row.state === 'running'
@@ -170,6 +171,7 @@ export function QueuePanelView({ queue: data, loadError, onRetry, readOnly, pend
                 <td>{row.queuedAt ? <Age at={row.queuedAt} nowMs={nowMs} /> : '–'}</td>
                 <td className="num" title={row.state === 'running' ? 'Running for' : 'Waiting for'}>{row.elapsed}</td>
                 <td data-starts>{row.starts ?? <span className="barca-cell-sub">–</span>}</td>
+                <td><CancelRun id={row.runId} queued={row.state === 'waiting'} control={row.control} /></td>
               </tr>
             ))}</tbody>
           </table>

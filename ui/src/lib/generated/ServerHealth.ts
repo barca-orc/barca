@@ -5,6 +5,7 @@ import type { HealthQueue } from "./HealthQueue";
 import type { HealthStatus } from "./HealthStatus";
 import type { LoadError } from "./LoadError";
 import type { SchedulerLiveness } from "./SchedulerLiveness";
+import type { WalCheckpoint } from "./WalCheckpoint";
 
 /**
  * `GET /health`: liveness (or `draining`), the versions a client checks, the environment and
@@ -36,7 +37,11 @@ load_errors: Array<LoadError>,
 /**
  * Why the metadata DB cannot be used, while it cannot; `null` otherwise.
  */
-metadata_error: string | null, queue: HealthQueue,
+metadata_error: string | null,
+/**
+ * Last periodic WAL checkpoint on this writable server.
+ */
+metadata_wal: WalCheckpoint | null, queue: HealthQueue,
 /**
  * `barca serve --read-only`: run and cancel endpoints are refused.
  */

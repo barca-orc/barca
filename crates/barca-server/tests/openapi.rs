@@ -283,7 +283,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
         validator(schema);
     }
     // Prove the conformance boundary rejects missing fields, unknown keys and invented states.
-    let v = validator(&json!({"$ref":"#/components/schemas/RunState"}));
+    let v = validator(&json!({"$ref":"#/components/schemas/RunView"}));
     assert!(!v.is_valid(&json!({"handle":"r","status":"pending"})));
     assert!(!v.is_valid(&json!({"handle":"r","status":"queued","result":null,"error":null,"started_at":1.0,"finished_at":null})));
     let step = validator(&json!({"$ref":"#/components/schemas/StepReport"}));
@@ -369,6 +369,13 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     );
     assert!(!accepted.is_valid(&json!({"run_id":"r","status":"pending","position":2})));
     let mut unusable = ok.clone();
+    let mut checkpoint = ok.clone();
+    checkpoint["metadata_wal"] = json!({"wal_bytes": 80000000, "threshold_bytes": 67108864,
+        "over_threshold": true, "measured_at": "2026-11-21T12:00:00.000Z", "busy": true, "frames": 900, "checkpointed": 80,
+        "blocker": "blocked by a reader outside this process"});
+    assert!(health.is_valid(&checkpoint));
+    checkpoint["metadata_wal"]["frames"] = json!("unknown");
+    assert!(!health.is_valid(&checkpoint));
     unusable["metadata_error"] = json!("the metadata DB .barca/metadata.db cannot be used: x");
     assert!(health.is_valid(&unusable));
     unusable["metadata_error"] = json!(1);
@@ -402,6 +409,8 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     assert!(
         request.is_valid(&json!({"command":"get","targets":["a"],"values":true,"partition":"k=a"}))
     );
+    assert!(request.is_valid(&json!({"command":"run","targets":["task"],"include_manual":true})));
+    assert!(!request.is_valid(&json!({"command":"run","include_manual":"yes"})));
     assert!(!request.is_valid(&json!({"command":"sql"})));
     assert!(!request.is_valid(&json!({"command":"get","invented":1})));
     let load_error = validator(&json!({"$ref":"#/components/schemas/LoadError"}));
@@ -444,7 +453,7 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
             ok: false,
             outcome: Some(
                 serde_json::value::RawValue::from_string(
-                    json!({"status":"error","envelope":{"error":"x","code":3,"kind":"infra","remediation":null}}).to_string(),
+                    json!({"status":"failed","envelope":{"error":"x","code":3,"kind":"infra","remediation":null}}).to_string(),
                 )
                 .unwrap(),
             ),
@@ -583,6 +592,7 @@ async fn inspection_methods_errors_read_only_and_ui_match_contract() {
         ("POST", "/get/first", "/get/{target}"),
         ("DELETE", "/run/missing", "/run/{target}"),
         ("DELETE", "/runs/missing", "/runs/{run_id}"),
+        ("POST", "/runs/missing/replay", "/runs/{run_id}/replay"),
         ("POST", "/schedule/missing/pause", "/schedule/{id}/pause"),
         ("POST", "/schedule/missing/resume", "/schedule/{id}/resume"),
         ("POST", "/state/reset", "/state/reset"),
@@ -657,7 +667,9 @@ async fn wait(router: &Router, handle: &str) -> Value {
                 200,
             )
             .await;
-            if ["complete", "failed", "cancelled"].contains(&state["status"].as_str().unwrap()) {
+            if ["success", "skipped", "failed", "cancelled", "interrupted"]
+                .contains(&state["run"]["status"].as_str().unwrap())
+            {
                 return state;
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
@@ -699,7 +711,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     );
     drop(stream);
     let complete = wait(&router, &handle).await;
-    assert_eq!(complete["status"], "complete");
+    assert_eq!(complete["run"]["status"], "success");
     checked(&router, "GET", "/state", "/state", 200).await;
     checked(
         &router,
@@ -710,7 +722,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     checked(&router, "GET", "/assets/second", "/assets/{name}", 200).await;
-    let durable = complete["result"]["run_id"].as_str().unwrap();
+    let durable = complete["run"]["run_id"].as_str().unwrap();
     checked(
         &router,
         "GET",
@@ -731,7 +743,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &task).await["status"], "complete");
+    assert_eq!(wait(&router, &task).await["run"]["status"], "success");
     let logs = checked(
         &router,
         "GET",
@@ -789,12 +801,15 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &broken).await["status"], "failed");
+    assert_eq!(wait(&router, &broken).await["run"]["status"], "failed");
     // The run list names the failed step, and the node's row says how late it is.
     let runs = checked(&router, "GET", "/runs", "/runs", 200).await;
     let rows = runs["runs"].as_array().unwrap();
-    let failure = &rows.iter().find(|r| r["id"] == broken.as_str()).unwrap()["first_failure"];
-    assert!(failure["node_id"].as_str().unwrap().ends_with(":broken"));
+    let failure = &rows
+        .iter()
+        .find(|r| r["run_id"] == broken.as_str())
+        .unwrap()["failure"];
+    assert!(failure["node"].as_str().unwrap().ends_with(":broken"));
     assert_eq!(failure["error"], "ValueError: expected contract failure");
     // The activity is counted over the window, whatever `limit` lists (#991).
     let one = checked(&router, "GET", "/runs?limit=1", "/runs", 200).await;
@@ -845,7 +860,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     )
     .await;
     assert_eq!(failed["total"], 1);
-    assert_eq!(failed["runs"][0]["id"], broken.as_str());
+    assert_eq!(failed["runs"][0]["run_id"], broken.as_str());
     assert_eq!(failed["activity"]["total"]["runs"], 1);
     assert_eq!(failed["activity"]["search"], "BROKEN");
     assert_eq!(
@@ -1013,7 +1028,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
     let detail = checked(&router, "GET", "/assets/slow", "/assets/{name}", 200).await;
     assert_eq!(detail["running"]["run_id"], slow.as_str());
     let in_flight = checked(&router, "GET", "/runs?status=running", "/runs", 200).await;
-    assert_eq!(in_flight["runs"][0]["id"], slow.as_str());
+    assert_eq!(in_flight["runs"][0]["run_id"], slow.as_str());
     assert!(in_flight["runs"][0]["active_steps"].is_array());
     assert_eq!(in_flight["activity"]["statuses"], json!(["running"]));
     assert_eq!(in_flight["activity"]["total"]["in_progress"], 1);
@@ -1046,7 +1061,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+    assert_eq!(wait(&router, &slow).await["run"]["status"], "cancelled");
     // The run contract: POST /runs, its stream, its outcome, its output.
     for (body, status) in [
         (json!({"command":"get","targets":["missing"]}), 404),
@@ -1121,7 +1136,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(view["outcome"], finished["outcome"]);
+    assert_eq!(view["run"]["outcome"], finished["outcome"]);
     checked(
         &router,
         "GET",
@@ -1260,9 +1275,9 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         200,
     )
     .await;
-    assert_eq!(detail["status"], "success");
+    assert_eq!(detail["run"]["status"], "success");
     assert_eq!(
-        detail["outcome"]["status"], "success",
+        detail["run"]["outcome"]["status"], "success",
         "the outcome survives a restart"
     );
     assert!(!detail["steps"].as_array().unwrap().is_empty());
@@ -1287,7 +1302,7 @@ async fn actual_runs_events_failure_cancel_and_restart_match_contract() {
         "GET",
         &format!("/status/{handle}"),
         "/status/{run_id}",
-        404,
+        200,
     )
     .await;
     checked(&restarted, "GET", "/runs?limit=10000", "/runs", 200).await;
@@ -1349,8 +1364,8 @@ async fn partial_and_empty_graph_health_and_run_admission_match_contract() {
     }));
     let handle = checked(&router, "POST", "/run", "/run", 200).await;
     assert_eq!(
-        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
-        "complete"
+        wait(&router, handle["run_id"].as_str().unwrap()).await["run"]["status"],
+        "success"
     );
     std::fs::write(&source, "def broken(: pass\n").unwrap();
     let empty = app(cfg.clone());
@@ -1446,8 +1461,8 @@ async fn declared_asset_name_matches_schema_state_and_get_target() {
     );
     let handle = checked(&router, "POST", "/get/published", "/get/{target}", 200).await;
     assert_eq!(
-        wait(&router, handle["run_id"].as_str().unwrap()).await["status"],
-        "complete"
+        wait(&router, handle["run_id"].as_str().unwrap()).await["run"]["status"],
+        "success"
     );
 }
 
@@ -1498,7 +1513,7 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
     )
     .await;
     assert_eq!(
-        (&waiting["status"], &waiting["waiting_for"]),
+        (&waiting["run"]["status"], &waiting["run"]["waiting_for"]),
         (&json!("pending"), &json!("restart"))
     );
     assert_eq!(queue["running"], json!([]));
@@ -1535,7 +1550,7 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
         200,
     )
     .await;
-    assert_eq!(cancelled["status"], "cancelling");
+    assert_eq!(cancelled["status"], "cancelled");
     let run = checked(
         &router,
         "GET",
@@ -1544,9 +1559,9 @@ async fn a_draining_server_queues_runs_for_the_next_start_and_says_so_on_health(
         200,
     )
     .await;
-    assert_eq!(run["status"], "cancelled", "{run}");
+    assert_eq!(run["run"]["status"], "cancelled", "{run}");
     assert_eq!(
-        run["waiting_for"],
+        run["run"]["waiting_for"],
         Value::Null,
         "an ended run waits for nothing"
     );
@@ -1606,7 +1621,7 @@ async fn queue_pause_and_resume_match_contract() {
             .is_none()
     );
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     assert!(
         barca_service::serve::run_queue::list(&db)
             .await
@@ -1677,7 +1692,7 @@ async fn a_run_queued_last_matches_contract() {
         200,
     )
     .await;
-    assert_eq!(run["queue"], "last");
+    assert_eq!(run["run"]["queue"], "last");
     // The description the metadata DB keeps says so, and nothing for the default.
     let db = dir.path().join("metadata.db").display().to_string();
     let rows = barca_service::serve::run_queue::list(&db).await.unwrap();
@@ -1699,7 +1714,7 @@ async fn a_run_queued_last_matches_contract() {
     checked(&router, "POST", "/queue/resume", "/queue/resume", 200).await;
     for run in [&next, &last] {
         let done = wait(&router, run["run_id"].as_str().unwrap()).await;
-        assert_eq!(done["status"], "complete", "{done}");
+        assert_eq!(done["run"]["status"], "success", "{done}");
     }
     // Not recorded with the finished run.
     let run = checked(
@@ -1710,7 +1725,7 @@ async fn a_run_queued_last_matches_contract() {
         200,
     )
     .await;
-    assert_eq!(run["queue"], Value::Null);
+    assert_eq!(run["run"]["queue"], Value::Null);
 }
 
 #[tokio::test]
@@ -1756,11 +1771,16 @@ async fn schedule_pause_and_resume_match_contract() {
         200,
     )
     .await;
-    let until = timed["paused_until"].as_i64().unwrap();
+    let until = chrono::DateTime::parse_from_rfc3339(timed["paused_until"].as_str().unwrap())
+        .unwrap()
+        .timestamp();
     let now = chrono::Utc::now().timestamp();
     assert!((7190..=7210).contains(&(until - now)), "{timed}");
     let pauses = checked(&router, "GET", "/pauses", "/pauses", 200).await;
-    assert_eq!(pauses["schedules"][0]["until"], until, "{pauses}");
+    assert_eq!(
+        pauses["schedules"][0]["until"], timed["paused_until"],
+        "{pauses}"
+    );
     assert!(
         pauses["schedules"][0]["id"]
             .as_str()
@@ -1872,8 +1892,64 @@ async fn ledger_lookup_and_post_match_contract() {
     assert_eq!(history["runs"][0]["client_run_id"], "c-1");
     assert_eq!(history["runs"][0]["triggered_by"], "client");
 
+    let identity_lookup = json!({"hashes": [], "nodes": ["pipeline.py:first"]});
+    let (status, body) = request_json(&router, "POST", "/ledger/lookup", identity_lookup).await;
+    assert_eq!(status, 200);
+    validate(&response("/ledger/lookup", 200), &body);
+    assert!(body["identities"].is_array());
+    let refresh = json!({"run_id": "refresh-client", "accepted_at": 2_000_000_000.0, "nodes": ["pipeline.py:first"]});
+    validate(
+        &contract()["paths"]["/ledger/refresh"]["post"]["requestBody"]["content"]["application/json"]
+            ["schema"],
+        &refresh,
+    );
+    for _ in 0..2 {
+        let (status, body) =
+            request_json(&router, "POST", "/ledger/refresh", refresh.clone()).await;
+        assert_eq!(status, 200, "{body}");
+        validate(&response("/ledger/refresh", 200), &body);
+        assert_eq!(body["run_id"], "refresh-client");
+    }
+    let (_, body) = request_json(
+        &router,
+        "POST",
+        "/ledger/lookup",
+        json!({"hashes": [{"node_id": "pipeline.py:first", "run_hash": "h1"}]}),
+    )
+    .await;
+    assert_eq!(body["results"][0]["exists"], false);
+    let (status, body) = request_json(
+        &router,
+        "POST",
+        "/ledger/refresh",
+        json!({"run_id": "", "accepted_at": 0, "nodes": []}),
+    )
+    .await;
+    assert_eq!(status, 400);
+    validate(&response("/ledger/refresh", 400), &body);
+    checked(&router, "GET", "/ledger/refresh", "/ledger/refresh", 405).await;
+
+    let (status, body) = request_json(
+        &draining_app(config.clone()),
+        "POST",
+        "/ledger/refresh",
+        refresh.clone(),
+    )
+    .await;
+    assert_eq!(status, 503);
+    validate(&response("/ledger/refresh", 503), &body);
+
     let mut read_only = config.clone();
     read_only.read_only = true;
+    let (status, body) = request_json(
+        &barca_server::app(read_only.clone()),
+        "POST",
+        "/ledger/refresh",
+        refresh,
+    )
+    .await;
+    assert_eq!(status, 403);
+    validate(&response("/ledger/refresh", 403), &body);
     let (status, body) =
         request_json(&barca_server::app(read_only), "POST", "/ledger/runs", post).await;
     assert_eq!(status, 403);
@@ -1908,7 +1984,7 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
         .as_str()
         .unwrap()
         .to_owned();
-    assert_eq!(wait(&router, &handle).await["status"], "complete");
+    assert_eq!(wait(&router, &handle).await["run"]["status"], "success");
     assert_eq!(run_count(&router).await, 1);
 
     // Refused while a run is in flight; nothing moves.
@@ -1930,7 +2006,7 @@ async fn state_reset_moves_the_database_aside_refuses_during_a_run_and_mends_a_b
         200,
     )
     .await;
-    assert_eq!(wait(&router, &slow).await["status"], "cancelled");
+    assert_eq!(wait(&router, &slow).await["run"]["status"], "cancelled");
 
     // The database moves aside and the next request sees an empty history.
     let reset = checked(&router, "POST", "/state/reset", "/state/reset", 200).await;
@@ -2067,7 +2143,7 @@ async fn pin_versions_and_unpin_match_contract() {
     .await;
     assert_eq!(status, 202, "{body}");
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     let url = "/assets/first/versions";
     let versions = checked(&router, "GET", url, "/assets/{name}/versions", 200).await;
     assert_eq!(versions["pinnable"], true);
@@ -2133,7 +2209,7 @@ async fn pin_versions_and_unpin_match_contract() {
     )
     .await;
     let done = wait(&router, body["run_id"].as_str().unwrap()).await;
-    assert_eq!(done["status"], "complete", "{done}");
+    assert_eq!(done["run"]["status"], "success", "{done}");
     let detail = checked(
         &router,
         "GET",
@@ -2142,9 +2218,9 @@ async fn pin_versions_and_unpin_match_contract() {
         200,
     )
     .await;
-    assert_eq!(detail["steps_executed"], 0, "{detail}");
+    assert_eq!(detail["run"]["steps_executed"], 0, "{detail}");
     assert_eq!(
-        detail["outcome"]["steps"][0]["reason"], "pinned",
+        detail["run"]["outcome"]["steps"][0]["reason"], "pinned",
         "{detail}"
     );
     // A read-only server refuses both writes.
@@ -2536,4 +2612,36 @@ def plain() -> dict:
         404,
     )
     .await;
+}
+
+#[tokio::test]
+async fn replay_request_and_recorded_scope_match_contract() {
+    let dir = tempfile::tempdir().unwrap();
+    let router = app(config(dir.path(), false));
+    let handle = checked(&router, "POST", "/get/second", "/get/{target}", 200).await["run_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    wait(&router, &handle).await;
+    let body = json!({"cache": "cached"});
+    validate(&contract()["components"]["schemas"]["ReplayRequest"], &body);
+    let (status, accepted) =
+        request_json(&router, "POST", &format!("/runs/{handle}/replay"), body).await;
+    assert_eq!(status, 202, "{accepted}");
+    validate(
+        &contract()["components"]["schemas"]["RunAccepted"],
+        &accepted,
+    );
+    let replay = accepted["run_id"].as_str().unwrap();
+    wait(&router, replay).await;
+    let view = checked(
+        &router,
+        "GET",
+        &format!("/runs/{replay}"),
+        "/runs/{run_id}",
+        200,
+    )
+    .await;
+    assert!(!view["run"]["scope"]["files"].as_array().unwrap().is_empty());
+    assert_eq!(view["run"]["scope"]["refresh_all"], false);
 }

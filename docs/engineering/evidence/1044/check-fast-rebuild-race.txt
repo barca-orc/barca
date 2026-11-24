@@ -1,0 +1,60 @@
+==> changelog   python3 scripts/check-changelog.py --base dcb94574536f87ab29216b9f4fcd4412fbb830a9
+==> specs       specs
+==> hooks       prek run --all-files
+==> clippy      cargo clippy --workspace --all-targets -- -D warnings
+rust tests: 57 changed file(s)
+  the whole workspace: .audit1044-equivalent/pipeline.py (no rule knows it: scripts/ci-rust-tests.py)
+==> cargo-test  cargo test --workspace --no-fail-fast
+==> build       /home/mukulram/.local/bin/maturin develop --uv --profile fast --extras test
+python tests: python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+==> python      /home/mukulram/Personal/barca/.worktrees/issue-1044-assets-ui/.venv/bin/python -m pytest -q -p no:cacheprovider -n 4 --dist loadscope python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+                    self.returncode = sys.maxsize
+            except ChildProcessError:
+                pass
+
+            try:
+                exception_name, hex_errno, err_msg = (
+                        errpipe_data.split(b':', 2))
+                # The encoding here should match the encoding
+                # written in by the subprocess implementations
+                # like _posixsubprocess
+                err_msg = err_msg.decode()
+            except ValueError:
+                exception_name = b'SubprocessError'
+                hex_errno = b'0'
+                err_msg = 'Bad exception data from child: {!r}'.format(
+                              bytes(errpipe_data))
+            child_exception_type = getattr(
+                    builtins, exception_name.decode('ascii'),
+                    SubprocessError)
+            if issubclass(child_exception_type, OSError) and hex_errno:
+                errno_num = int(hex_errno, 16)
+                if err_msg == "noexec:chdir":
+                    err_msg = ""
+                    # The error must be from chdir(cwd).
+                    err_filename = cwd
+                elif err_msg == "noexec":
+                    err_msg = ""
+                    err_filename = None
+                else:
+                    err_filename = orig_executable
+                if errno_num != 0:
+                    err_msg = os.strerror(errno_num)
+                if err_filename is not None:
+>                   raise child_exception_type(errno_num, err_msg, err_filename)
+E                   FileNotFoundError: [Errno 2] No such file or directory: '/home/mukulram/Personal/barca/.worktrees/issue-1044-assets-ui/.venv/bin/barca'
+
+../../../../.local/share/uv/python/cpython-3.14.8-linux-x86_64-gnu/lib/python3.14/subprocess.py:1990: FileNotFoundError
+=========================== short test summary info ============================
+FAILED python/tests/test_docs_examples.py::test_json_inspection_commands - Fi...
+1 failed, 674 passed in 38.88s
+
+check-fast summary (base dcb94574):
+  PASS  changelog (0s)
+  PASS  specs (1s)
+  PASS  hooks (1s)
+  PASS  clippy (0s)
+  PASS  cargo-test (113s)
+  PASS  build (2s)
+  FAIL  python (40s)  log: /tmp/check-fast.PlQWdh/python.log
+FAILED

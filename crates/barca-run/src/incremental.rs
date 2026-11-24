@@ -76,8 +76,11 @@ impl Incremental {
         }
         let mut ids: Vec<_> = templates.keys().cloned().collect();
         ids.sort();
-        let key = barca_decide::evidence::key(cfg);
         let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
+        let revision = db::freshness_proofs::revision(cache.conn())
+            .await
+            .map_err(db_error)?;
+        let key = barca_decide::evidence::key(cfg, revision);
         let generation = generation(cache.conn()).await?;
         let mut previous = Snapshot::default();
         let mut lookup = db::prepare(
@@ -844,7 +847,7 @@ async fn latest_many(
             .collect::<Vec<_>>()
             .join(",");
         let sql = format!(
-            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m {BY_NODE_RUN} ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
+            "WITH wanted(node_id, run_hash) AS (VALUES {wanted}) SELECT node_id, run_hash, artifact_path, artifact_format, artifact_size_bytes, output_hash, last_read_at >= datetime('now', '{}') FROM materializations WHERE id IN (SELECT MAX(m.id) FROM wanted w JOIN materializations m {BY_NODE_RUN} ON m.node_id = w.node_id WHERE m.id <= ?1 AND m.status = 'success' AND m.refresh_invalidated_by IS NULL AND m.artifact_path IS NOT NULL AND (w.run_hash IS NULL OR m.run_hash = w.run_hash) GROUP BY m.node_id)",
             barca_decide::cache::READ_STAMP_REFRESH
         );
         let params = std::iter::once(libsql::Value::Integer(through))

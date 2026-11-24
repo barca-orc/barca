@@ -236,15 +236,15 @@ def test_serve_ticks_over_many_keys_keep_the_db_and_memory_bounded(tmp_path):
                 done = [
                     r
                     for r in listing
-                    if r["id"] not in seen
+                    if r["run_id"] not in seen
                     and r["status"] not in served.LIVE
                     and r["triggered_by"] == "schedule"
                 ]
                 return done and done[0]
 
             run = serve.wait("a scheduled tick", finished, timeout=120)
-            seen.add(run["id"])
-            return serve.finished(run["id"])
+            seen.add(run["run_id"])
+            return serve.finished(run["run_id"])
 
         # The ticks already in flight or done before the first change.
         next_tick()
@@ -253,9 +253,9 @@ def test_serve_ticks_over_many_keys_keep_the_db_and_memory_bounded(tmp_path):
         for i in range(ticks):
             bump(tmp_path, f"r{i:05d}")
             view = next_tick()
-            assert view["status"] == "success", view
-            outcome_bytes.append(len(json.dumps(view["outcome"])))
-            targets = view["outcome"]["targets"]
+            assert view["run"]["status"] == "success", view
+            outcome_bytes.append(len(json.dumps(view["run"]["outcome"])))
+            targets = view["run"]["outcome"]["targets"]
             scored = targets[next(t for t in targets if t.endswith("scored"))]
             s = summary_of(scored["final_output"])
             assert s["keys"] == keys and s["computed"] <= 2, s

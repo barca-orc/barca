@@ -45,3 +45,18 @@ async fn schema_has_artifact_columns() {
     // Old column still exists for backward compat
     assert!(columns.contains(&"output_json".to_string()));
 }
+
+#[tokio::test]
+async fn additive_columns_can_belong_to_a_missing_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("old.db").to_string_lossy().to_string();
+    init_db(&path).await.unwrap();
+    let (_db, conn) = open_conn(&path).await.unwrap();
+    conn.execute("DROP TABLE schedule_ticks", ()).await.unwrap();
+    init_schema(&conn).await.unwrap();
+    assert!(
+        has_column(&conn, "schedule_ticks", "skipped")
+            .await
+            .unwrap()
+    );
+}

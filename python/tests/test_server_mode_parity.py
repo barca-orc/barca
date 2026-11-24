@@ -9,6 +9,10 @@ The planning-pipeline fixture (#250) runs a shorter table the same way.
 Normalized, because they differ by design (the declared differences, listed in
 `barca docs server-mode`):
 
+- Cached-only `path_scope` identifies local versus server ownership. Artifact locators
+  compare their hash/format filename, whether original or retained for a concurrent read.
+- Step reports and contiguous agent step lines compare by node; independent streams can
+  finish in different orders, including when one fails beside cached steps.
 - `root`, artifact paths and tracebacks name the server's project directory: both roots read
   `<root>`.
 - `triggered_by` is `manual` for a run typed here and `api` for a run started over HTTP.
@@ -56,7 +60,7 @@ from .test_cli_contract import AGENT_RUNS, CASES, PIPELINE
 SERVER_COMMANDS = {"get", "run", "status", "list", "history", "stats", "logs"}
 # Contract cases that only exist on this machine: `--reconcile` writes local history.
 # `history --activity` counts runs, and the two sides do not record the same ones (a server
-# records a request it refuses as a run with status `error`; the CLI records none for a usage
+# records a request it refuses as a run with status `failed`; the CLI records none for a usage
 # error): test_serve_running.py compares it with the server's own `GET /runs` instead, and the
 # table below compares the count that is the same on both sides, the schedule's (none).
 LOCAL_ONLY = {"history_reconciled", "history_activity"}
@@ -94,9 +98,9 @@ CONTRACT_TABLE += [
     ("run_partition_no_dimension", ["run", "report", "pipeline.py", "--partition", "k=a"]),
     ("get_partition_skipped_target", ["get", "keys", "pipeline.py", "--partition", "k=a"]),
     ("stats_unknown", ["stats", "nope", "pipeline.py", "--json"]),
-    # History filters and one run in detail. `FAILED_RUN` is the newest failed run of the side
-    # the case runs on.
-    ("history_failed", ["history", "--status", "failed", "--json"]),
+    # Compare the same executed failure (broken), excluding server-only admission failures.
+    # Both kinds now use failed; FAILED_RUN resolves this same target on each host.
+    ("history_failed", ["history", "--status", "failed", "--target", "broken", "--json"]),
     ("history_filters", ["history", "--status", "success", "--target", "total", "--since", "1d"]),
     ("history_no_schedule", ["history", "--triggered-by", "schedule", "--json"]),
     # #991: the runs in progress (none here) and the last day's activity.
@@ -106,7 +110,16 @@ CONTRACT_TABLE += [
     # runs of (a server also records a refused request, as `error`), so the counts agree.
     (
         "history_not_schedule",
-        ["history", "--status", "failed", "--not-triggered-by", "schedule", "--json"],
+        [
+            "history",
+            "--status",
+            "failed",
+            "--target",
+            "broken",
+            "--not-triggered-by",
+            "schedule",
+            "--json",
+        ],
     ),
     (
         "history_only_others",
@@ -126,7 +139,10 @@ CONTRACT_TABLE += [
         ["history", "--activity", "--status", "failed", "--triggered-by", "schedule", "--json"],
     ),
     ("history_activity_search", ["history", "--activity", "--search", "no_such_node"]),
-    ("pretty_history_failed", ["history", "--status", "failed", "--pretty", "-l", "2"]),
+    (
+        "pretty_history_failed",
+        ["history", "--status", "failed", "--target", "broken", "--pretty", "-l", "2"],
+    ),
     ("history_bad_status", ["history", "--status", "nope", "--json"]),
     ("run_detail_failed", ["history", "FAILED_RUN", "--json"]),
     ("pretty_run_detail", ["history", "FAILED_RUN", "--pretty"]),
@@ -166,6 +182,13 @@ TRIGGER = re.compile(r"\btriggered by (manual|api)\b")
 def _text(s: str, roots: list[str]) -> str:
     for root in roots:
         s = s.replace(root, "<root>")
+    # Concurrent cache reads retain an inode under sql-cache; ordinary execution returns
+    # the original artifact. Compare the same hash/format, independent of its host locator.
+    s = re.sub(
+        r"(?:<root>/)?\.barca/(?:sql-cache/cached-[^/]+|artifacts/[^/]+)/([0-9a-f]{64}\.[a-z0-9]+)",
+        r"<artifact>/\1",
+        s,
+    )
     s = TRIGGER.sub("triggered by <trigger>", s)
     s = TIMESTAMP.sub("<t>", s)
     s = RUN_ID.sub("<run_id>", s)
@@ -177,6 +200,9 @@ def _text(s: str, roots: list[str]) -> str:
 
 
 def _value(v, roots: list[str], key: str = ""):
+    if key == "path_scope":
+        assert v in ("local", "server")
+        return "<host>"
     if key == "disk_usage" and isinstance(v, dict):
         assert set(v) == {"size_bytes", "budget_bytes", "backup_bytes", "limit_bytes"}
         assert all(
@@ -205,6 +231,8 @@ def _value(v, roots: list[str], key: str = ""):
     if isinstance(v, dict):
         return {k: _value(x, roots, k) for k, x in v.items() if k != "import_seconds"}
     if isinstance(v, list):
+        if key == "steps" and all(isinstance(x, dict) and "id" in x for x in v):
+            v = sorted(v, key=lambda x: x["id"])
         return [_value(x, roots) for x in v]
     if key == "triggered_by" and v in ("manual", "api"):
         return "<trigger>"
@@ -243,6 +271,15 @@ def _normalize(text: str, roots: list[str]):
             out.append(_value(json.loads(line), roots))
         except json.JSONDecodeError:
             out.append(_text(line, roots))
+    # Only reorder contiguous per-step progress: retain warnings, summaries, errors and
+    # their boundaries, while independent streams may finish on either side of a cache hit.
+    start = 0
+    while start < len(out):
+        end = start
+        while end < len(out) and isinstance(out[end], str) and out[end].startswith("[barca] step:"):
+            end += 1
+        out[start:end] = sorted(out[start:end])
+        start = max(start + 1, end)
     return out
 
 
@@ -282,7 +319,9 @@ def _resolve(cwd: Path, argv: list[str], server: list[str]) -> list[str]:
     """`argv` with `FAILED_RUN` replaced by the newest failed run that side recorded."""
     if "FAILED_RUN" not in argv:
         return argv
-    out = _run(cwd, ["history", "--status", "failed", "-l", "1", "--json", *server])
+    out = _run(
+        cwd, ["history", "--status", "failed", "--target", "broken", "-l", "1", "--json", *server]
+    )
     [run] = json.loads(out.stdout)["runs"]
     return [run["run_id"] if a == "FAILED_RUN" else a for a in argv]
 

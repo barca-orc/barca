@@ -4,7 +4,7 @@ import type { ScheduleState } from "./ScheduleState";
 import type { SkipReason } from "./SkipReason";
 
 /**
- * One entry of `GET /schedule`. Times are unix seconds.
+ * One entry of `GET /schedule`. Times are RFC 3339 UTC.
  */
 export type ScheduleJob = { cron: string,
 /**
@@ -23,7 +23,7 @@ id: string, kind: NodeKind,
 /**
  * The newest tick the scheduler fired.
  */
-last_fired: number | null,
+last_fired: string | null,
 /**
  * `last_run_id` under its older name.
  */
@@ -35,11 +35,15 @@ last_run_id: string | null,
 /**
  * When a due tick was last skipped; `null` after a restart.
  */
-last_skipped: number | null,
+last_skipped: string | null,
 /**
  * That run's status, in the run list's words (`pending` while it waits in the run queue).
  */
 last_status: string | null,
+/**
+ * Explicit task reason from the newest fired run; separate from scheduler decisions.
+ */
+last_task_skip_reason?: string,
 /**
  * The server's one answer to "is it late" (`barca docs scheduling`).
  */
@@ -47,7 +51,7 @@ late: boolean,
 /**
  * The first slot after `last_fired` that has passed; `null` while on time or paused.
  */
-late_since: number | null,
+late_since: string | null,
 /**
  * `Schedule(cron, max_failures=N)`, default 5.
  */
@@ -55,11 +59,11 @@ max_failures: number,
 /**
  * The next slot, in the zone the scheduler evaluates cron in.
  */
-next_fire: number | null, paused: boolean,
+next_fire: string | null, paused: boolean,
 /**
  * When a timed pause ends; `null` for an open-ended pause.
  */
-paused_until: number | null,
+paused_until: string | null,
 /**
  * Its typical queue wait exceeds its interval (#962).
  */

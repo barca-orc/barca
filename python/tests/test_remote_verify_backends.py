@@ -12,6 +12,7 @@ them and sets `BARCA_TEST_*`, an unreachable emulator fails the test (`emulators
 """
 
 import hashlib
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -166,3 +167,73 @@ def test_an_overwritten_object_is_used_and_flagged_in_the_json_result(backend, t
     shutil.rmtree(a / ".barca" / "artifacts")
     clean = barca(a, env, "get", "numbers")
     assert all("artifact_mismatch" not in st for st in clean["steps"])
+
+
+@pytest.mark.parametrize("backend", ["s3", "gcs", "azure"])
+def test_recorded_local_copy_repairs_overwritten_store_after_check_window(backend, tmp_path):
+    """Pin the local-recorded/store-mismatch outcome of overlapping refreshes."""
+    from barca import _inspection_cache
+
+    from .helpers import barca as run_barca
+    from .store_window import age_store_checks
+
+    endpoint, make = CASES[backend]
+    emulators.require(backend, _reachable(endpoint), endpoint)
+    uri, env = make()
+    env = {**env, "BARCA_REMOTE_URI": uri, "BARCA_POOL_SIZE": "2", "BARCA_TRACE_TIMING": "1"}
+    a, _ = machines(tmp_path)
+    barca(a, env, "get", "numbers")
+    (node,) = barca(a, env, "status", "numbers")["nodes"]
+    stored = node["cache"]["artifact"]
+    local = a / ".barca" / "artifacts" / stored.split("/artifacts/", 1)[1]
+    original = local.read_bytes()
+    recorded = node["last_materialization"]["content_hash"]
+    assert hashlib.sha256(original).hexdigest() == recorded
+    # Different size: real object stores do not provide a content checksum.
+    _overwrite(stored, b'[{"n": 999999999999}]', env, tmp_path)
+    _inspection_cache.Cache(str(a / ".barca/inspection-cache/default.json")).invalidate_remote(
+        stored
+    )
+    (node,) = barca(a, env, "status", "numbers")["nodes"]
+    assert (node["cache"]["state"], node["cache"]["reason"]) == ("unsynced", "mismatch")
+
+    warning = "pipeline.py:numbers produced different bytes for the same code and inputs"
+    # Status observes the mismatch, but does not end the execution store-check window.
+    warm = run_barca(a, "get", "numbers", "--json", env=clean_env(**env))
+    assert warm.returncode == 0, warm.stderr
+    assert "store_check_skipped" in warm.stderr
+    assert "transfer helper started" not in warm.stderr
+    assert warning not in warm.stderr
+    assert json.loads(warm.stdout)["steps_executed"] == 0
+    assert not any(step.get("bytes_changed") for step in json.loads(warm.stdout)["steps"])
+
+    age_store_checks(a)
+    repaired = run_barca(a, "get", "numbers", "--json", env=clean_env(**env))
+    assert repaired.returncode == 0, repaired.stderr
+    assert repaired.stderr.count(warning) == 1, repaired.stderr
+    out = json.loads(repaired.stdout)
+    assert out["steps_executed"] == 0
+    assert out["steps"][0]["bytes_changed"] is True
+    assert local.read_bytes() == original
+    downloaded = tmp_path / "repaired.json"
+    subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys; from barca import _storage; _storage.get_file(sys.argv[1], sys.argv[2])",
+            stored,
+            str(downloaded),
+        ],
+        env={**clean_env(), **env},
+        check=True,
+        timeout=RUN,
+    )
+    assert downloaded.read_bytes() == original
+    (node,) = barca(a, env, "status", "numbers")["nodes"]
+    assert node["cache"]["state"] == "cached", node
+    assert node["last_materialization"]["content_hash"] == recorded
+
+    again = run_barca(a, "get", "numbers", "--json", env=clean_env(**env))
+    assert again.returncode == 0, again.stderr
+    assert warning not in again.stderr
+    assert not any(step.get("bytes_changed") for step in json.loads(again.stdout)["steps"])

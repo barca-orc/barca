@@ -79,8 +79,8 @@ test('expired replay shows an incomplete transcript and follows the existing run
   // The inspector runs the selected node (the bar across the top has no Run).
   await page.getByRole('complementary', { name: /inspector$/ }).getByRole('button', { name: 'Run', exact: true }).click()
   await expect(page.getByRole('status').filter({ hasText: 'Event replay is incomplete' })).toBeVisible()
-  const outcome = await page.waitForResponse(async response => /\/runs\/[^/]+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET' && (await response.json()).status === 'success')
-  expect((await outcome.json()).outcome).toBeTruthy()
+  const outcome = await page.waitForResponse(async response => /\/runs\/[^/]+$/.test(new URL(response.url()).pathname) && response.request().method() === 'GET' && (await response.json()).run.status === 'success')
+  expect((await outcome.json()).run.outcome).toBeTruthy()
   await expect(page.getByRole('status').filter({ hasText: 'Event replay is incomplete' })).toBeVisible()
   expect(submissions).toBe(1)
   await page.getByRole('link', { name: 'View recorded logs' }).click()

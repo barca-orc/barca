@@ -619,6 +619,18 @@ mod utc_tests {
     fn stored_timestamps_are_marked_utc() {
         assert_eq!(utc_cell("2026-10-21 02:04:05"), "2026-10-21 02:04:05 UTC");
         assert_eq!(utc_cell("2026-10-21T02:04:05Z"), "2026-10-21 02:04:05 UTC");
+        assert_eq!(
+            utc_cell("2026-10-21T02:04:05.000Z"),
+            "2026-10-21 02:04:05 UTC"
+        );
+        assert_eq!(
+            utc_cell("2026-10-21T02:04:05.123Z"),
+            "2026-10-21 02:04:05.123 UTC"
+        );
+        assert_eq!(
+            utc_cell("2026-10-21 02:04:05.123"),
+            utc_cell("2026-10-21T02:04:05.123Z")
+        );
         assert_eq!(utc_cell(""), "");
     }
 }

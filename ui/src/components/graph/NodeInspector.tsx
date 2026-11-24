@@ -1,3 +1,6 @@
+import { runNodeTitle } from '@/lib/runTarget'
+import { RunOptions } from '@/components/RunOptions'
+import type { RunOptionsControl } from '@/components/PageRunButton'
 import { X, Play, Terminal } from 'lucide-react'
 import { match } from 'ts-pattern'
 import { Button, ErrorLine, IconButton, KeyValue, SidePanel, StatusBadge, StatusGlyph, LogViewer } from '@/components'
@@ -22,9 +25,11 @@ interface NodeInspectorProps {
   error: string | null
   /** The server refuses runs (`barca serve --read-only`): no Run is offered. */
   readOnly: boolean
+  disabled?: boolean
   /** The node's trigger state (owned by the page, shared with the topbar). */
   triggering: boolean
   triggerError: Error | null
+  options?: RunOptionsControl
   onFire: () => void
   onClose: () => void
 }
@@ -64,9 +69,11 @@ export function NodeInspector({
   running,
   error,
   readOnly,
+  disabled = false,
   triggering,
   triggerError,
   onFire,
+  options,
   onClose,
 }: NodeInspectorProps) {
   const name = shortName(asset.id)
@@ -105,6 +112,8 @@ export function NodeInspector({
             size="sm"
             iconLeft={<Play size={12} />}
             loading={triggering || running}
+            disabled={disabled}
+            title={runNodeTitle(name, options?.includeManual)}
             onClick={onFire}
           >
             Run
@@ -115,6 +124,7 @@ export function NodeInspector({
         </>
       }
     >
+      {!readOnly && options && <RunOptions {...options} disabled={disabled || triggering || running} />}
       <div className="barca-insp-body">
         <div className="barca-tagrow">
           <StatusBadge glyph={state.glyph} label={state.label} live={isLive(state)} />

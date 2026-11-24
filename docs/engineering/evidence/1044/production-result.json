@@ -1,0 +1,50 @@
+{
+  "fixture": "equivalent, not the original lost audit fixture",
+  "viewport": "1440x900",
+  "windowSeconds": 30,
+  "limitBytes": 500000,
+  "bytes": {
+    "firstLoad": 530292,
+    "idle": 13631,
+    "flatIdle": 2205
+  },
+  "apiBytes": {
+    "firstLoad": 62065,
+    "idle": 13631,
+    "flatIdle": 2205
+  },
+  "idleRequests": [
+    "/queue",
+    "/state/rollup",
+    "/pauses",
+    "/pins",
+    "/health",
+    "/queue",
+    "/state/rollup",
+    "/pauses",
+    "/pins",
+    "/health",
+    "/queue",
+    "/state/rollup",
+    "/pauses",
+    "/pins",
+    "/health",
+    "/state?targets=pipeline.py%3Aasset_0000%2Cpipeline.py%3Aasset_0001%2Cpipeline.py%3Aasset_0002%2Cpipeline.py%3Aasset_0003%2Cpipeline.py%3Aasset_0004%2Cpipeline.py%3Aasset_0005%2Cpipeline.py%3Aasset_0083%2Cpipeline.py%3Aasset_0084%2Cpipeline.py%3Aasset_0085%2Cpipeline.py%3Aasset_0086%2Cpipeline.py%3Aasset_0087%2Cpipeline.py%3Aasset_0088%2Cpipeline.py%3Aasset_0089%2Cpipeline.py%3Aasset_0090%2Cpipeline.py%3Aasset_0091%2Cpipeline.py%3Aasset_0092%2Cpipeline.py%3Aasset_0093%2Cpipeline.py%3Aasset_0094%2Cpipeline.py%3Aasset_0095%2Cpipeline.py%3Aasset_0096%2Cpipeline.py%3Aasset_0097%2Cpipeline.py%3Aasset_0098%2Cpipeline.py%3Aasset_0099%2Cpipeline.py%3Aasset_0100%2Cpipeline.py%3Aasset_0101%2Cpipeline.py%3Aasset_0102%2Cpipeline.py%3Aasset_0103%2Cpipeline.py%3Aasset_0104%2Cpipeline.py%3Aasset_0105%2Cpipeline.py%3Aasset_0106%2Cpipeline.py%3Aasset_0107%2Cpipeline.py%3Aasset_0108%2Cpipeline.py%3Aasset_0109",
+    "/queue",
+    "/pauses",
+    "/state/rollup",
+    "/pins",
+    "/health",
+    "/state?targets=pipeline.py%3Aasset_0000%2Cpipeline.py%3Aasset_0001%2Cpipeline.py%3Aasset_0002%2Cpipeline.py%3Aasset_0003%2Cpipeline.py%3Aasset_0004%2Cpipeline.py%3Aasset_0005%2Cpipeline.py%3Aasset_0083%2Cpipeline.py%3Aasset_0084%2Cpipeline.py%3Aasset_0085%2Cpipeline.py%3Aasset_0086%2Cpipeline.py%3Aasset_0087%2Cpipeline.py%3Aasset_0088%2Cpipeline.py%3Aasset_0089%2Cpipeline.py%3Aasset_0090%2Cpipeline.py%3Aasset_0091%2Cpipeline.py%3Aasset_0092%2Cpipeline.py%3Aasset_0093%2Cpipeline.py%3Aasset_0094%2Cpipeline.py%3Aasset_0095%2Cpipeline.py%3Aasset_0096%2Cpipeline.py%3Aasset_0097%2Cpipeline.py%3Aasset_0098%2Cpipeline.py%3Aasset_0099%2Cpipeline.py%3Aasset_0100%2Cpipeline.py%3Aasset_0101%2Cpipeline.py%3Aasset_0102%2Cpipeline.py%3Aasset_0103%2Cpipeline.py%3Aasset_0104%2Cpipeline.py%3Aasset_0105%2Cpipeline.py%3Aasset_0106%2Cpipeline.py%3Aasset_0107%2Cpipeline.py%3Aasset_0108%2Cpipeline.py%3Aasset_0109",
+    "/queue",
+    "/pauses",
+    "/health",
+    "/pins",
+    "/state/rollup",
+    "/state?targets=pipeline.py%3Aasset_0000%2Cpipeline.py%3Aasset_0001%2Cpipeline.py%3Aasset_0002%2Cpipeline.py%3Aasset_0003%2Cpipeline.py%3Aasset_0004%2Cpipeline.py%3Aasset_0005%2Cpipeline.py%3Aasset_0083%2Cpipeline.py%3Aasset_0084%2Cpipeline.py%3Aasset_0085%2Cpipeline.py%3Aasset_0086%2Cpipeline.py%3Aasset_0087%2Cpipeline.py%3Aasset_0088%2Cpipeline.py%3Aasset_0089%2Cpipeline.py%3Aasset_0090%2Cpipeline.py%3Aasset_0091%2Cpipeline.py%3Aasset_0092%2Cpipeline.py%3Aasset_0093%2Cpipeline.py%3Aasset_0094%2Cpipeline.py%3Aasset_0095%2Cpipeline.py%3Aasset_0096%2Cpipeline.py%3Aasset_0097%2Cpipeline.py%3Aasset_0098%2Cpipeline.py%3Aasset_0099%2Cpipeline.py%3Aasset_0100%2Cpipeline.py%3Aasset_0101%2Cpipeline.py%3Aasset_0102%2Cpipeline.py%3Aasset_0103%2Cpipeline.py%3Aasset_0104%2Cpipeline.py%3Aasset_0105%2Cpipeline.py%3Aasset_0106%2Cpipeline.py%3Aasset_0107%2Cpipeline.py%3Aasset_0108%2Cpipeline.py%3Aasset_0109",
+    "/queue",
+    "/pauses"
+  ],
+  "failures": [],
+  "pass": true
+}

@@ -1,6 +1,6 @@
 [package]
 name = "barca-run"
-version = "0.46.2"
+version = "0.46.4"
 edition = "2024"
 description = "Run orchestrator — executes a plan and records what happened: the one crate that drives barca-engine and writes a run to the metadata database"
 

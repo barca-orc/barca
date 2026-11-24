@@ -323,6 +323,8 @@ impl ReadCache {
 /// (`State<Reads>`) and reaches nothing else.
 #[derive(Clone)]
 pub struct Reads {
+    /// Artifact reads have capacity independent of pipeline execution.
+    pub artifact_reads: Arc<tokio::sync::Semaphore>,
     pub config: Arc<ServeConfig>,
     /// The graph loaded from the configured files, shared with execution.
     pub sources: Sources,
@@ -332,6 +334,7 @@ pub struct Reads {
     /// it unusable (it keeps serving) or the scheduler stops on a metadata error, cleared when a
     /// read-only request reads it again. `GET /health` `metadata_error`.
     pub metadata_error: Arc<std::sync::RwLock<Option<String>>>,
+    pub metadata_wal: Arc<std::sync::RwLock<Option<barca_service::db::WalCheckpoint>>>,
     /// Set when the scheduler stopped on a metadata error: the error then stays reported
     /// whatever a read finds.
     scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
@@ -343,10 +346,12 @@ impl Reads {
         scheduler_stopped: Arc<std::sync::atomic::AtomicBool>,
     ) -> Self {
         Self {
+            artifact_reads: Arc::new(tokio::sync::Semaphore::new(4)),
             sources: Sources::new(config.clone()),
             config,
             cache: Arc::default(),
             metadata_error: Arc::default(),
+            metadata_wal: Arc::default(),
             scheduler_stopped,
         }
     }

@@ -59,19 +59,21 @@ pub struct RunLedger<'a> {
     /// Why the run executed what it did (`barca_model::run_explain::PlanReasons` as JSON, #925),
     /// `None` when it executed nothing.
     pub plan_reasons: Option<String>,
+    pub task_skips: &'a [barca_model::step_result::TaskSkip],
+    pub worker_failures: &'a [barca_model::run_explain::WorkerFailure],
 }
 
-/// The steps of `run_id` already recorded, by node id and run hash: an earlier attempt of a
-/// requeued run may have recorded a node under a run hash this attempt no longer computes.
+/// The steps of `run_id` already recorded, by node id, run hash and outcome: an earlier attempt of a
+/// requeued run may have recorded a different hash or a failure that this attempt successfully retries.
 async fn steps_of_run(
     conn: &libsql::Connection,
     run_id: &str,
-) -> Result<HashSet<(String, String)>, BarcaError> {
+) -> Result<HashSet<(String, String, String)>, BarcaError> {
     let failed = |e| BarcaError::Db(format!("failed to read recorded steps: {e}"));
     let mut out = HashSet::new();
     let mut rows = conn
         .query(
-            "SELECT node_id, COALESCE(run_hash, '') FROM materializations WHERE run_id = ?1",
+            "SELECT node_id, COALESCE(run_hash, ''), status FROM materializations WHERE run_id = ?1",
             [run_id.to_string()],
         )
         .await
@@ -80,6 +82,7 @@ async fn steps_of_run(
         out.insert((
             row.get::<String>(0).map_err(failed)?,
             row.get::<String>(1).map_err(failed)?,
+            row.get::<String>(2).map_err(failed)?,
         ));
     }
     Ok(out)
@@ -93,6 +96,7 @@ pub async fn write_terminal_ledger(
     db::runs::insert_run_if_absent(conn, l.run_id, l.command, &l.files, l.target, l.steps_total)
         .await
         .map_err(|e| BarcaError::Db(format!("failed to create terminal run: {e}")))?;
+    db::runs::set_worker_failures(conn, l.run_id, l.worker_failures).await?;
     // What the [`StepRecorder`] wrote during the run.
     let already = steps_of_run(conn, l.run_id).await?;
 
@@ -104,7 +108,7 @@ pub async fn write_terminal_ledger(
         let Some(run_h) = l.run_hashes.get(node_id) else {
             continue;
         };
-        if already.contains(&(node_id.clone(), run_h.clone())) {
+        if already.contains(&(node_id.clone(), run_h.clone(), "success".to_string())) {
             continue;
         }
         let base = barca_model::StepId::parse(node_id).base_id().to_string();
@@ -145,7 +149,7 @@ pub async fn write_terminal_ledger(
     for failure in l.all_failures {
         let node_id = &failure.node_id;
         let run_h = l.run_hashes.get(node_id).cloned().unwrap_or_default();
-        if already.contains(&(node_id.clone(), run_h.clone())) {
+        if already.contains(&(node_id.clone(), run_h.clone(), "failed".to_string())) {
             continue;
         }
         let failed = |e| BarcaError::Db(format!("failed to record failed step: {e}"));
@@ -160,6 +164,11 @@ pub async fn write_terminal_ledger(
             .map_err(failed)?;
     }
     drop(insert_failed);
+    for skipped in l.task_skips {
+        db::materializations::insert_task_skip(conn, l.run_id, skipped)
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record task skip: {e}")))?;
+    }
     crate::sink_publications::write_in(conn, l.run_id, l.sink_publications).await?;
     let updated = db::runs::finish_run_in(
         conn,
@@ -187,7 +196,8 @@ pub async fn write_terminal_ledger(
 
 /// Record a verified post in one transaction: the run, then each step the ledger does not
 /// already hold. A step whose run hash the ledger holds with the same digest adds nothing; with
-/// a different digest the ledger keeps its row and the step is reported in `bytes_changed`.
+/// a different digest the ledger keeps its row unless refresh invalidated it. Both cases
+/// report the changed digest in `bytes_changed`.
 pub async fn record_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepted, BarcaError> {
     let failed = |e: libsql::Error| BarcaError::Db(format!("failed to record a ledger post: {e}"));
     let run_id = db::generate_run_id();
@@ -203,6 +213,17 @@ pub async fn record_post(db_path: &str, post: &LedgerPost) -> Result<PostAccepte
                 let held = db::materializations::held_hashes(&conn, &step.node_id, &step.run_hash)
                     .await
                     .map_err(failed)?;
+                if let Some(previous) = held.as_ref().filter(|h| h.invalidated) {
+                    // Refresh revokes reuse, not the diagnostic evidence that an ordinary
+                    // asset produced different bytes for the same computation identity.
+                    if previous.output.is_some() && previous.output != step.digest {
+                        bytes_changed.push(step.node_id.clone());
+                    }
+                    db::materializations::insert_posted_step(&conn, &run_id, step)
+                        .await
+                        .map_err(failed)?;
+                    continue;
+                }
                 match held.as_ref().map(|h| h.output.as_deref()) {
                     // Held, with the same bytes: nothing to add.
                     Some(Some(digest)) if Some(digest) == step.digest.as_deref() => {

@@ -127,6 +127,8 @@ async fn persist_run_records_failure_type_and_its_own_attempts() {
         cost_snapshot: &[],
         touched: &[],
         plan_reasons: None,
+        task_skips: &[],
+        worker_failures: &[],
     };
     persist_run(&db_path, &ledger).await.unwrap();
 
@@ -190,6 +192,8 @@ async fn persist_run_records_store_locations() {
         cost_snapshot: &[],
         touched: &[],
         plan_reasons: None,
+        task_skips: &[],
+        worker_failures: &[],
     };
     persist_run(&db_path, &ledger).await.unwrap();
 

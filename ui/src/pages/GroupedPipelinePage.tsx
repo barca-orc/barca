@@ -17,7 +17,7 @@ import { useStoredFlag } from '@/hooks/useStoredFlag'
 import { RunNotice } from '@/components/RunNotice'
 import { useGroups } from '@/hooks/useGroups'
 import { useAssets } from '@/hooks/useAssets'
-import { useAssetStates, useKnownStates } from '@/hooks/useAssetStates'
+import { useAssetStates, useKnownStates, useVisibleAssetStates } from '@/hooks/useAssetStates'
 import { useWriteControl } from '@/hooks/useWriteControl'
 import { useNodeRun } from '@/hooks/useNodeRun'
 import { useProgram } from '@/hooks/useProgram'
@@ -66,7 +66,7 @@ export function GroupedPipelinePage() {
   const pins = usePinNotes()
   const groupsQuery = useGroups()
   const assetQuery = useAssets()
-  const stateQuery = useAssetStates()
+  const stateQuery = useAssetStates(false)
   const writes = useWriteControl()
   const pipeline = params.get('pipeline')
   // Each group lists the members the rollup counts under it, so the list and its counts agree.
@@ -147,6 +147,10 @@ export function GroupedPipelinePage() {
   const leafIds = show === 'failures' ? shownFailures.map((f) => f.id) : visibleEntries.filter((e) => e.kind !== 'group').map((e) => e.id)
   const labels = distinctNames(leafIds)
   const win = useTableWindow(rowCount, scroller)
+  const visibleStates = useVisibleAssetStates((graph ? drawn.filter((e) => e.kind !== 'group').map((e) => e.id) : win.items.flatMap(({ index }) => {
+    const id = rowIds[index]
+    return id && kindOf.has(id) ? [id] : []
+  })).concat(selected && kindOf.has(selected) ? [selected] : []))
   const crumbScope = scope === sole ? null : scope
   const path = groupPath(crumbScope, tree).filter((group) => group.id !== sole)
   const selectedGroup = tree.groups.get(selected ?? '')
@@ -321,6 +325,7 @@ export function GroupedPipelinePage() {
             {metadataUnusable(stateQuery.error) && <ResetDatabaseButton />}
           </div>
         )}
+        {visibleStates.isError && <p role="alert" className="barca-note">Could not refresh visible rows. <Button size="sm" onClick={() => void visibleStates.refetch()}>Retry</Button></p>}
         <div className={graph && show === 'items' ? 'barca-graph-wrap' : 'barca-assets-split'}>
           {graph && show === 'items' ? (
             <div className="barca-graph-canvas">

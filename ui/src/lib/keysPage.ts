@@ -17,6 +17,8 @@ export type KeySort = (typeof KEY_SORTS)[number]
 export interface KeyFilter {
   /** Empty: any state. */
   states: readonly KeyState[]
+  /** Only successful results with a recorded zero row count. */
+  empty?: boolean
   /** Per dimension, the values kept; a dimension that is absent or empty keeps every value. */
   values: Readonly<Record<string, readonly string[]>>
   /** An index into the node's errors. */
@@ -57,6 +59,7 @@ export function keysParams(params: URLSearchParams): KeysParams {
     key: params.get('key') || null,
     filter: {
       states,
+      ...(params.get("empty") === "1" ? { empty: true } : {}),
       values,
       error: Number.isInteger(parsed) && parsed >= 0 ? parsed : null,
       q: params.get('q') ?? '',
@@ -72,6 +75,7 @@ export function keysSearch(p: Omit<KeysParams, 'sort'> & { sort?: KeySort }): st
   const out = new URLSearchParams()
   if (p.node) out.set('node', p.node)
   if (p.key) out.set('key', p.key)
+  if (p.filter.empty) out.set('empty', '1')
   if (p.filter.states.length > 0) out.set('state', p.filter.states.join(','))
   for (const [name, values] of Object.entries(p.filter.values)) {
     if (values.length > 0) out.set(`${VALUE_PREFIX}${name}`, values.join(','))
@@ -111,6 +115,7 @@ export function toggleSort(now: KeySort, pressed: KeySort): KeySort {
  */
 export function keysQuery(p: { filter: KeyFilter; sort: KeySort; needsRun: boolean; along: string | null; rangeValid: boolean }): string {
   const out = new URLSearchParams()
+  if (p.filter.empty) out.set('empty', '1')
   if (p.filter.states.length > 0) out.set('state', p.filter.states.join(','))
   if (p.needsRun) out.set('needs_run', '1')
   for (const [name, values] of Object.entries(p.filter.values)) {

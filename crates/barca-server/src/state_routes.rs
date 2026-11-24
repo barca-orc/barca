@@ -49,12 +49,14 @@ pub async fn health(State(state): State<AppState>) -> Json<ServerHealth> {
         scheduler_enabled: state.scheduler_enabled(),
         scheduler_liveness,
         // Why the metadata DB cannot be used, while it cannot; null otherwise.
+        metadata_wal: state.reads.metadata_wal.read().unwrap().clone(),
         metadata_error: state.reads.metadata_error.read().unwrap().clone(),
         // `.barca/` against its size limit, as last measured after a run or on the minute
         // checkpoint (RFC-0012); null before the first measurement or with the limit off.
         cache: barca_service::gc::last_measured()
             .filter(|_| !state.config.read_only)
             .map(|(size_bytes, limit_bytes)| CacheSize {
+                pressure: barca_service::gc::last_pressure(),
                 size_bytes,
                 limit_bytes,
             }),

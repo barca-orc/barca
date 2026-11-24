@@ -113,6 +113,16 @@ fn gc_text(r: &GcResult) {
             );
         }
     }
+    if r.pressure.target_shortfall_bytes > 0 {
+        barca_service::outln!(
+            "{} above target ({} over max_size); {} protected, {} eligible, {} pending this pass",
+            human(r.pressure.target_shortfall_bytes),
+            human(r.pressure.overshoot_bytes),
+            human(r.pressure.protected_bytes),
+            human(r.pressure.evictable_bytes),
+            human(r.pressure.pending_bytes)
+        );
+    }
     // Over the target after evicting what could go: say what holds the rest.
     barca_service::outln!(
         "{} metadata backups outside the budget; {} physical total",
@@ -368,7 +378,7 @@ fn entry_json(entry: &LogEntry) -> String {
 /// The exit code `-f` ends with, from the run's status: 0 succeeded, 130 cancelled, 1 otherwise.
 pub(crate) fn follow_exit_code(status: &str) -> i32 {
     match status {
-        "success" => 0,
+        "success" | "skipped" => 0,
         "cancelled" => 130,
         _ => 1,
     }
@@ -394,4 +404,40 @@ pub(crate) fn name_run(run: &barca_service::db::RunRecord, follow: bool) {
         run.status,
         barca_service::report::utc_cell(&run.started_at)
     );
+}
+
+/// Shared local/server presentation for a cached read; misses retain every key's outcome.
+pub(crate) fn print_cached(
+    answer: &barca_service::cached::Answer,
+    mode: crate::input::GetMode,
+    fields: Option<&[String]>,
+) -> Result<(), barca_service::BarcaError> {
+    if mode.shape == barca_service::report::GetShape::Json {
+        let mut value = serde_json::to_value(answer)
+            .map_err(|e| barca_service::BarcaError::Other(e.to_string()))?;
+        if let Some(fields) = fields
+            && let Some(obj) = value.as_object_mut()
+        {
+            obj.retain(|k, _| fields.contains(k));
+        }
+        barca_service::outln!("{}", value);
+    } else if mode.values {
+        if let Some(value) = &answer.final_output {
+            barca_service::outln!("{}", value);
+        }
+    } else {
+        for outcome in &answer.outcomes {
+            if let Some(path) = outcome
+                .get(if mode.url_expires.is_some() {
+                    "url"
+                } else {
+                    "path"
+                })
+                .and_then(serde_json::Value::as_str)
+            {
+                barca_service::outln!("{path}");
+            }
+        }
+    }
+    answer.check()
 }

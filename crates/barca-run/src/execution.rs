@@ -26,7 +26,7 @@ use std::time::Instant;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio_util::sync::CancellationToken;
 
-use barca_python::load::build_dag;
+use barca_python::load::build_dag_until;
 use barca_store::results::{GetResult, MultiResult, StepReport, TargetOutcome};
 
 use crate::persist::{
@@ -57,9 +57,9 @@ use finalize::*;
 pub(crate) use phase::note;
 use phase::*;
 use prepare::*;
+pub use progress::cached_step_line;
 use progress::{
-    RunOutcome, batch_line, cached_step_line, end_of_run_line, env_suffix, failed_step_line,
-    fmt_eta, reconcile_total,
+    RunOutcome, batch_line, end_of_run_line, env_suffix, failed_step_line, fmt_eta, reconcile_total,
 };
 use select::*;
 pub(crate) use workers::upload_pending;
@@ -151,6 +151,38 @@ pub(crate) struct ExecuteRequest<'a> {
     /// Freshness rules (RFC-0008): whether `Manual` upstreams are read as they are, and
     /// whether this is a scheduled tick.
     pub(crate) rules: barca_decide::freshness::RunRules,
+}
+
+impl ExecuteRequest<'_> {
+    fn scope(&self) -> barca_model::run_scope::RunScope {
+        if let Some(scope) = &self.options.scope {
+            return scope.clone();
+        }
+        let (refresh, refresh_all, cascade) = match &self.policy {
+            CachePolicy::CacheAware => (Vec::new(), false, false),
+            CachePolicy::RefreshAll { .. } => (Vec::new(), true, false),
+            CachePolicy::RefreshSelective { names, cascade, .. } => {
+                (names.clone(), false, *cascade)
+            }
+        };
+        barca_model::run_scope::RunScope {
+            command: self.command_label.to_owned(),
+            targets: self.target_names.to_vec(),
+            files: self.file_args.to_vec(),
+            refresh,
+            refresh_all,
+            cascade,
+            partition: self.partition.as_ref().map(|p| p.to_json().to_string()),
+            batch: self.options.batch.to_flags(),
+            pin_manual: self.rules.pin_manual,
+            hold_paused: self.rules.hold_paused,
+            allow_paused_targets: self.rules.allow_paused_targets,
+            tick: self.rules.tick.clone(),
+            values: false,
+            timeout: None,
+            queue: "next".to_owned(),
+        }
+    }
 }
 
 struct Trace {
@@ -282,6 +314,7 @@ struct RunState {
     total_estimated: f64,
     elapsed_so_far: f64,
     completed_steps: usize,
+    recorded_progress: Option<(usize, usize)>,
     store_paths: HashMap<String, String>,
     transfer_error: Option<String>,
     /// What this run left unpublished in the artifact store (#390), for the run JSON.
@@ -622,7 +655,7 @@ async fn note_stale_pins(session: &mut RunSession<'_, '_>) -> Result<(), BarcaEr
         let Some(pin) = session.prepared.pinned.get(id) else {
             continue;
         };
-        if pin.user.is_some() {
+        if pin.user.is_some() || session.prepared.paused.contains(id) {
             continue;
         }
         let stale = barca_decide::freshness::is_stale(
@@ -707,6 +740,7 @@ async fn open_state(
             // The run's steps are traced with the integration `execution::workers` starts for
             // the same `BARCA_TELEMETRY`.
             traced: crate::telemetry::is_on("datadog"),
+            scope: Some(&request.scope()),
         },
         &node_ids,
         &base_ids,
@@ -724,6 +758,40 @@ async fn open_state(
         node_ids.len(),
         base_ids.len()
     );
+
+    if let CachePolicy::RefreshAll { since } | CachePolicy::RefreshSelective { since, .. } =
+        &request.policy
+    {
+        let scope = {
+            let cache = barca_decide::cache::CacheReader::for_config(cfg).await?;
+            barca_decide::cache::refresh_scope(
+                &prepared.dag,
+                &request.policy,
+                exec_plan,
+                &cache,
+                &prepared.pinned,
+                &prepared.user_pins,
+                request.partition.as_ref(),
+            )
+            .await?
+        };
+        if let Some(ledger) = barca_store::ledger::attached(cfg) {
+            ledger
+                .invalidate_refresh(&barca_store::ledger::RefreshRequest {
+                    run_id: run_id.to_string(),
+                    accepted_at: *since,
+                    nodes: scope.clone(),
+                })
+                .await?;
+            ledger
+                .prefetch(barca_decide::cache::cone_keys(
+                    &prepared.dag,
+                    &exec_plan.phases,
+                ))
+                .await?;
+        }
+        db::materializations::invalidate_refresh_scope(&db_path, run_id, *since, &scope).await?;
+    }
 
     // Measured-cost model: seed from persisted estimates so batch sizing is
     // pre-warmed — the cold-start probe is paid once ever per stable node,
@@ -919,6 +987,7 @@ async fn dispatch_ready(
 ) -> barca_engine::coordinator::Coordinator {
     session.state.steps_executed += phase_step_count(filtered_phase);
 
+    let cached = cached_count(&session.state);
     let (coord, phase_err, phase_elapsed, phase_completed, phase_total) =
         dispatch_phase(DispatchPhase {
             filtered_phase,
@@ -939,7 +1008,8 @@ async fn dispatch_ready(
             agent_mode: session.request.agent_mode,
             total_estimated: session.state.total_estimated,
             elapsed_so_far: session.state.elapsed_so_far,
-            completed_steps: session.state.completed_steps,
+            completed_steps: session.state.completed_steps + cached,
+            cached_steps: cached,
             total_steps: session.state.total_steps,
             event_tx: &session.request.event_tx,
             logs_buffer: &mut session.state.logs_buffer,
@@ -948,7 +1018,7 @@ async fn dispatch_ready(
         })
         .await;
     session.state.elapsed_so_far = phase_elapsed;
-    session.state.completed_steps = phase_completed;
+    session.state.completed_steps = phase_completed.saturating_sub(cached);
     session.state.total_steps = phase_total;
     trace_point!(session.started.trace, "phase{phase_idx}_run_phase_done");
     if let Err(e) = phase_err
@@ -1047,6 +1117,30 @@ async fn collect_failures(
         let grace = std::time::Duration::from_millis(250);
         let _ = tokio::time::timeout(grace, session.started.cancel.cancelled()).await;
     }
+    let terminal_failures: std::collections::HashMap<_, _> =
+        coord.failed_items().into_iter().collect();
+    let remaining = barca_model::run_explain::WORKER_FAILURE_LIMIT
+        .saturating_sub(session.state.results.worker_failures.len());
+    for (id, first_error) in coord.worker_failures().iter().take(remaining) {
+        let retry_error = terminal_failures
+            .get(id)
+            .map(|error| barca_model::run_explain::bounded_worker_error(error));
+        session
+            .state
+            .results
+            .worker_failures
+            .push(barca_model::run_explain::WorkerFailure {
+                node_id: coord.item(*id).step_id.display(),
+                first_error: first_error.clone(),
+                retry_error,
+                recovered: coord.outputs().contains_key(id),
+            });
+    }
+    session
+        .state
+        .results
+        .worker_failures
+        .sort_by(|a, b| a.node_id.cmp(&b.node_id));
     let cancelled = session.started.cancel.is_cancelled();
     let mut first_non_group_failure: Option<(String, String)> = None;
     let mut first_failure_phase = None;
@@ -1141,7 +1235,20 @@ async fn collect_failures(
         if item.group.is_some() {
             continue;
         }
-        session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        if let Some((reason, elapsed)) = coord.explicit_skips().get(&item_id) {
+            session
+                .state
+                .results
+                .task_skips
+                .push(barca_model::step_result::TaskSkip {
+                    node_id: item.step_id.display(),
+                    reason: reason.clone(),
+                    elapsed_seconds: *elapsed,
+                    attempts: item.attempts,
+                });
+        } else {
+            session.state.steps_executed = session.state.steps_executed.saturating_sub(1);
+        }
         let base = item.step_id.base_id().to_string();
         if item.step_id.partition.is_empty() {
             session.state.skipped_bases.insert(base);
@@ -1218,12 +1325,13 @@ struct BatchKeys {
 /// display ids of its keys in key order)`. Only the keys that run are in the phase, so only
 /// those are grouped. A node whose grouping cannot be made (a `batches_by` function that
 /// raises, `strict=True` with a key in no group) is returned with why, to be failed.
-fn plan_calls(
+async fn plan_calls(
     dag: &Dag,
     over: &barca_engine::batch::BatchOverride,
     phase: &Phase,
     python: &std::path::Path,
     next_call: &mut u64,
+    cancel: &CancellationToken,
 ) -> PlannedCalls {
     let mut keys_of: Vec<BatchKeys> = Vec::new();
     let mut index: HashMap<String, usize> = HashMap::new();
@@ -1270,12 +1378,15 @@ fn plan_calls(
         };
         let labels = match &grouping {
             barca_engine::batch::Grouping::By { source_text, .. } => {
-                match barca_engine::batch::evaluate_labels(
+                match barca_engine::batch::evaluate_labels_until(
                     python,
                     &node.invoke.python().source_file,
                     source_text,
                     &keys,
-                ) {
+                    barca_model::process::Until::cancelled(cancel),
+                )
+                .await
+                {
                     Ok(labels) => Some(labels),
                     Err(e) => {
                         errors.push((base.clone(), format!("could not group the keys: {e}")));
@@ -1306,6 +1417,34 @@ fn plan_calls(
     PlannedCalls { calls, errors }
 }
 
+/// The same count used by terminal persistence, including compact freshness proofs.
+fn cached_count(state: &RunState) -> usize {
+    state.cached_node_ids.len()
+        + state
+            .incremental
+            .as_ref()
+            .map_or(0, |i| i.unseeded_cached())
+}
+
+async fn record_cached_progress(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
+    let cached = cached_count(&session.state);
+    let total = session.state.total_steps;
+    if session.state.recorded_progress != Some((cached, total)) {
+        db::runs::set_cached_progress(
+            &session.request.cfg.db_path,
+            &session.started.run_id,
+            cached,
+            total,
+        )
+        .await?;
+        session.state.recorded_progress = Some((cached, total));
+        if let Some(bar) = &session.pb {
+            bar.set_position((session.state.completed_steps + cached) as u64);
+        }
+    }
+    Ok(())
+}
+
 async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError> {
     let prepared = session.prepared;
     let target_ids: Vec<&str> = prepared.targets.iter().map(|(_, id)| id.as_str()).collect();
@@ -1333,6 +1472,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         next_idx += 1;
         trace_point!(session.started.trace, "phase{phase_idx}_start");
         let selected = select_work(session, work, &mut queue, &requested, phase_idx).await?;
+        record_cached_progress(session).await?;
         if session.state.transfer_error.is_some()
             || (session.state.sink_failed && !prepared.keep_going)
         {
@@ -1343,6 +1483,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         };
         let recovered =
             recover_phase_inputs(session, phase, recompute, &mut queue, phase_idx).await?;
+        record_cached_progress(session).await?;
         if session.state.transfer_error.is_some() {
             break;
         }
@@ -1358,7 +1499,13 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
             &phase,
             session.request.python,
             &mut session.state.next_call,
-        );
+            &session.started.cancel,
+        )
+        .await;
+        if session.started.cancel.is_cancelled() {
+            session.state.phase_error = Some("run cancelled".into());
+            break;
+        }
         if let Some((base, message)) = ungrouped.first() {
             session.state.usage_error = Some(format!("{base}: {message}"));
             for (base, message) in ungrouped {
@@ -1374,6 +1521,7 @@ async fn drive_phases(session: &mut RunSession<'_, '_>) -> Result<(), BarcaError
         let coord = dispatch_ready(session, &phase, &provided, phase_idx, calls).await;
         let phase_outputs = collect_outputs(session, &coord);
         computed_by_other_runs(session, &phase_outputs);
+        record_cached_progress(session).await?;
         collect_failures(session, &coord).await;
         session
             .state
@@ -1405,6 +1553,7 @@ async fn record_and_publish(
     session: &mut RunSession<'_, '_>,
     touched: &[String],
 ) -> Result<f64, BarcaError> {
+    let cached = cached_count(&session.state);
     let elapsed = finalize_run(
         FinalizeRun {
             results: &mut session.state.results,
@@ -1420,7 +1569,7 @@ async fn record_and_publish(
                 .as_ref()
                 .map_or(0, |i| i.unseeded_cached()),
             steps_executed: session.state.steps_executed,
-            completed_steps: session.state.completed_steps,
+            completed_steps: session.state.completed_steps + cached,
             total_steps: session.state.total_steps,
             cancel: &session.started.cancel,
             phase_error: &session.state.phase_error,
@@ -1522,6 +1671,39 @@ async fn return_outputs(
     }
 
     session.state.results.annotate_reports(&mut step_reports);
+    for report in &mut step_reports {
+        if report.reason.as_deref() == Some("upstream_failed")
+            && blocking_failure(
+                &session.prepared.dag,
+                &report.id,
+                &session.state.failed_bases,
+            )
+            .is_none()
+        {
+            report.reason = Some("upstream_skipped".into());
+            report.detail = Some("a task it depends on skipped".into());
+        }
+    }
+    for skip in &session.state.results.task_skips {
+        if let Some(report) = step_reports.iter_mut().find(|r| r.id == skip.node_id) {
+            report.status = Some("skipped".into());
+            report.skip_reason = Some(skip.reason.clone());
+            report.reason = Some("task_skipped".into());
+            report.detail = Some(skip.reason.clone());
+            report.attempts = Some(skip.attempts);
+            report.elapsed_seconds = Some(skip.elapsed_seconds);
+        }
+    }
+    for ((_, id), (_, outcome)) in session.prepared.targets.iter().zip(outcomes.iter_mut()) {
+        if session.state.skipped_bases.contains(id)
+            && !session.state.failed_bases.contains(id)
+            && blocking_failure(&session.prepared.dag, id, &session.state.failed_bases).is_none()
+        {
+            outcome.status = "skipped".into();
+            outcome.error = None;
+            outcome.failed_node = None;
+        }
+    }
 
     // Only a step that ran can record changed bytes: a run that executed none (every step
     // cached) is not looked up.
@@ -1640,6 +1822,8 @@ impl RunCommand {
 pub struct RunOptions {
     /// The run id to use; a new one when `None`.
     pub run_id: Option<String>,
+    /// Exact server request, including host-only options. Local runs derive their scope.
+    pub scope: Option<barca_model::run_scope::RunScope>,
     pub trigger: barca_model::trigger::Trigger,
     /// What hosts the run: [`barca_engine::run_host::LocalHost`] for a run on its own, a
     /// [`barca_model::serve::ServeHost`] for a run of `barca serve`, whose runs share a capacity
@@ -1654,6 +1838,7 @@ impl Default for RunOptions {
     fn default() -> Self {
         Self {
             run_id: None,
+            scope: None,
             trigger: barca_model::trigger::Trigger::default(),
             host: barca_engine::run_host::LocalHost::shared(),
             batch: barca_engine::batch::BatchOverride::default(),

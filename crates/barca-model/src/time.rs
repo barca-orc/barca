@@ -53,7 +53,7 @@ pub fn rfc3339_millis(secs: f64) -> String {
 /// A time the metadata DB recorded (`datetime('now')`: `YYYY-MM-DD HH:MM:SS`, UTC) in the same
 /// form as [`rfc3339_millis`], so live and durable times sort together; anything else as it is.
 pub fn sql_datetime_rfc3339(at: &str) -> String {
-    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S%.f")
         .map(|t| {
             t.and_utc()
                 .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
@@ -63,7 +63,7 @@ pub fn sql_datetime_rfc3339(at: &str) -> String {
 
 /// A time the metadata DB recorded (`YYYY-MM-DD HH:MM:SS`, UTC) as unix seconds.
 pub fn parse_db_utc(at: &str) -> Option<i64> {
-    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S")
+    chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S%.f")
         .ok()
         .map(|t| t.and_utc().timestamp())
 }
@@ -73,6 +73,40 @@ pub fn parse_rfc3339(at: &str) -> Option<i64> {
     chrono::DateTime::parse_from_rfc3339(at)
         .ok()
         .map(|t| t.timestamp())
+}
+
+/// Fractional database UTC timestamp, preserving the acceptance boundary of a refresh.
+pub fn db_timestamp(secs: f64) -> String {
+    chrono::DateTime::from_timestamp(secs as i64, (secs.fract() * 1e9) as u32)
+        .map(|t| t.format("%Y-%m-%d %H:%M:%S%.9f").to_string())
+        .unwrap_or_default()
+}
+
+/// Fractional Unix seconds, accepting both legacy whole seconds and precise new rows.
+pub fn parse_db_timestamp(at: &str) -> Option<f64> {
+    let t = chrono::NaiveDateTime::parse_from_str(at, "%Y-%m-%d %H:%M:%S%.f")
+        .ok()?
+        .and_utc();
+    Some(t.timestamp() as f64 + t.timestamp_subsec_nanos() as f64 / 1e9)
+}
+
+/// Serialize a metadata timestamp as RFC 3339 without changing its stored representation.
+pub fn serialize_datetime<S: serde::Serializer>(
+    at: &str,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(&sql_datetime_rfc3339(at))
+}
+
+/// Optional counterpart of [`serialize_datetime`]; an unknown time remains null.
+pub fn serialize_optional_datetime<S: serde::Serializer>(
+    at: &Option<String>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    match at {
+        Some(at) => serializer.serialize_some(&sql_datetime_rfc3339(at)),
+        None => serializer.serialize_none(),
+    }
 }
 
 #[cfg(test)]
@@ -88,6 +122,16 @@ mod tests {
         assert_eq!(rfc3339(1_792_648_800), "2026-10-22T06:00:00Z");
         assert_eq!(rfc3339_secs(i64::MAX), None);
         assert_eq!(rfc3339(i64::MAX), "");
+    }
+
+    #[test]
+    fn precise_database_timestamps_remain_compatible() {
+        let at = 1_791_547_200.1234567;
+        let text = db_timestamp(at);
+        assert_eq!(parse_db_timestamp(&text), Some(at));
+        assert_eq!(parse_db_utc(&text), Some(at as i64));
+        assert_eq!(sql_datetime_rfc3339(&text), rfc3339_millis(at));
+        assert_eq!(parse_db_timestamp(&text[..19]), Some(at.floor()));
     }
 
     #[test]

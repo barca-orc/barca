@@ -270,6 +270,11 @@
 @container (max-width: 900px) {
   .barca-chip-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 }
+/* Explicit refresh controls keep their space while the scope loads. */
+.barca-view-actions > .barca-run-options { flex: none; flex-wrap: nowrap; }
+@container (max-width: 1200px) {
+  .barca-view-bar:has(.barca-run-options) .barca-chip-word { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+}
 /* The table's text lines up with the title above it (24px); its hover runs 12px further out. */
 .barca-view-body { flex: 1; min-height: 0; overflow: auto; padding: 0 12px 24px; scrollbar-gutter: stable; }
 .barca-view-body > .barca-table-empty, .barca-view-body > .barca-note, .barca-view-body > p { margin-left: 12px; margin-right: 12px; }
@@ -809,8 +814,8 @@
 }
 .barca-group-crumbs button:hover { color: var(--text-strong); }
 .barca-group-node {
-  width: 248px;
-  height: 112px;
+  width: 320px;
+  height: 224px;
   padding: 12px 14px;
   background: var(--bg-raised);
   border: 1px solid var(--border-strong);
@@ -890,7 +895,7 @@
 .barca-group-node[data-tone='failed'] .barca-group-node-health {
   color: var(--text-strong);
 }
-.barca-group-node-health { gap: 10px; white-space: nowrap; overflow: hidden; }
+.barca-group-node-health { gap: 6px 10px; flex-wrap: wrap; white-space: normal; }
 /* A group's most severe fact, in words; the rest beside it as glyph and count. */
 .barca-group-node-lead { display: inline-flex; align-items: center; gap: 6px; }
 .barca-group-node-part { display: inline-flex; align-items: center; gap: 4px; color: var(--text-muted); font-size: var(--text-xs); }
@@ -935,7 +940,7 @@
 .barca-group-table col.gcol-contents { width: 140px; }
 .barca-group-table col.gcol-failed { width: 64px; }
 .barca-group-table col.gcol-age { width: 90px; }
-.barca-group-table col.gcol-duration { width: 90px; }
+.barca-group-table col.gcol-duration { width: 112px; }
 .barca-group-table col.gcol-open { width: 40px; }
 /* The state's summary wraps under its bar rather than being cut. */
 .barca-group-table .barca-health { flex-wrap: wrap; row-gap: 2px; }
@@ -1467,3 +1472,18 @@
 
 /* A page that failed to render, inside the shell. */
 .barca-route-error { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; padding: 24px; }
+
+/* Diagnostic words must remain readable at desktop widths and beside an inspector. */
+.barca-group-table .barca-health-label,
+.barca-group-table td.gcol-contents,
+.barca-asset-table td.col-state,
+.barca-asset-table td.col-fresh,
+.barca-schedule-table td.col-schedule,
+.barca-schedule-table td.col-state { white-space: normal; overflow-wrap: anywhere; }
+.barca-group-table .barca-cell-sub { white-space: normal; }
+.barca-schedule-cron { display: block; margin-left: 0; white-space: nowrap; }
+.barca-health-label { white-space: normal; }
+
+.barca-group-table td:nth-child(3) { white-space: normal; }
+
+.barca-group-table td.gcol-duration { white-space: normal; }

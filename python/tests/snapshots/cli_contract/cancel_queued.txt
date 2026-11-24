@@ -1,0 +1,3 @@
+# barca cancel RUN_ID --server SERVER --json  (stdout, exit 0)
+run_id : string
+status : string
