@@ -1,6 +1,6 @@
 [package]
 name = "barca-engine"
-version = "0.46.4"
+version = "0.47.0"
 edition = "2024"
 description = "Engine layer — plan in, results out: the coordinator, the worker pool, the wire protocol"
 

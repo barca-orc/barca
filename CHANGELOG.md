@@ -8,6 +8,8 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+## 0.47.0 (2026-11-24)
+
 ### Breaking
 
 - Run details (including the deprecated `/status/{run_id}` alias and Python `Client.status`/`Run.wait`) now use `{run, steps, steps_page, explanation}`: read execution status, outcome, scope, and control under `run`. Run-list rows use `run_id` instead of `id`/`handle`, and `failure: {node, error}` instead of `first_failure`. Local history timestamps now use RFC 3339 UTC.
@@ -75,6 +77,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 ### Documentation
 
 - Set `KillMode=mixed` and an explicit stop timeout in the systemd recipe so stopping the service lets Barca drain its workers; clarify container signal delivery (#927).
+
+### Performance
+
+- Compile CLI and run orchestration for smaller resident code, restoring incremental coordination memory headroom without changing performance budgets or worker parallelism.
 
 ## 0.46.4 (2026-11-22)
 
