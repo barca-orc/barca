@@ -48,6 +48,29 @@ fn live(handle: &str) -> RunState {
     }
 }
 #[tokio::test]
+async fn logs_keep_live_completion_when_the_database_snapshot_is_older() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = state(dir.path());
+    let path = &state.config.resolved.db_path;
+    db::init_db(path).await.unwrap();
+    db::create_run(path, "done", "get", "[]", Some("first"), Some(1))
+        .await
+        .unwrap();
+    // The snapshot still says running when the registry has observed completion.
+    let mut run = live("done");
+    run.status = RunStatus::Success;
+    state.runs.registry.insert(run.handle.clone(), run);
+    let Json(logs) = super::handlers::logs(
+        State(state),
+        axum::extract::Path("done".to_string()),
+        Query(serde_json::from_value(serde_json::json!({})).unwrap()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(logs.status, "success");
+}
+
+#[tokio::test]
 async fn queued_and_failed_durable_runs_are_visible_without_duplicates() {
     let dir = tempfile::tempdir().unwrap();
     let state = state(dir.path());

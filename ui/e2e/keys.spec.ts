@@ -163,7 +163,7 @@ test('says what is wrong and where, shows those keys, zooms and opens one', asyn
   expect(asked.at(-1)!.searchParams.get('state')).toBe('failed')
   expect(asked.at(-1)!.searchParams.get('error')).toBe('0')
   const started = page.waitForRequest((r) => r.method() === 'POST' && r.url().endsWith('/runs'))
-  await page.route(/\/runs$/, (route) => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9', handle: 'r9' } }) : route.fallback())
+  await page.route(/\/runs$/, (route) => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9' } }) : route.fallback())
   await issues.getByRole('button', { name: 'Run' }).first().click()
   expect((await started).postDataJSON()).toMatchObject({ command: 'get', targets: [NODE], partition: JSON.stringify({ day: ['d2'], region: ['emea'] }) })
   await expect(page.locator('.barca-keys-notice')).toContainText('Started run r9')
@@ -211,7 +211,7 @@ test('retry completion refreshes the open key and reports failure', async ({ pag
     ...detail, attempts: finished ? [{ ...detail.attempts[0], error: 'ValueError: retry still failed', run_id: 'r9' }] : detail.attempts,
   } }))
   await page.route(/\/runs$/, route => route.request().method() === 'POST' ? route.fulfill({ json: { run_id: 'r9' } }) : route.fallback())
-  await page.route(/\/runs\/r9$/, route => { finished = true; return route.fulfill({ json: { run_id: 'r9', status: 'failed' } }) })
+  await page.route(/\/runs\/r9$/, route => { finished = true; return route.fulfill({ json: { run: { run_id: 'r9', status: 'failed' } } }) })
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}&key=day%3Dd2%2Cregion%3Demea`)
   await page.getByRole('button', { name: 'Run this key' }).click()
   await expect(page.locator('.barca-keys-notice')).toContainText('Run failed')
@@ -261,7 +261,7 @@ test('both retry controls preserve scattered compound keys', async ({ page }) =>
   await page.route(/\/runs$/, route => {
     if (route.request().method() !== 'POST') return route.fallback()
     requests.push(route.request().postDataJSON())
-    return route.fulfill({ json: { run_id: 'retry-exact', handle: 'retry-exact' } })
+    return route.fulfill({ json: { run_id: 'retry-exact' } })
   })
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
   await page.getByRole('button', { name: 'Run 2 keys shown' }).click()
@@ -284,7 +284,7 @@ test('paused key retries ask before submitting the retained selection', async ({
   await page.route(/\/runs$/, route => {
     if (route.request().method() !== 'POST') return route.fallback()
     requests.push(route.request().postDataJSON())
-    return route.fulfill({ json: { run_id: 'paused-retry', handle: 'paused-retry' } })
+    return route.fulfill({ json: { run_id: 'paused-retry' } })
   })
   await page.goto(`/ui/#/keys?node=${encodeURIComponent(NODE)}`)
   await page.getByRole('button', { name: 'Run 2 keys shown' }).click()

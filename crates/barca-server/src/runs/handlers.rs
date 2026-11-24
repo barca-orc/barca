@@ -606,12 +606,14 @@ pub async fn logs(
             ))
         })?),
     };
-    let snapshot = state.reads.snapshot_db().await?;
+    // Observe completion before taking the snapshot so terminal status cannot accompany
+    // a snapshot taken before the final log writes.
     let live = state.runs.registry.get(&id).map(|r| r.status);
+    let snapshot = state.reads.snapshot_db().await?;
     let record = db::get_run(&snapshot.path, &id).await?;
-    let mut status = match (&record, live) {
-        (Some(record), _) => record.status.clone(),
-        (None, Some(live)) => live_status(live).as_str().to_string(),
+    let status = match (&record, live) {
+        (_, Some(live)) => live_status(live).as_str().to_string(),
+        (Some(record), None) => record.status.clone(),
         (None, None) => {
             return Err(ApiError::NotFound(format!(
                 "run '{id}' was not found on this server
@@ -620,11 +622,6 @@ A run recorded on another machine is \
             )));
         }
     };
-    if let Some(live) = live
-        && matches!(live, RunStatus::Pending | RunStatus::Running)
-    {
-        status = live_status(live).as_str().to_string();
-    }
     let step = query.step.as_deref().filter(|s| !s.is_empty());
     let lines = if record.is_some() || live.is_some() {
         // Errors read as `barca logs` reports them here.

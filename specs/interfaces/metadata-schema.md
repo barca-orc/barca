@@ -43,7 +43,11 @@ restored, downgraded or reset. Upgrade to a compatible Barca release to open the
 
 Format 1 adds `freshness_proofs(id TEXT PRIMARY KEY, generation INTEGER NOT NULL,
 snapshot TEXT NOT NULL)` through the registered additive table migration. IDs include a
-private payload version, artifact-layout hash and logical node ID; snapshots are JSON.
+private payload version, refresh-invalidation revision, artifact-layout hash and logical node ID;
+snapshots are JSON. The `freshness_revision` key in `metadata_info` stores a decimal counter
+incremented in the same transaction as a refresh invalidates any results. That transaction clears existing
+proofs. A late publisher retains its old revision in its proof IDs, so later readers cannot
+accept it as current even when no materialization was appended.
 Generation is the maximum materialization ID validated by that proof. Old generations are
 removed when a successful run publishes new proofs. Missing or malformed payloads cause
 normal cache validation, never loss of history. The table is disposable acceleration data;

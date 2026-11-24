@@ -382,6 +382,9 @@ including blocked downstream phases. Ordinary single, batched and grouped cache 
 exclude those rows. A cache-aware retry cannot resurrect them after failure or restart;
 new successful results and results at or after the original acceptance boundary remain
 eligible. Retrying the same invalidation does not invalidate these later successes.
+Incremental proofs are scoped to a refresh-invalidation revision as well as appended history;
+a kill before any new result is recorded cannot preserve a pre-refresh proof. Incremental
+bulk reads exclude invalidated rows just like ordinary cache lookups.
 
 Scope follows partition-aligned refresh and cascade rules, cutoff boundaries, held nodes,
 explicit pins and request selection. No-cascade and out-of-cone consumers are not invalidated.

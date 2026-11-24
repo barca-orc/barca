@@ -36,6 +36,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ### Bug Fixes
 
+- Run-log polling preserves live completion when the database snapshot is older. Toolbar refresh controls reserve their space during loading, preventing the asset table and graph from shifting.
+
+- A refresh killed before recording a new result no longer leaves an incremental freshness proof that can serve pre-refresh data. Bulk incremental reads also exclude invalidated results.
+
 - Older metadata databases migrate newly added tables before extending their columns, so databases predating schedule tick history remain readable.
 
 - Accepted queued runs appear as `pending` in API and local CLI history before execution, survive restart, and retain one request identity through cancellation or requeue. Queue admission and history commit atomically (#943).
