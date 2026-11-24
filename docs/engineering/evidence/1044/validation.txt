@@ -37,3 +37,18 @@ concurrent maturin replacement. The final check runs without concurrent installs
 Final full scripts/check-fast.sh: all passed.
 Changelog, specs, hooks, clippy, workspace Rust (1679 passed, 2 ignored),
 fast build, Python (675 passed). No acceptance targets were relaxed.
+
+Integration recheck 2026-11-23 (after 0.47 lifecycle head dbf73a8b)
+- Both textual merge conflicts resolved without dropping either test or release notes.
+- check-fast against dbf73a8b: 1707 Rust tests and 681 Python tests passed;
+  changelog, specifications, hooks, clippy and fast build passed.
+- UI: 602 unit tests, typecheck, lint and production build passed.
+- Browser: 81/82 flat tests initially passed; the remaining Schedules loading
+  shift was fixed by deriving whether controls are needed from the listed
+  schedules, avoiding a flash of controls on an empty page. Its recheck passed.
+  All 25 grouped and 2 authenticated browser tests passed.
+- Embedded production UI on the equivalent 616-node fixture: 490052 bytes
+  first load, 2205 grouped idle bytes and 17563 flat idle bytes per 30 seconds.
+  Layout, empty keys and theme acceptance passed. See integration-result.json.
+- The measurement preceded the final empty-Schedules loading correction;
+  that correction is covered by the browser layout recheck above.
