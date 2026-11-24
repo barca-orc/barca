@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "barca"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "axum",
  "barca-server",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "barca-analysis"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-compile",
  "barca-db",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "barca-compile"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-model",
  "barca-python",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "barca-db"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-model",
  "libc",
@@ -281,7 +281,7 @@ dependencies = [
 
 [[package]]
 name = "barca-decide"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-compile",
  "barca-db",
@@ -301,7 +301,7 @@ dependencies = [
 
 [[package]]
 name = "barca-engine"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-compile",
  "barca-model",
@@ -318,7 +318,7 @@ dependencies = [
 
 [[package]]
 name = "barca-model"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "chrono",
  "croner",
@@ -341,7 +341,7 @@ dependencies = [
 
 [[package]]
 name = "barca-proc"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-model",
  "libc",
@@ -354,7 +354,7 @@ dependencies = [
 
 [[package]]
 name = "barca-python"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-model",
  "petgraph",
@@ -373,7 +373,7 @@ dependencies = [
 
 [[package]]
 name = "barca-run"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-compile",
  "barca-db",
@@ -399,7 +399,7 @@ dependencies = [
 
 [[package]]
 name = "barca-server"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "axum",
  "barca-service",
@@ -430,7 +430,7 @@ dependencies = [
 
 [[package]]
 name = "barca-service"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-analysis",
  "barca-compile",
@@ -456,7 +456,7 @@ dependencies = [
 
 [[package]]
 name = "barca-store"
-version = "0.46.4"
+version = "0.47.0"
 dependencies = [
  "barca-compile",
  "barca-db",
