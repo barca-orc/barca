@@ -1,3 +1,4 @@
+import { useVisibleAssetStates } from '@/hooks/useAssetStates'
 import { StreamNotice } from '@/components/StreamNotice'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useNavigate, useSearchParams } from 'react-router'
@@ -98,7 +99,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
 
   // "x ago" is relative to when the data was fetched, so it stays pure and
   // refreshes with every poll. The rows and filters are the graph view's too (`useAssetFilter`).
-  const filter = useAssetFilter(kind, sort)
+  const filter = useAssetFilter(kind, sort, false)
   const { data, dataUpdatedAt, isError, error, refetch } = filter.states
   const { graph, pipeline, paused, onlyPaused, rows, visible, now } = filter
   // A name repeated across files reads as its id; two rows never show the same label.
@@ -120,6 +121,10 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
   const tableBody = useRef<HTMLTableSectionElement>(null)
   const scroller = useRef<HTMLDivElement>(null)
   const win = useTableWindow(lines.length, scroller, 36)
+  const visibleStates = useVisibleAssetStates(win.items.flatMap(({ index }) => {
+    const line = lines[index]
+    return line?.kind === 'row' ? [line.row.id] : []
+  }).concat(params.get('node') ? [params.get('node')!] : []))
   const { scrollToIndex } = win
 
   // The node shown in the side panel (?node=<id>).
@@ -178,6 +183,7 @@ export function AssetsPage({ kind = 'asset' }: { kind?: NodeKind }) {
           extra={nodeRun.run && <Link className="barca-clear" to={`/runs?run=${encodeURIComponent(nodeRun.run.handle)}`}>View run</Link>}
         />
       </div>
+      {visibleStates.isError && <p role="alert" className="barca-note">Could not refresh visible rows. <Button size="sm" onClick={() => void visibleStates.refetch()}>Retry</Button></p>}
       <RunNotice notice={nodeRun.notice} onDismiss={nodeRun.dismiss} />
       <div className="barca-assets-split">
       <div className="barca-view-body barca-table-scroll" ref={scroller}>

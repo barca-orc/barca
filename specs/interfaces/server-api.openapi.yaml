@@ -203,7 +203,7 @@ paths:
               description: A digest of the body. Send it back as If-None-Match to get 304 Not Modified, and no body, while the body is unchanged.
               schema:
                 type: string
-                pattern: ^"[0-9a-f]{24}"$
+                pattern: ^W/"[0-9a-f]{24}"$
             Cache-Control:
               description: A client may keep the body, and asks again each time (with If-None-Match).
               schema:
@@ -1607,6 +1607,12 @@ paths:
         in: query
         required: false
         description: Only keys in these states, comma-separated (failed, blocked, stale, never_run, pinned, fresh).
+        schema:
+          type: string
+      - name: empty
+        in: query
+        required: false
+        description: 1 or true for only keys whose latest attempt, when it succeeded, recorded zero rows. Unknown counts are excluded; other filters still apply.
         schema:
           type: string
       - name: needs_run
@@ -6458,7 +6464,7 @@ components:
             type: [integer, "null"]
         rows:
           type: array
-          description: The rows each cell's latest successful attempt wrote; null where not counted or failed.
+          description: The rows each cell's latest attempt, when it succeeded, wrote; null where not counted or failed.
           items:
             type: [integer, "null"]
         run:
@@ -6560,7 +6566,7 @@ components:
                 type: [integer, "null"]
               rows:
                 type: [integer, "null"]
-                description: Rows the latest successful attempt wrote, where its worker counted them.
+                description: Rows the latest attempt, when it succeeded, wrote, where its worker counted them.
               run_id:
                 type: [string, "null"]
               error:

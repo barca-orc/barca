@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- Compress served responses and poll visible asset rows, preserve readable health and schedule details, and expose empty results and row counts in the key explorer. Respect the OS theme and explain empty projects and worktree builds without the UI (#1044).
+
 ## 0.47.0 (2026-11-24)
 
 ### Breaking

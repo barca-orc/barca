@@ -46,6 +46,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
   // A count next to "not reachable" would be read as current; it is shown only with a live server.
   const current = !offline && assets.kind === "ready" && assets.refreshError === null;
   const canPause = health ? health.scheduler && !health.read_only : false;
+  const hasSchedules = assets.kind === "ready" && assets.data.some((asset) => asset.schedule && inPipeline(asset.id, pipeline));
   const late = rows?.filter((r) => r.late !== null).length ?? 0;
   const queueBound = rows?.filter((r) => r.queueBound).length ?? 0;
 
@@ -58,7 +59,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
             {current && rows && <span className="barca-count">{rows.length.toLocaleString()}<span className="barca-sr-only"> scheduled</span></span>}
           </div>
           <div className="barca-view-actions">
-            {current && health && rows?.length !== 0 && (
+            {current && health && hasSchedules && (
               <span className="barca-count">
                 {health.read_only ? "read-only view" : health.scheduler ? "scheduler running" : "scheduler off (--no-schedule)"}
                 {late > 0 && ` · ${late.toLocaleString()} late`}
@@ -66,7 +67,7 @@ export function SchedulesView({ title, pipeline, assets, states, dataUpdatedAt, 
               </span>
             )}
             {/* No schedules: the page has nothing of its own to run. */}
-            {rows?.length !== 0 && actions}
+            {hasSchedules && actions}
           </div>
         </div>
         {health && !health.scheduler && rows && rows.length > 0 && (

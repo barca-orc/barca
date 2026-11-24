@@ -206,6 +206,8 @@ pub struct KeyRange {
 /// must hold.
 #[derive(Debug, Clone, Default)]
 pub struct KeyQuery {
+    /// Only successful results with a recorded zero row count.
+    pub empty: bool,
     /// [`state`] characters; empty: every state.
     pub states: Vec<char>,
     /// Only keys a run computes ([`NEEDS_RUN`]).
@@ -311,6 +313,7 @@ impl KeyQuery {
             }
         };
         Ok(KeyQuery {
+            empty: false,
             states,
             needs_run: args.needs_run,
             values,
@@ -328,7 +331,8 @@ impl KeyQuery {
 
     /// Whether any filter narrows the keys (the order and the page do not).
     pub fn filters(&self) -> bool {
-        !self.states.is_empty()
+        self.empty
+            || !self.states.is_empty()
             || self.needs_run
             || !self.values.is_empty()
             || self.range.is_some()
@@ -592,6 +596,9 @@ impl PartitionGrid {
             if !query.states.is_empty() && !query.states.contains(&code) {
                 continue;
             }
+            if query.empty && (self.rows.get(cell).copied().flatten() != Some(0)) {
+                continue;
+            }
             if query.needs_run && !NEEDS_RUN.contains(&code) {
                 continue;
             }
@@ -793,6 +800,7 @@ impl PartitionGrid {
     /// the dimension with the fewest values.
     fn run_selection(&self, query: &KeyQuery, cells: &[usize]) -> Option<String> {
         if cells.is_empty()
+            || query.empty
             || !query.needs_run
             || !query.states.is_empty()
             || query.error.is_some()
@@ -1077,6 +1085,31 @@ mod tests {
             ],
             runs: vec!["run-a".into(), "run-b".into()],
         }
+    }
+
+    #[test]
+    fn empty_keys_match_recorded_zero_rows_not_unknown_counts() {
+        let mut grid = grid();
+        grid.rows[0] = Some(0);
+        grid.rows[6] = Some(0); // stale, but its last attempt succeeded with no rows
+        let query = KeyQuery {
+            empty: true,
+            limit: Some(1),
+            ..Default::default()
+        };
+        let page = grid.keys_page(&query).unwrap();
+        assert_eq!(page.total, 2);
+        assert_eq!(page.keys.len(), 1);
+        assert_eq!(page.keys[0].rows, Some(0));
+        assert!(query.filters());
+        let page = grid
+            .keys_page(&KeyQuery {
+                empty: true,
+                states: vec![state::FAILED],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(page.total, 0);
     }
 
     fn query<'a>(change: impl FnOnce(&mut KeyQueryArgs<'a>)) -> KeyQuery {

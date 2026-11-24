@@ -364,6 +364,7 @@ export interface RunsViewProps {
   now: number
   /** The project root: traceback paths are shown relative to it. */
   root?: string | null
+  emptyProject?: boolean
   /** The Datadog web app (`GET /project` `telemetry.datadog_url`): steps link to their traces there. */
   datadogUrl?: string | null
   /** At the end of the toolbar: the page's Run (`PageRunButton`). */
@@ -448,12 +449,12 @@ function HiddenSchedule({ hidden, dispatch }: { hidden: ActivityHour; dispatch: 
   )
 }
 
-export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, actions, dispatch }: RunsViewProps) {
+export function RunsView({ model, runs, selected, queue, now, root, datadogUrl = null, actions, emptyProject = false, dispatch }: RunsViewProps) {
   const { zone } = useTimeZone()
   const list = runs.kind === 'ready' ? runs.data : null
   const narrowed = runsNarrowed(model)
   // Nothing recorded and nothing asked for: the page has no controls to offer yet.
-  const blank = list !== null && list.total === 0 && !narrowed && !list.activity?.excluded?.runs && !model.hideSchedule
+  const blank = list !== null && list.total === 0 && !narrowed && !list.activity?.excluded?.runs && (!model.hideSchedule || emptyProject)
   const command = runsCommand(model)
   // The run's panel beside the whole page, toolbar and queue included: full height, whatever the queue holds.
   return (
@@ -489,7 +490,7 @@ export function RunsView({ model, runs, selected, queue, now, root, datadogUrl =
               {data.activity && !blank && <ActivityStrip activity={data.activity} window={model.window} now={now} dispatch={dispatch} />}
               {data.activity?.excluded && data.activity.excluded.runs > 0 && <HiddenSchedule hidden={data.activity.excluded} dispatch={dispatch} />}
               {blank
-                ? <EmptyNote title="No runs yet">Start one with Run all, from an asset's panel, or with <code>barca get</code> in a terminal: every run appears here with its steps and logs.</EmptyNote>
+                ? <EmptyNote title="No runs yet">{emptyProject ? <>Add a function decorated with <code>@asset</code> to a served Python file, then run it with <code>barca get</code>. Its steps and logs will appear here.</> : <>Start one with Run all, from an asset's panel, or with <code>barca get</code> in a terminal: every run appears here with its steps and logs.</>}</EmptyNote>
                 : data.runs.length === 0
                   ? <p className="barca-table-empty">
                       {narrowed ? 'No run matches.' : 'No run but the schedule\'s.'}

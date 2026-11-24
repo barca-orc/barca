@@ -2,12 +2,8 @@ import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { FolderOpen, ArrowUpRight } from 'lucide-react'
 import { StatusGlyph } from '@/components'
 import { CauseDot } from '@/components/CauseDot'
-import { compactCount } from '@/lib/plural'
 import { toneGlyph } from '@/lib/glyph'
 import type { GraphNode } from '@/lib/graph'
-
-/** Past this many, a group card's further parts are left to its tooltip. */
-const PARTS_SHOWN = 3
 
 /** A part's mark: a dot in the health map's colour for a cause or fresh, the glyph for run work. */
 function PartMark({ part }: { part: NonNullable<GraphNode['data']['parts']>[number] }) {
@@ -17,7 +13,7 @@ function PartMark({ part }: { part: NonNullable<GraphNode['data']['parts']>[numb
 /**
  * A group of nodes in the graph: its name, what it holds, and where its nodes stand, in the
  * health map's words and colours: the leading part first in words (`2 failing`), then the rest
- * compactly as a dot and a count: a failure is never hidden behind run work. The tooltip names
+ * with a dot and the full count and cause: a failure is never hidden behind run work. The tooltip names
  * every part.
  */
 export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
@@ -50,13 +46,12 @@ export function GroupNode({ data, selected }: NodeProps<GraphNode>) {
               <PartMark part={lead} />
               {lead.text}
             </span>
-            {rest.slice(0, PARTS_SHOWN).map((part) => (
+            {rest.map((part) => (
               <span key={part.glyph + part.word} className="barca-group-node-part" title={part.text} aria-label={part.text}>
                 <PartMark part={part} />
-                {compactCount(part.count)}
+                {part.text}
               </span>
             ))}
-            {rest.length > PARTS_SHOWN && <span className="barca-group-node-part">+{rest.length - PARTS_SHOWN}</span>}
           </>
         ) : (
           <>

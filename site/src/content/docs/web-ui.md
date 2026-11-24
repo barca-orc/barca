@@ -165,7 +165,9 @@ An asset's panel has tabs: **Overview**, **Data** (a preview of its result), **H
   ([Pinning and Rollback](/reference/cli/pin/)).
 - For a partitioned asset, the **key explorer** shows every key at once, coloured by state, with
   each problem as one line (an error and the keys it hit, blocked keys, stale and never-run
-  keys) and a Run button for the keys that are not fresh. See
+  keys) and a Run button for the keys that are not fresh. The **Rows** column shows recorded
+  row counts (zero differs from unknown); **Empty results (0 rows)** filters before pagination
+  and includes successful empty results even when their keys are now stale. See
   [Exploring keys in the web UI](/reference/partitions/#exploring-keys-in-the-web-ui).
 
 ## Connecting to a server with tokens

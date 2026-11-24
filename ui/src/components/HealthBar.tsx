@@ -26,7 +26,7 @@ export interface HealthBarProps {
  * on. It counts nodes, and its tooltip says so. A cause always gets a visible sliver, however
  * many fresh nodes surround it.
  */
-export function HealthBar({ scope, labelLimit = 2, width = 96, quiet = false }: HealthBarProps) {
+export function HealthBar({ scope, labelLimit = Infinity, width = 96, quiet = false }: HealthBarProps) {
   const present = MAP_PARTS.filter((p) => scope.weights[p] > 0)
   const causes = causeParts(scope.causes)
   const all = causes.map((p) => `${p.count.toLocaleString()} ${p.label}`).join(' · ')

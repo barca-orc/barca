@@ -29,8 +29,8 @@ export function toggle<T>(list: T[], v: T): T[] {
  * A page of one kind's rows and the URL's filters over them: what the list shows as rows and
  * the graph leaves undimmed. Both views of Assets read it, so they count and filter alike.
  */
-export function useAssetFilter(kind: NodeKind, sort?: Sort) {
-  const states = useAssetStates()
+export function useAssetFilter(kind: NodeKind, sort?: Sort, poll = true) {
+  const states = useAssetStates(poll)
   const { data, dataUpdatedAt } = states
   const assetQuery = useAssets()
   const graph = useMemo(() => assetQuery.data ?? [], [assetQuery.data])
