@@ -1,4 +1,4 @@
-//! Writes of `freshness_proofs`. `barca_service::incremental`'s proof publication owns the guarded
+//! Reads and writes of `freshness_proofs`. `barca_run::incremental`'s proof publication owns the guarded
 //! transaction (the generation and foreign-work checks) these run in.
 
 use crate::db;
@@ -52,6 +52,73 @@ impl ReplaceProof {
     ) -> Result<u64, libsql::Error> {
         self.0.execute((id, generation, snapshot)).await
     }
+}
+
+/// Current generation and one bounded proof. Invalid or oversized evidence is a cache miss.
+pub async fn read(conn: &Connection, id: &str) -> Result<Option<(i64, String)>, libsql::Error> {
+    let mut rows = conn.query(
+        "SELECT generation, snapshot FROM freshness_proofs WHERE id = ?1 AND generation = COALESCE((SELECT id FROM materializations ORDER BY id DESC LIMIT 1), 0) AND length(snapshot) <= 524288",
+        [id],
+    ).await?;
+    match rows.next().await? {
+        Some(row) => Ok(Some((row.get(0)?, row.get(1)?))),
+        None => Ok(None),
+    }
+}
+
+/// Visit the selected successful paths with constant-size pages. Historical membership
+/// beyond `expected` is deliberately rejected: only the full predictor can resolve it.
+pub async fn inspect_paths(
+    conn: &Connection,
+    base: &str,
+    generation: i64,
+    expected: usize,
+    selected: &std::collections::HashMap<String, String>,
+    available: impl Fn(&str) -> bool,
+) -> Result<bool, libsql::Error> {
+    let mut after = format!("{base}[");
+    let upper = format!("{base}\\");
+    let mut count = 0;
+    let page = conn.prepare(
+        "SELECT w.node_id, (SELECT artifact_path FROM materializations m WHERE m.node_id = w.node_id AND m.id <= ?3 AND m.status = 'success' AND m.artifact_path IS NOT NULL ORDER BY m.id DESC LIMIT 1) FROM (SELECT DISTINCT node_id FROM materializations WHERE node_id > ?1 AND node_id < ?2 AND id <= ?3 ORDER BY node_id LIMIT 256) w"
+    ).await?;
+    let exception = conn.prepare("SELECT artifact_path FROM materializations WHERE node_id = ?1 AND id <= ?2 AND status = 'success' AND artifact_path IS NOT NULL AND run_hash = ?3 ORDER BY id DESC LIMIT 1").await?;
+    loop {
+        page.reset();
+        let mut rows = page
+            .query((after.clone(), upper.clone(), generation))
+            .await?;
+        let mut seen = 0;
+        while let Some(row) = rows.next().await? {
+            let id = row.get::<String>(0)?;
+            count += 1;
+            seen += 1;
+            if count > expected {
+                return Ok(false);
+            }
+            let path = if let Some(hash) = selected.get(&id) {
+                exception.reset();
+                let mut paths = exception
+                    .query((id.clone(), generation, hash.clone()))
+                    .await?;
+                paths
+                    .next()
+                    .await?
+                    .map(|row| row.get::<String>(0))
+                    .transpose()?
+            } else {
+                row.get::<Option<String>>(1)?
+            };
+            if path.as_deref().is_none_or(|path| !available(path)) {
+                return Ok(false);
+            }
+            after = id;
+        }
+        if seen == 0 {
+            break;
+        }
+    }
+    Ok(count == expected)
 }
 
 /// Refresh changes cache eligibility without inserting a materialization. Advance a separate

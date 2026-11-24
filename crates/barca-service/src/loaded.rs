@@ -9,7 +9,7 @@ use crate::partition_grid::{
     PartitionGrid, PartitionKeyDetail, partition_grid, partition_key_detail, partitioned_target,
 };
 use crate::schedule::{ScheduleInfo, Zone, describe_schedule_from_dag};
-use crate::status::{StatusResult, status_from_dag_with_membership};
+use crate::status::{StatusResult, status_from_dag, status_from_dag_with_membership};
 use crate::text::trace_since;
 
 /// Gather status for every node in scope (the targets' upstream cones, or the whole DAG when
@@ -27,10 +27,7 @@ pub async fn status(
     // In place: `barca status` neither waits for a run's writes nor makes one wait.
     let read = crate::db::read_metadata(cfg, false).await?;
     let cfg = read.cfg();
-    let mut result =
-        status_from_dag_with_membership(cfg, target_names, &dag, python, sample, shape)
-            .await?
-            .0;
+    let mut result = status_from_dag(cfg, target_names, &dag, python, sample, shape).await?;
     // No scheduler runs here: a schedule's state is what the metadata DB holds.
     crate::health::attach_from_db_with_schedules(
         &mut result,

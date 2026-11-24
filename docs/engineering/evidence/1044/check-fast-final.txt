@@ -1,0 +1,20 @@
+==> changelog   python3 scripts/check-changelog.py --base dcb94574536f87ab29216b9f4fcd4412fbb830a9
+==> specs       specs
+==> hooks       prek run --all-files
+==> clippy      cargo clippy --workspace --all-targets -- -D warnings
+rust tests: 60 changed file(s)
+  the whole workspace: .audit1044-equivalent/pipeline.py (no rule knows it: scripts/ci-rust-tests.py)
+==> cargo-test  cargo test --workspace --no-fail-fast
+==> build       /home/mukulram/.local/bin/maturin develop --uv --profile fast --extras test
+python tests: python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+==> python      /home/mukulram/Personal/barca/.worktrees/issue-1044-assets-ui/.venv/bin/python -m pytest -q -p no:cacheprovider -n 4 --dist loadscope python/tests/test_adaptive_executor.py python/tests/test_artifacts.py python/tests/test_cli_contract.py python/tests/test_csv_outputs.py python/tests/test_ctrl_c_worker.py python/tests/test_decorator_arguments.py python/tests/test_decorator_names_not_barcas.py python/tests/test_docs_examples.py python/tests/test_errors.py python/tests/test_get_output_shape.py python/tests/test_helper_hashing.py python/tests/test_identity.py python/tests/test_input_parameters.py python/tests/test_protocol_handshake.py python/tests/test_runs_filters.py python/tests/test_runtime.py python/tests/test_sql_query_route.py python/tests/test_static_barca_bindings.py python/tests/test_storage.py python/tests/test_ui_schema.py python/tests/test_usage_errors.py python/tests/test_warning_dedupe.py python/tests/test_worker_artifacts.py
+
+check-fast summary (base dcb94574):
+  PASS  changelog (0s)
+  PASS  specs (0s)
+  PASS  hooks (2s)
+  PASS  clippy (1s)
+  PASS  cargo-test (118s)
+  PASS  build (1s)
+  PASS  python (37s)
+all passed

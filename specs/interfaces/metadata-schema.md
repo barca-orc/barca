@@ -11,7 +11,8 @@ recreating it. Rust owns this boundary; no new CLI or Python configuration is
 introduced. The local driver is bundled libSQL with its local core enabled. Existing
 SQLite-format metadata remains readable. Compatibility is checked through a read-only
 connection before opening a writer, so an unusable database is left untouched even when
-the driver checkpoints on close. Reused prepared statements reset before rebinding.
+the driver checkpoints on close. Reused prepared lookup statements reset as each lookup ends, including a hit that returns
+before SQLite reaches the end of its result set.
 
 ## Version 1 and legacy databases
 
@@ -75,8 +76,11 @@ inspection routes beside the writers instead: through read-only connections to t
 place, which take neither that lock nor the process-wide guard, so a read never waits for a run's
 writes and never holds one up. This relies on WAL mode, in which SQLite lets readers in any
 process see the last commit while one writer appends; a reader's query is its own transaction,
-so a checkpoint (`wal_checkpoint(TRUNCATE)`, under the lock) waits at most for one query and is
-tried again for up to 2 seconds while one is in progress. Only a database this release reads as
+so checkpoints can progress between queries. Explicit transactions used for consistent
+inspection snapshots cannot yield to other work. Live read-view transactions have a
+30-second reader budget; an interrupted full node-age scan releases its connection and
+rebuilds against a private database image. Explicit truncation tries return busy immediately
+and restore the caller's busy timeout; their caller may retry within its deadline. Only a database this release reads as
 it is, format 1 with every addition present and in WAL mode, is read in place, including
 under `--read-only`; any other goes through a private copy, made on the blocking pool and
 migrated instead of the original. Read-only connections can create `-wal` and `-shm`
@@ -92,6 +96,19 @@ header check before every open, the metadata backup's digest and copy, a private
 through one descriptor per file that stays open for the life of the process.
 
 ## Backups, restore and older binaries
+
+Metadata backups use SQLite's online backup interface in 64-page batches, releasing the
+source reader between steps. After three detected restarts, the remaining copy finishes
+in one SQLite step outside Barca's metadata lock. That step can delay checkpoints;
+cancellation and deadlines are checked between calls. Completed copies preserve source
+permissions and contain a consistent committed image.
+
+Writable servers attempt a PASSIVE checkpoint every minute and TRUNCATE when the WAL
+exceeds 64 MiB, with a 100 ms busy timeout. `GET /health` exposes the last sample under
+`metadata_wal`, including its time, remaining bytes, threshold, frames and blocker. An
+external reader can prevent truncation until its transaction ends. Conformance covers
+external readers, writer contention, reusable lookup statements and checkpoints between
+backup batches in `db/wal.rs`, and backup consistency in `db/mod.rs`.
 
 The shared history (download, merge, replace) was removed in 0.26.0 (RFC-0009).
 A backup restored by `barca state restore` is checked before migration or

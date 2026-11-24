@@ -13,10 +13,8 @@
 //! machine. [`restore`] is the only way a database comes back from a backup, and it runs only
 //! when asked.
 //!
-//! The copy is the database's main file, taken right after its write-ahead log was folded in
-//! ([`barca_db::db::copy_for_backup`]), so a write in progress never produces a torn copy. Only the
-//! fold holds the database's lock; a read transaction keeps the main file still while it is
-//! hashed and copied, so other barca processes are not held up by the copy. The store side is `python -m barca._state` (one process per backup),
+//! SQLite's online backup API copies the database in batches. The completed private file is hashed.
+//! The store side is `python -m barca._state` (one process per backup),
 //! so the fsspec extras stay the only cloud-auth surface.
 //!
 //! **Which machine.** A store without a server is one machine's backup (DIRECTION.md). Each

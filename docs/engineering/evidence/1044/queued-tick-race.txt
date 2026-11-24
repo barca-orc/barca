@@ -1,0 +1,5 @@
+---- a_queued_tick_reads_the_same_on_every_surface stdout ----
+
+thread 'a_queued_tick_reads_the_same_on_every_surface' (3401466) panicked at crates/barca-server/tests/running.rs:365:9:
+no tick queued: [{"cron":"* * * * * *","failing":false,"failures":0,"id":"/tmp/.tmpqPa4u9/pipeline.py:ticking","kind":"asset","last_fired":1795368816,"last_run":"11c11e3e506a","last_run_id":"11c11e3e506a","last_skipped":1795368875,"last_status":"pending","late":false,"late_since":null,"max_failures":5,"next_fire":1795368876,"paused":false,"paused_until":null,"queue_bound":false,"skip_reason":"in_flight","skipped_for":"11c11e3e506a","state":"overrunning","state_detail":"its runs outlast its interval: 20 of its newest 20 slots were skipped while its run was still in flight","typical_queue_wait_seconds":0,"typical_run_seconds":null}]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace

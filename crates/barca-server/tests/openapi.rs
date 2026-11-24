@@ -369,6 +369,13 @@ fn spec_matches_router_paths_and_methods_and_all_schemas_compile() {
     );
     assert!(!accepted.is_valid(&json!({"run_id":"r","status":"pending","position":2})));
     let mut unusable = ok.clone();
+    let mut checkpoint = ok.clone();
+    checkpoint["metadata_wal"] = json!({"wal_bytes": 80000000, "threshold_bytes": 67108864,
+        "over_threshold": true, "measured_at": "2026-11-21T12:00:00.000Z", "busy": true, "frames": 900, "checkpointed": 80,
+        "blocker": "blocked by a reader outside this process"});
+    assert!(health.is_valid(&checkpoint));
+    checkpoint["metadata_wal"]["frames"] = json!("unknown");
+    assert!(!health.is_valid(&checkpoint));
     unusable["metadata_error"] = json!("the metadata DB .barca/metadata.db cannot be used: x");
     assert!(health.is_valid(&unusable));
     unusable["metadata_error"] = json!(1);

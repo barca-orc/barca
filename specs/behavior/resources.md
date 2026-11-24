@@ -124,7 +124,10 @@ count as reads and refresh their retention stamps; active reads pin their select
 and retain completed inodes in process-owned staging through concurrent GC.
 
 A miss, stale result, explicit refresh, or a plan requiring sensor execution or dynamic key
-resolution follows normal execution admission. Executable pickle reconstruction also follows
+resolution follows normal execution admission. Targets with non-static partition domains
+are rejected from the fresh-read shortcut before per-key prediction, so this admission
+check does not expand a recorded dynamic domain merely to reject it.
+Executable pickle reconstruction also follows
 normal admission; the read path never imports project code. Static selections, including whole-file requests, traverse artifact metadata in pages of
 128 keys with one retained inode at a time. The existing output listing limit affects only
 presentation: a larger unselected cache hit returns its usual partition counts, while an

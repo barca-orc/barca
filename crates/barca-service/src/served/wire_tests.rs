@@ -16,6 +16,7 @@ fn health_is_the_body_the_route_built_by_hand() {
         scheduler_liveness: None,
         api_version: 1,
         cache: Some(CacheSize {
+            pressure: None,
             limit_bytes: 20,
             size_bytes: 10,
         }),
@@ -24,6 +25,7 @@ fn health_is_the_body_the_route_built_by_hand() {
         graph_stale: Some(false),
         load_errors: Vec::new(),
         metadata_error: None,
+        metadata_wal: None,
         queue: HealthQueue {
             capacity: Some(HealthCapacity {
                 in_use: 1,
@@ -64,7 +66,8 @@ fn health_is_the_body_the_route_built_by_hand() {
         "scheduler": true,
         "scheduler_enabled": true,
         "metadata_error": null,
-        "cache": {"size_bytes": 10, "limit_bytes": 20},
+        "metadata_wal": null,
+        "cache": {"pressure": null,"size_bytes": 10, "limit_bytes": 20},
     });
     assert_eq!(bytes(&health), by_hand.to_string());
     let draining = ServerHealth {

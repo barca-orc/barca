@@ -8,7 +8,7 @@ function initialTheme(): Theme {
     const saved = localStorage.getItem(STORAGE_KEY)
     if (saved === 'light' || saved === 'dark') return saved
   }
-  return 'dark'
+  return typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
 }
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
@@ -21,10 +21,21 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     } else {
       document.documentElement.removeAttribute('data-theme')
     }
-    localStorage.setItem(STORAGE_KEY, theme)
   }, [theme])
 
-  const toggleTheme = () => setTheme((t) => (t === 'light' ? 'dark' : 'light'))
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-color-scheme: light)')
+    const changed = () => {
+      if (!localStorage.getItem(STORAGE_KEY)) setTheme(media.matches ? 'light' : 'dark')
+    }
+    media.addEventListener('change', changed)
+    return () => media.removeEventListener('change', changed)
+  }, [])
+  const toggleTheme = () => {
+    const next = theme === 'light' ? 'dark' : 'light'
+    localStorage.setItem(STORAGE_KEY, next)
+    setTheme(next)
+  }
 
   return (
     <ThemeContext.Provider value={{ theme, toggleTheme }}>

@@ -268,9 +268,7 @@ How the implementation differs from the text above, deliberately:
   status check: verbs `backup`, `list`, `fetch`, `stat`), not new `backup`/`fetch` verbs on the
   per-run transfer helper, so `barca serve` and `barca state` can use it with no run going. The
   transfer helper gained one verb, `stat`, which `get` uses to repair its targets.
-- The copy is the database's main file, taken under the database's lock right after the
-  write-ahead log is folded in; the engine has no online backup API. The guarantee is the same:
-  a write in progress never produces a torn copy.
+- The copy now uses the SQLite online backup API in batches of 64 pages, with a single-step fallback after three restarts.
 - Backups are taken only when the store is configured with `[remote] uri` (or
   `BARCA_REMOTE_URI`); `BARCA_ARTIFACT_URI` / `[remote] artifacts_uri` alone take none.
   `[remote] state_uri` and `push_retries` are removed with `state`, the same way.

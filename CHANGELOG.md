@@ -8,6 +8,20 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Performance
+
+- Ordinary server gets for dynamic partition targets skip the ineligible fresh-read preflight before per-key expansion, reducing admission memory for large recorded domains (#656).
+
+- Partition inspection reuses generation-validated execution proofs for local aligned chains, with bounded selected-artifact checks and fixed-expiry availability evidence. Unchanged observations avoid per-key prediction, and uncounted history retains logical summaries instead of every key. Unsupported or invalid proofs still use the full predictor; the original memory acceptance remains unmet (#656).
+
+### Bug Fixes
+
+- Metadata backups release their SQLite reader between page batches. Writable servers checkpoint the metadata WAL every minute, attempt truncation above 64 MiB, and report blocked checkpoints in `GET /health` (#1087).
+
+- Recheck older cache generations when active readers finish, even on a continuously busy server. GC and server health report protected bytes, overshoot and unfinished eviction work; over-target passes warn even when nothing can be freed. `max_size` remains an eviction target, with sizing guidance for overlapping generations (#1054).
+
+- Compress served responses and poll visible asset rows, preserve readable health and schedule details, and expose empty results and row counts in the key explorer. Respect the OS theme and explain empty projects and worktree builds without the UI (#1044).
+
 ## 0.47.0 (2026-11-24)
 
 ### Breaking

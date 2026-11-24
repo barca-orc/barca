@@ -55,7 +55,7 @@ export function KeysPage() {
   const zoom = rangeBounds(along, filter.range)
   const needing = overview?.needs_run ?? 0
   // The table: what the filters keep, and by default only what a run computes.
-  const attention = !params.all && filter.states.length === 0 && needing > 0
+  const attention = !params.all && !filter.empty && filter.states.length === 0 && needing > 0
   const query = overview
     ? keysQuery({ filter, sort: params.sort, needsRun: attention, along: overview.along, rangeValid: zoom !== null })
     : null
@@ -211,6 +211,8 @@ export function KeysPage() {
             </div>
           )}
 
+          <label className="barca-note"><input type="checkbox" checked={!!filter.empty} onChange={(event) => setFilter((f) => ({ ...f, empty: event.target.checked }))} /> Empty results (0 rows)</label>
+
           {/* 2. What is wrong, and where. */}
           {overview && (
             <IssueList
@@ -260,7 +262,7 @@ export function KeysPage() {
               <div className="barca-keys-section-head">
                 <div className="barca-seg" role="group" aria-label="Which keys">
                   <button type="button" aria-pressed={attention || (filter.states.length > 0 && !params.all)} disabled={needing === 0}
-                    onClick={() => go((p) => ({ all: false, filter: { ...p.filter, states: [], error: null } }))}>
+                    onClick={() => go((p) => ({ all: false, filter: { ...p.filter, empty: false, states: [], error: null } }))}>
                     Needs attention <b>{needing.toLocaleString()}</b>
                   </button>
                   <button type="button" aria-pressed={params.all && filter.states.length === 0}
@@ -280,7 +282,7 @@ export function KeysPage() {
                     />
                   ))}
                   <SearchInput value={filter.q} onChange={(q) => setFilter((f) => ({ ...f, q }))} placeholder="Search keys" />
-                  {(filter.q || filter.range || Object.values(filter.values).some((v) => v.length > 0) || filter.error !== null) && (
+                  {(filter.empty || filter.q || filter.range || Object.values(filter.values).some((v) => v.length > 0) || filter.error !== null) && (
                     <Button variant="ghost" size="sm" iconLeft={<X size={12} />} onClick={() => setFilter(() => NO_FILTER)}>Clear</Button>
                   )}
                 </div>

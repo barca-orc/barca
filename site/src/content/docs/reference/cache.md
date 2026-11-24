@@ -195,8 +195,8 @@ server's ledger use normal validation. Batching controls function calls independ
 
 ## Disk use
 
-`.barca/` has a size limit (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
-evicts down to it after every run; what counts, what is evicted in which order and how the
+`.barca/` has an eviction target (`[cache] max_size`, default 10% of its filesystem) and `barca gc`
+works toward it after every run; what counts, what is evicted in which order and how the
 metadata database keeps to its share are in [Disk Use](/reference/disk/).
 
 ## Environments

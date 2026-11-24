@@ -30,6 +30,8 @@ def main():
     done = threading.Event()
     health = []
     errors = []
+    records = []
+    active = None
 
     def read(path, timeout=180):
         with urllib.request.urlopen(url + path, timeout=timeout) as response:
@@ -83,9 +85,18 @@ def main():
                     "peak_kib": int(re.search(r"VmHWM:\s+(\d+)", status)[1]),
                     "health_samples_during_request": len(health) - before,
                 }
+                records.append(row)
                 print(json.dumps(row), flush=True)
                 # Validate JSON, not just successful HTTP status.
-                return json.loads(data)
+                result = json.loads(data)
+                if expected := os.environ.get("EXPECT_KEYS"):
+                    rows = result if isinstance(result, list) else result["nodes"]
+                    for node in rows:
+                        partitions = node.get("partitions")
+                        if partitions:
+                            assert partitions["total"] == int(expected), node
+                            assert partitions["cached"] == int(expected), node
+                return result
 
             measure("cold", "/state")
             measure("immediate_repeat", "/state")
@@ -105,6 +116,32 @@ def main():
                 assert document["steps_executed"] <= 1, document
                 measure(f"invalidated_{index + 1}", "/state")
                 measure(f"immediate_repeat_{index + 1}", "/state")
+                if os.environ.get("POST_RUN_NODES"):
+                    measure(f"nodes_invalidated_{index + 1}", "/nodes?sample=0")
+            if os.environ.get("ACTIVE_CHECK"):
+                (root / "delay").write_text("2")
+                active = subprocess.Popen(
+                    [binary, "get", "pipeline.py", "--json"],
+                    cwd=root,
+                    env=env,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    start_new_session=True,
+                )
+                deadline = time.monotonic() + 10
+                while not (root / "polling").exists():
+                    assert active.poll() is None
+                    assert time.monotonic() < deadline, "sensor did not enter delayed poll"
+                    time.sleep(0.01)
+                measure("active_sensor_poll", "/state")
+                assert active.poll() is None, "inspection did not overlap the real poll"
+                out, err = active.communicate(timeout=30)
+                assert active.returncode == 0, out + err
+                assert json.loads(out)["steps_executed"] == 1
+                (root / "delay").unlink()
+                (root / "polling").unlink()
+                measure("after_active_run", "/state")
             time.sleep(5)
             measure("after_5s_pause", "/state")
             measure("pause_immediate_repeat", "/state")
@@ -118,7 +155,22 @@ def main():
                 ),
                 flush=True,
             )
+            if limit := os.environ.get("INSPECTION_COLD_MAX_KIB"):
+                assert records[0]["peak_kib"] < int(limit), records[0]
+            assert not errors, errors
+            assert max(health, default=0) < float(os.environ.get("HEALTH_MAX_SECONDS", "1"))
+            for setting, field in (
+                ("INSPECTION_MAX_KIB", "peak_kib"),
+                ("INSPECTION_RETAINED_MAX_KIB", "rss_kib"),
+                ("INSPECTION_MAX_SECONDS", "seconds"),
+            ):
+                if limit := os.environ.get(setting):
+                    assert all(row[field] < float(limit) for row in records), records
         finally:
+            if active and active.poll() is None:
+                os.killpg(active.pid, signal.SIGCONT)
+                os.killpg(active.pid, signal.SIGTERM)
+                active.communicate(timeout=30)
             done.set()
             if sampler:
                 sampler.join(timeout=6)

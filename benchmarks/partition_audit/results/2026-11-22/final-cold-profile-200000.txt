@@ -1,0 +1,17 @@
+[barca] env default (built-in default); artifact store local (.barca/artifacts); metadata .barca/metadata.db (db format 1)
+[barca] serving on http://127.0.0.1:37529  (1 file)
+[barca] project socket .barca/serve.sock (barca commands in this project use this server; --local runs them here)
+[barca] stop grace: systemd must allow at least 42s between SIGTERM and SIGKILL (drain timeout 30s + 12s for stopping runs and closing connections); set TimeoutStopSec= (default 90s)
+[trace] cache size check 2.6ms
+[timing] inspection: selected artifacts: 797.6 ms
+[timing] inspection: selected artifacts: 668.8 ms
+[timing] status: cache decisions: 1472.5 ms
+[timing] status: histories: 41.5 ms
+[timing] status: store check: 1.3 ms
+[timing] status: shapes: 0.0 ms
+[timing] status: cache decisions: 2.9 ms
+[timing] status: histories: 0.6 ms
+[timing] status: store check: 0.8 ms
+[timing] status: shapes: 203.5 ms
+[barca] SIGTERM received: no run in flight; shutting down
+[trace] metadata lock holds 11 (total 404.5ms, longest 397.4ms)

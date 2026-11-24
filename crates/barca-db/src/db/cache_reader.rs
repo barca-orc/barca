@@ -306,17 +306,12 @@ impl CacheReader {
             .await
             .map_err(|e| BarcaError::Db(format!("failed to query materializations: {e}")))?;
         let mut out = KeyRows::default();
-        let mut read = 0usize;
+
         while let Some(row) = rows
             .next()
             .await
             .map_err(|e| BarcaError::Db(format!("failed to read row: {e}")))?
         {
-            // A long read that never waits: let the thread's other tasks run now and then.
-            read += 1;
-            if read.is_multiple_of(4096) {
-                tokio::task::yield_now().await;
-            }
             let (Ok(id), Ok(node), Ok(run_hash), Ok(path)) = (
                 row.get::<i64>(0),
                 row.get::<String>(1),

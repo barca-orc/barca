@@ -509,6 +509,25 @@ async fn cache_checkpoint(state: AppState) {
             _ = every.tick() => {}
             _ = state.lifecycle.shutdown.cancelled() => return,
         }
+        let path = state.config.resolved.db_path.clone();
+        let maintenance = crate::read_cache::off_the_workers(move || async move {
+            barca_service::db::maintain_wal(&path, barca_service::db::WAL_THRESHOLD_BYTES).await
+        })
+        .await;
+        match maintenance {
+            Ok(report) => {
+                if let Some(wal) = report.as_ref().filter(|w| w.over_threshold) {
+                    barca_service::errln!(
+                        "[barca] metadata WAL exceeded {} bytes: {} ({} bytes remain)",
+                        wal.threshold_bytes,
+                        wal.blocker.as_deref().unwrap_or("checkpoint complete"),
+                        wal.wal_bytes
+                    );
+                }
+                *state.reads.metadata_wal.write().unwrap() = report;
+            }
+            Err(e) => barca_service::errln!("[barca] metadata WAL checkpoint: {e}"),
+        }
         barca_service::gc::checkpoint(&state.config.resolved).await;
     }
 }

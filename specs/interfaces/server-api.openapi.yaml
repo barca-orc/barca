@@ -203,7 +203,7 @@ paths:
               description: A digest of the body. Send it back as If-None-Match to get 304 Not Modified, and no body, while the body is unchanged.
               schema:
                 type: string
-                pattern: ^"[0-9a-f]{24}"$
+                pattern: ^W/"[0-9a-f]{24}"$
             Cache-Control:
               description: A client may keep the body, and asks again each time (with If-None-Match).
               schema:
@@ -1607,6 +1607,12 @@ paths:
         in: query
         required: false
         description: Only keys in these states, comma-separated (failed, blocked, stale, never_run, pinned, fresh).
+        schema:
+          type: string
+      - name: empty
+        in: query
+        required: false
+        description: 1 or true for only keys whose latest attempt, when it succeeded, recorded zero rows. Unknown counts are excluded; other filters still apply.
         schema:
           type: string
       - name: needs_run
@@ -4872,6 +4878,22 @@ components:
           type: boolean
           description: Whether the scheduler is running. scheduler (configured on, not
             --no-schedule or --read-only), and false while stopped on a metadata error. Returns to true after successful restart.
+        metadata_wal:
+          description: Last periodic checkpoint on this writable server, or null before the first sample.
+          anyOf:
+          - type: 'null'
+          - type: object
+            additionalProperties: false
+            required: [blocker, busy, frames, measured_at, checkpointed, wal_bytes, threshold_bytes, over_threshold]
+            properties:
+              blocker: {type: [string, 'null']}
+              busy: {type: boolean}
+              frames: {type: integer}
+              checkpointed: {type: integer}
+              wal_bytes: {type: integer, minimum: 0}
+              measured_at: {type: string, format: date-time}
+              threshold_bytes: {type: integer, minimum: 0}
+              over_threshold: {type: boolean}
         metadata_error:
           anyOf:
           - type: string
@@ -6198,7 +6220,13 @@ components:
       required:
       - size_bytes
       - limit_bytes
+      - pressure
       properties:
+        pressure:
+          description: Last completed eviction pass, null before eviction was needed; not a live measurement.
+          anyOf:
+          - $ref: '#/components/schemas/GcPressure'
+          - type: 'null'
         size_bytes: *cache_bytes
         limit_bytes: *cache_bytes
     Uploads:
@@ -6458,7 +6486,7 @@ components:
             type: [integer, "null"]
         rows:
           type: array
-          description: The rows each cell's latest successful attempt wrote; null where not counted or failed.
+          description: The rows each cell's latest attempt, when it succeeded, wrote; null where not counted or failed.
           items:
             type: [integer, "null"]
         run:
@@ -6560,7 +6588,7 @@ components:
                 type: [integer, "null"]
               rows:
                 type: [integer, "null"]
-                description: Rows the latest successful attempt wrote, where its worker counted them.
+                description: Rows the latest attempt, when it succeeded, wrote, where its worker counted them.
               run_id:
                 type: [string, "null"]
               error:
@@ -8352,13 +8380,36 @@ components:
           anyOf:
           - type: string
           - type: 'null'
+    GcPressure:
+      description: Planning observation less deletions; max_size is an eviction target, not a hard cap or admission limit.
+      type: object
+      additionalProperties: false
+      required: [measured_at, budget_bytes, protected_bytes, protected_by_reason, evictable_bytes,
+        pending_bytes, overshoot_bytes, target_shortfall_bytes, evicted_files, evicted_bytes, restricted]
+      properties:
+        measured_at: {type: integer, minimum: 0, description: Unix seconds at planning}
+        budget_bytes: {type: integer, minimum: 0}
+        protected_bytes: {type: integer, minimum: 0}
+        protected_by_reason:
+          type: object
+          description: Disjoint reasons bytes were not eligible in this plan.
+          additionalProperties: {type: integer, minimum: 0}
+        evictable_bytes: {type: integer, minimum: 0}
+        pending_bytes: {type: integer, minimum: 0}
+        overshoot_bytes: {type: integer, minimum: 0}
+        target_shortfall_bytes: {type: integer, minimum: 0}
+        evicted_files: {type: integer, minimum: 0}
+        evicted_bytes: {type: integer, minimum: 0}
+        restricted:
+          anyOf: [{type: string}, {type: 'null'}]
     GcResult:
       description: The result of barca gc (barca gc --json)
       type: object
       additionalProperties: false
       required: [dry_run, size_bytes, budget_before_bytes, budget_after_bytes, backup_bytes, limit_bytes,
-        target_bytes, after_bytes, evicted_files, evicted_bytes, tiers, restricted, evicted, failed, held]
+        target_bytes, after_bytes, evicted_files, evicted_bytes, tiers, restricted, evicted, failed, held, pressure]
       properties:
+        pressure: {$ref: '#/components/schemas/GcPressure'}
         dry_run: {type: boolean}
         size_bytes: {type: integer, minimum: 0, description: Bytes under .barca/ before}
         budget_before_bytes: {type: integer, minimum: 0, description: Bytes subject to the cache limit before (metadata backups excluded)}

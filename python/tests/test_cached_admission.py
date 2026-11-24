@@ -229,6 +229,8 @@ def other():
 
 @pytest.mark.parametrize("dependency", ["sensor", "dynamic"])
 def test_unresolved_freshness_requires_execution(project, serve, dependency):
+    from .helpers import clean_env
+
     extra = (
         """
 from barca import sensor
@@ -249,14 +251,25 @@ def unresolved(region):
     )
     (project / "pipeline.py").write_text(PIPELINE + extra)
     assert barca(project, "get", "unresolved", "pipeline.py", "--local").returncode == 0
-    server = serve("--no-schedule", "--max-runs", "1", "--capacity", "1", root=project)
+    server = serve(
+        "--no-schedule",
+        "--max-runs",
+        "1",
+        "--capacity",
+        "1",
+        root=project,
+        env=clean_env(BARCA_TRACE_TIMING="1"),
+    )
     server.request("POST", "/runs", {"command": "run", "targets": ["blocked"]})
     server.wait("blocked pipeline", lambda: (project / "started").exists())
+    before = len(server.stderr)
     try:
         status, read = server.request(
             "POST", "/runs", {"command": "get", "targets": ["unresolved"]}
         )
         assert status == 202 and read["status"] == "pending", read
+        if dependency == "dynamic":
+            assert "dry run: phase" not in server.stderr[before:]
     finally:
         (project / "release").touch()
 

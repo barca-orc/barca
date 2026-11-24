@@ -126,7 +126,7 @@ hold. `VACUUM` is one statement and cannot be split: see "Not done".
 | A crash mid-transaction leaves no part of it, and the next process works | `db::owner_tests::a_process_killed_mid_transaction_leaves_nothing_of_it` |
 | A cancelled operation's transaction does not reach the next operation | `db::owner_tests::a_transaction_left_open_is_not_handed_to_the_next_operation` |
 | A reader during a checkpoint | `db::snapshots::read_view_tests::a_checkpoint_waits_for_a_read_view_query_instead_of_failing` (unchanged) |
-| A backup copies a whole database beside writes | `db::fold_log_tests::a_backup_copies_beside_writes_without_the_lock`, `a_pinned_main_file_takes_writes_without_changing` (unchanged) |
+| A backup copies a whole database beside writes | `db::fold_log_tests::a_backup_copies_beside_writes_without_the_lock`, `db::wal::tests::checkpoint_can_truncate_between_backup_steps` |
 | Opens per run stay down | `db::owner_tests::operations_share_one_connection`, `python/tests/test_worker_startup.py` |
 | Reads do not wait for the lock | `python/tests/test_reads_without_the_lock.py` |
 | A read command changes no database it cannot read in place, beyond what it always did | `python/tests/test_reads_of_databases_without_a_view.py` |

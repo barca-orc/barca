@@ -4,7 +4,7 @@ import { restingStatus } from '@/lib/status'
 import { StreamNotice } from '@/components/StreamNotice'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router'
-import { Button } from '@/components'
+import { Button, EmptyNote } from '@/components'
 import { GraphCanvas } from '@/components/graph/GraphCanvas'
 import { NodeInspector } from '@/components/graph/NodeInspector'
 import { useAssets } from '@/hooks/useAssets'
@@ -130,7 +130,7 @@ export function GraphPage() {
       {stateQuery.isError && <div className="barca-graph-tools" role="status">Asset state unavailable; colors are neutral. <Button size="sm" onClick={() => void stateQuery.refetch()}>Retry</Button></div>}
       <div className="barca-graph-wrap">
         <div className="barca-graph-canvas">
-          <GraphCanvas
+          {assetQuery.data && assets.length === 0 ? <EmptyNote title="No assets to graph">Add a function decorated with <code>@asset</code> to a served Python file to see its dependencies here.</EmptyNote> : <GraphCanvas
             assets={assets}
             dir={dir}
             selected={selected}
@@ -139,7 +139,7 @@ export function GraphPage() {
             pins={pins}
             shown={shown}
             onToggleDir={toggleDir}
-          />
+          />}
         </div>
         {selectedAsset && (
           <NodeInspector

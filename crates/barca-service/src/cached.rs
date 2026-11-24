@@ -208,6 +208,21 @@ async fn read(
         .map(crate::selection::PartitionSelection::parse)
         .transpose()
         .map_err(BarcaError::Usage)?;
+    // The fresh shortcut cannot prove a dynamic target (the prediction check below
+    // rejects it too). Reject before expanding its recorded domain: admission must
+    // not allocate one predicted step per key merely to return None.
+    if fresh_only
+        && targets.iter().any(|(_, id)| {
+            dag.get_node(id).is_some_and(|node| {
+                node.decl
+                    .partitions
+                    .values()
+                    .any(|spec| !matches!(spec, PartitionSpec::Static { .. }))
+            })
+        })
+    {
+        return Ok(None);
+    }
     let read = crate::db::read_metadata(&cfg, false).await?;
     // Prediction is static and has no ledger attached. Sensors' live values are unknown.
     let mut expected_hashes = HashMap::new();

@@ -189,7 +189,7 @@ Keep credentials out of `barca.toml`; they come from the environment.
 
 ## Cache size
 
-From 0.25, `.barca/` has a size limit: `[cache].max_size`, or `BARCA_CACHE_MAX_SIZE`, and with
+From 0.25, `.barca/` has an eviction target: `[cache].max_size`, or `BARCA_CACHE_MAX_SIZE`, and with
 neither, **10% of the filesystem** `.barca/` is on. `"off"` removes the limit (earlier versions
 had none: every new run hash added a file and kept the old one).
 
@@ -203,7 +203,11 @@ had none: every new run hash added a file and kept the old one).
 
 After every `barca get` and `barca run`, after every run under `barca serve`, and once a minute
 under `barca serve`, barca checks the size. Over the limit, it deletes files in this order
-until budgeted bytes are at or below 80% of the limit:
+aiming for budgeted bytes at or below 80% of the limit. Active readers and writes can keep it
+over target; this does not delay runs or promise a hard disk cap. Each completed pass still
+over the limit warns, and `barca gc --json` and `/health` report protected bytes and overshoot
+(see [Disk Use](/reference/disk/#busy-servers-overshoot-and-sizing)):
+
 
 1. **Leftovers**: staging directories of processes that are no longer running, `*.moved-aside*`
    directories, artifact files no metadata row names (what `barca state reset` and

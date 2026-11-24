@@ -1,0 +1,19 @@
+{"case": "cold", "route": "/state", "seconds": 3.337029, "response_bytes": 4366, "rss_kib": 69828, "peak_kib": 74152, "health_samples_during_request": 157}
+{"case": "immediate_repeat", "route": "/state", "seconds": 0.001566, "response_bytes": 4366, "rss_kib": 69836, "peak_kib": 74152, "health_samples_during_request": 1}
+{"case": "legacy_cold", "route": "/nodes?sample=0", "seconds": 0.137788, "response_bytes": 8447, "rss_kib": 70768, "peak_kib": 74152, "health_samples_during_request": 6}
+{"case": "legacy_immediate_repeat", "route": "/nodes?sample=0", "seconds": 0.002189, "response_bytes": 8447, "rss_kib": 70808, "peak_kib": 74152, "health_samples_during_request": 0}
+{"case": "invalidated_1", "route": "/state", "seconds": 0.087982, "response_bytes": 4365, "rss_kib": 35052, "peak_kib": 102752, "health_samples_during_request": 4}
+{"case": "immediate_repeat_1", "route": "/state", "seconds": 0.002711, "response_bytes": 4365, "rss_kib": 35116, "peak_kib": 102752, "health_samples_during_request": 1}
+{"case": "invalidated_2", "route": "/state", "seconds": 0.091637, "response_bytes": 4368, "rss_kib": 35304, "peak_kib": 102752, "health_samples_during_request": 4}
+{"case": "immediate_repeat_2", "route": "/state", "seconds": 0.002581, "response_bytes": 4368, "rss_kib": 35304, "peak_kib": 102752, "health_samples_during_request": 0}
+{"case": "invalidated_3", "route": "/state", "seconds": 1.007746, "response_bytes": 4368, "rss_kib": 69308, "peak_kib": 102752, "health_samples_during_request": 46}
+{"case": "immediate_repeat_3", "route": "/state", "seconds": 0.357185, "response_bytes": 4367, "rss_kib": 48704, "peak_kib": 102752, "health_samples_during_request": 17}
+{"case": "invalidated_4", "route": "/state", "seconds": 0.082625, "response_bytes": 4368, "rss_kib": 40024, "peak_kib": 102752, "health_samples_during_request": 4}
+{"case": "immediate_repeat_4", "route": "/state", "seconds": 0.002303, "response_bytes": 4368, "rss_kib": 40024, "peak_kib": 102752, "health_samples_during_request": 0}
+{"case": "invalidated_5", "route": "/state", "seconds": 0.120183, "response_bytes": 4368, "rss_kib": 35872, "peak_kib": 102752, "health_samples_during_request": 5}
+{"case": "immediate_repeat_5", "route": "/state", "seconds": 0.002351, "response_bytes": 4368, "rss_kib": 35872, "peak_kib": 102752, "health_samples_during_request": 0}
+{"case": "active_sensor_poll", "route": "/state", "seconds": 0.06916, "response_bytes": 4503, "rss_kib": 27512, "peak_kib": 102752, "health_samples_during_request": 3}
+{"case": "after_active_run", "route": "/state", "seconds": 1.005228, "response_bytes": 4368, "rss_kib": 74292, "peak_kib": 102752, "health_samples_during_request": 48}
+{"case": "after_5s_pause", "route": "/state", "seconds": 0.001843, "response_bytes": 4367, "rss_kib": 49136, "peak_kib": 102752, "health_samples_during_request": 0}
+{"case": "pause_immediate_repeat", "route": "/state", "seconds": 0.000833, "response_bytes": 4367, "rss_kib": 49136, "peak_kib": 102752, "health_samples_during_request": 0}
+{"health_samples": 771, "health_max_seconds": 0.172907, "health_errors": []}

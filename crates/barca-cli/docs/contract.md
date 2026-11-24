@@ -4051,6 +4051,13 @@ rows (`null` unless every one was counted) and adds `empty_keys`.
 
 ### gc (experimental)
 
+`gc`'s experimental `pressure` object reports the planning observation after deletions:
+protected bytes by reason, eligible and pending bytes, and overshoot above `max_size` and the
+80% target. A dry run predicts these values. `GET /health` exposes the last completed pass as
+`cache.pressure`; its timestamp distinguishes that observation from live disk usage.
+`max_size` is an eviction target, not run admission control or a hard disk cap.
+See `barca docs disk` for the reason codes, safety restrictions and sizing guidance.
+
 <!-- BEGIN GENERATED schema gc_dry_run -->
 | Key | Type | Present |
 |---|---|---|
@@ -4074,6 +4081,19 @@ rows (`null` unless every one was counted) and adds `empty_keys`.
 | `held[].evictable` | boolean | always |
 | `held[].what` | string | always |
 | `limit_bytes` | integer | always |
+| `pressure` | object | always |
+| `pressure.budget_bytes` | integer | always |
+| `pressure.evictable_bytes` | integer | always |
+| `pressure.evicted_bytes` | integer | always |
+| `pressure.evicted_files` | integer | always |
+| `pressure.measured_at` | integer | always |
+| `pressure.overshoot_bytes` | integer | always |
+| `pressure.pending_bytes` | integer | always |
+| `pressure.protected_by_reason` | object | always |
+| `pressure.protected_by_reason.metadata_unowned_or_grace` | integer | always |
+| `pressure.protected_bytes` | integer | always |
+| `pressure.restricted` | null | always |
+| `pressure.target_shortfall_bytes` | integer | always |
 | `restricted` | null | always |
 | `size_bytes` | integer | always |
 | `target_bytes` | integer | always |

@@ -25,10 +25,10 @@ describe('HealthBar', () => {
   it('says a fully fresh scope is fresh, and names how many causes it left out', () => {
     expect(text(renderToStaticMarkup(<HealthBar scope={scope(116, {}, 0)} />))).toBe('all 116 fresh')
     const many = scope(106, { failing: 4, overdue: 3, no_refresh_path: 7, undecided: 6 }, 20, 2)
-    expect(text(renderToStaticMarkup(<HealthBar scope={many} />))).toBe('4 failing · 3 overdue · 2 more · 2 running')
+    expect(text(renderToStaticMarkup(<HealthBar scope={many} />))).toBe('4 failing · 3 overdue · 7 no refresh path · 6 undecided · 2 running')
     expect(text(renderToStaticMarkup(<HealthBar scope={many} labelLimit={10} />))).toBe('4 failing · 3 overdue · 7 no refresh path · 6 undecided · 2 running')
     // Beside a running badge the bar does not repeat the run work.
-    expect(text(renderToStaticMarkup(<HealthBar scope={many} quiet />))).toBe('4 failing · 3 overdue · 2 more')
+    expect(text(renderToStaticMarkup(<HealthBar scope={many} quiet labelLimit={2} />))).toBe('4 failing · 3 overdue · 2 more')
     expect(text(renderToStaticMarkup(<HealthBar scope={scope(0, {}, 0)} />))).toBe('empty')
   })
 })

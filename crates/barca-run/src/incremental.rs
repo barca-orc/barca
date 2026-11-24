@@ -12,27 +12,13 @@ use barca_model::dag::Dag;
 use barca_model::model::{Freshness, NodeKind, PartitionKey, PartitionSpec};
 use barca_store::results::{KeySummary, LISTED_KEYS, PartitionSummary, StepReport};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use barca_db::db::BY_NODE_RUN;
+use barca_decide::evidence::Proof;
 use barca_model::source_observation::Source;
 use barca_model::step_status::StepStatus;
-#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
-struct Proof {
-    signature: String,
-    count: usize,
-    output_hash: Option<String>,
-    #[serde(default)]
-    observation_hash: Option<String>,
-    output: Option<OutputRef>,
-    run_hash: Option<String>,
-    source: Option<Arc<Source>>,
-    /// Cached historical selections that differ from the last materialization.
-    #[serde(default)]
-    selected: HashMap<String, String>,
-}
 #[derive(Default, PartialEq, Serialize, Deserialize)]
 struct Snapshot {
     nodes: HashMap<String, Proof>,
@@ -94,12 +80,7 @@ impl Incremental {
         let revision = db::freshness_proofs::revision(cache.conn())
             .await
             .map_err(db_error)?;
-        let key = format!(
-            "freshness-v4:{revision}:{:x}",
-            Sha256::digest(
-                serde_json::to_vec(&(&cfg.artifact_root, &cfg.local_artifact_dir)).unwrap()
-            )
-        );
+        let key = barca_decide::evidence::key(cfg, revision);
         let generation = generation(cache.conn()).await?;
         let mut previous = Snapshot::default();
         let mut lookup = db::prepare(
@@ -127,50 +108,8 @@ impl Incremental {
                 previous.nodes.insert(id, proof);
             }
         }
-        let mut signatures = HashMap::new();
-        for id in dag.order_for(templates.keys().map(String::as_str)) {
-            // A planned node is in the DAG; a proof recorded for a node the source no longer
-            // has is never asked about (`ids` are the plan's), and would read as changed.
-            let Some(n) = dag.get_node(id).filter(|_| templates.contains_key(id)) else {
-                continue;
-            };
-            let mut upstream: Vec<_> = dag
-                .upstream(id)
-                .into_iter()
-                .map(|up| {
-                    (
-                        up,
-                        if barca_decide::cache::is_cutoff(dag, up)
-                            || dag.get_node(up).is_some_and(|n| {
-                                matches!(n.decl.freshness, Freshness::Manual)
-                                    && n.kind() == NodeKind::Asset
-                            })
-                        {
-                            None
-                        } else {
-                            signatures.get(up)
-                        },
-                    )
-                })
-                .collect();
-            upstream.sort_by_key(|(id, _)| *id);
-            let env = barca_model::envdeps::hash_input(&barca_model::envdeps::resolve(&n.decl.env));
-            let bytes = serde_json::to_vec(
-                &serde_json::to_value(&(
-                    n.fingerprint.definition_hash.as_str(),
-                    &n.resolved_inputs,
-                    &n.resolved_collected,
-                    &n.decl.freshness,
-                    &n.decl.sinks,
-                    &n.decl.partitions,
-                    env,
-                    upstream,
-                ))
-                .unwrap(),
-            )
-            .unwrap();
-            signatures.insert(id.to_owned(), format!("{:x}", Sha256::digest(bytes)));
-        }
+        let signatures =
+            barca_decide::evidence::signatures(dag, &templates.keys().cloned().collect());
         Ok(Some(Self {
             key,
             generation,

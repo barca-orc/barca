@@ -132,8 +132,8 @@ for (const view of ['list', 'graph']) {
       await expect(sidebar.getByRole('button', { name: 'other.py 1' })).toBeVisible()
       await expect.poll(() => requests.length).toBeGreaterThan(0)
       // A pipeline is asked for by its file: one short URL however many nodes it has.
-      // The other request is the sidebar's whole-project health.
-      expect(requests.every(url => url.search === '' || url.searchParams.get('files') === 'forecast.py')).toBe(true)
+      // Visible leaf rows may also be asked for by id; the sidebar never loads whole state.
+      expect(requests.every(url => url.searchParams.get('files') === 'forecast.py' || url.searchParams.get('targets')?.split(',').every(id => id.startsWith('forecast.py:')))).toBe(true)
       await expect(page.getByText('Checking…', { exact: true }).first()).toBeVisible()
       // Let the initial graph fit settle before comparing geometry across status arrival.
       if (view === 'graph') await page.waitForTimeout(400)
@@ -154,10 +154,9 @@ for (const view of ['list', 'graph']) {
         : page.locator('tr[data-group="group:forecast.py:training"]')
       await group.dblclick()
       // A group by its id, which the server expands.
-      await expect.poll(() => requests.at(-1)?.searchParams.get('targets'))
-        .toBe('group:forecast.py:training')
+      await expect.poll(() => requests.some(url => url.searchParams.get('targets') === 'group:forecast.py:training')).toBe(true)
       await sidebar.getByRole('button', { name: 'All pipelines 4' }).click()
-      await expect.poll(() => requests.at(-1)?.search).toBe('')
+      await expect.poll(() => requests.some(url => url.search === '')).toBe(true)
     } finally {
       release()
     }

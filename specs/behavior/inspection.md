@@ -2,7 +2,7 @@
 
 ## Scope and status
 
-Specification version: 5. Status: implemented behavior and explicit limits.
+Specification version: 6. Status: implemented behavior and explicit limits.
 Scope: what inspection says about computation validity, execution and stored bytes.
 Terms: [glossary](../../GLOSSARY.md). Exact JSON keys, status enums and response bodies remain
 owned by [OpenAPI](../interfaces/server-api.openapi.yaml) and the [CLI
@@ -41,7 +41,15 @@ are interchangeable statuses.
 The server caches inspected graphs, metadata snapshots and status results. Source and DB
 stamps, dynamic-key revalidation and background status refresh determine reuse. Inspection
 ETags permit HTTP revalidation; a 304 means that representation is unchanged, not that
-upstream external data was polled again.
+upstream external data was polled again. JSON responses support gzip negotiation with
+`Accept-Encoding: gzip`; validators are weak because compression changes representation
+bytes, and `Vary: Accept-Encoding` distinguishes encodings. The UI polls the rollup and
+visible table rows; changes to per-node rollup facts refresh the scope used for sorting and
+filtering. Hidden tabs do not poll.
+
+The key explorer's `empty=1` filter keeps keys with a recorded zero row count from their
+latest attempt, when it succeeded, (including stale results); unknown counts do not match. It combines
+with the other key filters before pagination. The Rows column distinguishes zero from unknown.
 
 Each `GET /state` row carries `last_success_at`, `failing_since` and `consecutive_failures`, from
 the node's materialization rows with partition keys folded into their base id. An attempt is a
@@ -125,10 +133,41 @@ durable run. Ungrouped node panels use the same action. Evidence:
 [`e2e-groups/groups.spec.ts`](../../ui/e2e-groups/groups.spec.ts), against a project declared in groups, including real run admission,
 completion, history/logs, read-only controls, held-first-event activity and admission errors.
 
-A database change can invalidate cached inspection even after an unchanged sensor run.
-Cold and post-run inspection can rebuild per-key state:
-[#656](https://github.com/barca-orc/barca/issues/656). Millisecond cached responses are not a
-cold-latency or memory guarantee. The [performance contract](performance.md) distinguishes them.
+### Compact partition inspection
+
+For local aligned chains with a current execution proof, status validates the shared proof
+namespace, structural signatures and metadata generation before using its partition counts.
+Sensor source bytes are digest-checked with a fixed-size buffer. Every selected successful
+artifact is checked for local availability using SQL pages of at most 256 identities; this
+is not sampling. Historical selection exceptions select their recorded run hash. The proof
+is rechecked after availability validation, including same-generation selection changes.
+
+Availability evidence retains at most 128 digests and monotonic timestamps, with a fixed
+five-second lifetime that hits never extend. An unchanged observation can update history
+without repeating full-key prediction or a still-valid availability scan. The server keeps
+status for at most 25 seconds, so these two lifetimes preserve the previous 30-second
+external-deletion observation window under polling (plus the duration of recomputation).
+GC and external file deletion are checked when availability expires; required execution
+reads never use this evidence. Source deletion or changed source bytes reject the proof.
+
+Proof namespaces include the refresh-invalidation revision as well as artifact layout.
+Inspection rechecks that revision after validating the proofs: a publisher from before a
+refresh cannot revive evidence after refresh changes eligibility without appending a row.
+
+A code/environment edit, membership change, failed attempt or concurrent materialization
+must have matching current proof evidence or use ordinary prediction. Explicit SQL membership,
+remote stores/ledgers, held/Manual/cutoff nodes, unsupported chains and absent/malformed proofs
+use the existing predictor. Historical keys beyond the proven count also fall back, rather
+than counting removed membership. These fallbacks can still expand full per-key state.
+History summaries no longer retain one entry per uncounted partition solely to compare its
+next observation; they compare the indexed preceding success. Counted-key row histories
+retain their existing behavior. Cold availability work remains proportional to selected keys, with bounded native retention;
+source digest checks remain proportional to source bytes. This is not a universal bound on
+cold inspection or active refresh, and does not complete every obligation in #656.
+
+Conformance: [compact inspection controls](../../python/tests/test_compact_inspection.py),
+[scaling/active-run harness](../../benchmarks/partition_audit/compact_inspection.py).
+The [performance contract](performance.md) separates cold, cached and post-run evidence.
 
 ### Row counts and data-health signals
 
@@ -180,7 +219,10 @@ rebuilding state; a cached response or HTTP 304 does not mean external sources w
 
 Exercise pre-poll predictions, current membership after removal, historical success versus
 current reuse, stale Manual pins, remote mismatch/availability and read-route revalidation.
-Cold/post-run inspection still needs the #656 scaling evidence.
+Compact local-chain cold/post-run evidence is recorded by the linked harness; the combined
+100 MB budget, broader domains and long-run retention remain open under #656.
+The [integrated admission measurements](../../docs/engineering/inspection-admission-memory.json)
+preserve the failed 200,000-key budget before and after skipping dynamic-target preflight.
 
 Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [cache/execution predictions](../../python/tests/test_sensor_freshness.py),
@@ -193,6 +235,16 @@ Conformance: [status](../../crates/barca-analysis/src/status.rs),
 [signal rules](../../crates/barca-analysis/src/health.rs), the
 [per-key row facts](../../crates/barca-db/src/db/history.rs) and
 [schedule slots](../../crates/barca-decide/src/schedule.rs).
+
+The #1044 HTTP/UI checks use a [reproducible equivalent fixture](../../ui/scripts/audit1044-fixture.py)
+and [live transfer/layout harness](../../ui/scripts/audit1044-measure.mjs). The original audit
+project was not preserved. A [plain 616-node uncompressed baseline](../../docs/engineering/evidence/1044/transfer-before.json)
+and the [initial request-scope failure](../../docs/engineering/evidence/1044/initial-acceptance-failure.json)
+are retained rather than replacing failed measurements with later results. The
+[embedded-UI measurement](../../docs/engineering/evidence/1044/production-result.json) records
+first-load bytes separately from each 30-second idle window, with a 500,000-byte idle limit.
+The [lifecycle integration recheck](../../docs/engineering/evidence/1044/integration-result.json)
+repeats those checks after the 0.47 run-contract changes.
 
 ## Open questions and gaps
 
