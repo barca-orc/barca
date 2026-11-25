@@ -18,10 +18,15 @@ pub struct Pauses {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub added: Option<Vec<String>>,
+    /// `POST /pauses/resume` of a target only: the ids in its scope that another pause still
+    /// holds, so they stay paused (each one's `vias` in `paused` names what holds it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[cfg_attr(feature = "ts", ts(optional))]
+    pub kept: Option<Vec<String>>,
     /// Every paused node, with when and through what it was paused.
     #[serde(default)]
     pub paused: Vec<AssetPause>,
-    /// `POST /pauses/resume` only: the ids it resumed.
+    /// `POST /pauses/resume` only: the ids it resumed, which no pause holds any more.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[cfg_attr(feature = "ts", ts(optional))]
     pub removed: Option<Vec<String>>,
@@ -43,6 +48,7 @@ impl Pauses {
             covers: None,
             added: None,
             removed: None,
+            kept: None,
         }
     }
 }

@@ -18,11 +18,16 @@ covers?: PauseCover,
  */
 added?: Array<string>,
 /**
+ * `POST /pauses/resume` of a target only: the ids in its scope that another pause still
+ * holds, so they stay paused (each one's `vias` in `paused` names what holds it).
+ */
+kept?: Array<string>,
+/**
  * Every paused node, with when and through what it was paused.
  */
 paused: Array<AssetPause>,
 /**
- * `POST /pauses/resume` only: the ids it resumed.
+ * `POST /pauses/resume` only: the ids it resumed, which no pause holds any more.
  */
 removed?: Array<string>,
 /**

@@ -2728,6 +2728,9 @@ paths:
   /pauses/resume:
     post:
       summary: Resume paused assets
+      description: The nodes the target names lose every pause that holds them. With
+        downstream, a node below them loses only the pause that named the target, and stays
+        paused (kept) while another pause holds it. With all, every pause of every node.
       operationId: post_pauses_resume
       requestBody:
         required: true
@@ -2739,7 +2742,7 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '200':
-          description: The ids this request resumed (removed) and every node still paused
+          description: The ids this request resumed (removed), the ids in its scope another pause still holds (kept), and every node still paused
           content:
             application/json:
               schema:
@@ -5117,7 +5120,12 @@ components:
         removed:
           type: array
           items: {type: string}
-          description: POST /pauses/resume only; the ids it resumed
+          description: POST /pauses/resume only; the ids it resumed, which no pause holds any more
+        kept:
+          type: array
+          items: {type: string}
+          description: POST /pauses/resume of a target only; the ids in its scope that another
+            pause still holds, so they stay paused
         covers:
           $ref: '#/components/schemas/PauseCover'
         paused:
@@ -5125,15 +5133,20 @@ components:
           items:
             type: object
             additionalProperties: false
-            required: [id, paused_at, via]
+            required: [id, paused_at, via, vias]
             properties:
               id: {type: string}
               paused_at:
                 type: integer
-                description: Unix seconds
+                description: Unix seconds, of the earliest pause that holds the node
               via:
                 type: string
-                description: The target the pause named (the node, the node a downstream pause started from, or a file)
+                description: The target the earliest pause named (the node, the node a downstream pause started from, or a file)
+              vias:
+                type: array
+                items: {type: string}
+                description: Every pause target that holds the node, earliest first; the node
+                  stays paused until the last of them is lifted
         schedules:
           type: array
           description: Every paused schedule (POST /schedule/{id}/pause), by id; a timed pause

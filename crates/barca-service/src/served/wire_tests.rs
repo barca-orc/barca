@@ -161,6 +161,7 @@ fn pauses_and_pins_are_the_bodies_the_routes_built_by_hand() {
         id: "p.py:orders".into(),
         paused_at: 10,
         via: "p.py".into(),
+        vias: vec!["p.py".into()],
     }];
     let schedules = vec![crate::pauses::PausedSchedule {
         id: "p.py:daily".into(),

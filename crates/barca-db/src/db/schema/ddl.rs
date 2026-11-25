@@ -267,6 +267,8 @@ pub(crate) const ADDED_TABLES: &[(&str, &str)] = &[
     ("asset_uploads", crate::db::pins::CREATE_UPLOADS),
     // The nodes an operator paused (`barca pause`): scheduled ticks do not compute them.
     ("asset_pauses", crate::db::CREATE_ASSET_PAUSES),
+    // Every pause of each paused node, one row per pause target: a resume lifts only its own.
+    ("asset_pause_vias", crate::db::CREATE_ASSET_PAUSE_VIAS),
     // What each due tick of a schedule decided and how its run ended (#960); bounded by its
     // writers, written only by the scheduler of `barca serve`.
     ("schedule_ticks", crate::db::CREATE_SCHEDULE_TICKS),

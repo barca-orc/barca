@@ -561,7 +561,7 @@ default, and any aliases.
 |---|---|---|---|---|
 | `<TARGET>` | - | - | experimental (with the command) | Node or file.py to resume |
 | `--schedule` | `NODE` | - | experimental (with the command) | Resume the schedule of this scheduled node instead of nodes |
-| `--downstream` | - | default `false` | experimental (with the command) | Also resume every node downstream of the target |
+| `--downstream` | - | default `false` | experimental (with the command) | Also lift this target's pause from every node below it; other pauses stay |
 | `--all` | - | default `false` | experimental (with the command) | Resume every paused node |
 | `--json` | - | default `false` | experimental (with the command) | Emit JSON on stdout (the default when stdout is not a terminal) |
 | `--pretty` | - | default `false` | experimental (with the command) | Emit human-readable output (the default when stdout is a terminal) |

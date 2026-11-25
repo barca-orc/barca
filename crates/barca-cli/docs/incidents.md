@@ -9,10 +9,10 @@ barca pause clean --server                 # scheduled runs skip clean until it 
 barca pause clean --downstream --server    # clean and every node below it
 barca pause pipeline.py --server           # every node defined in pipeline.py
 barca pause clean --downstream --dry-run --server   # pauses nothing: what the pause would cover
-barca pause --server --json                # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
+barca pause --server --json                # {total, paused: [{id, paused_at, via, vias}], schedules: [{id, paused_at, until}]}
 barca resume clean --server                # the next tick computes clean again
-barca resume clean --downstream --server   # clean and every node below it
-barca resume --all --server                # every paused node
+barca resume clean --downstream --server   # clean, and the pause of clean --downstream below it
+barca resume --all --server                # every paused node, whatever paused it
 ```
 
 `barca pause` and `barca resume` act on the server named by `--server`, `BARCA_SERVER` or
@@ -62,7 +62,8 @@ The web UI's "Blast radius" and its incident controls show this answer.
 
 ## What a pause does
 
-Pauses are rows of the metadata DB (`asset_pauses`), so a restart or a deploy keeps them.
+Pauses are rows of the metadata DB (`asset_pauses`, and `asset_pause_vias` for every pause of
+each node), so a restart or a deploy keeps them.
 
 - **A scheduled tick** does not compute a paused node. When the tick's scheduled node, or one of
   the other `Always` nodes the tick reconciles, is paused, its step is `skipped` with reason
@@ -85,6 +86,28 @@ Pauses are rows of the metadata DB (`asset_pauses`), so a restart or a deploy ke
 ```bash
 barca get clean pipeline.py --allow-paused   # run it by hand even though it is paused
 ```
+
+## Several pauses on one node
+
+A node can be held by more than one pause: an operator holds `report`, then an incident pauses
+`clean --downstream`, which covers `report` too. The node stays paused until every pause that
+holds it is lifted. In `barca pause --json`, `via` and `paused_at` are its earliest pause and
+`vias` lists every pause target that holds it, earliest first.
+
+A resume lifts every pause of the nodes it names, and from the nodes below them only its own
+pause. `barca resume clean --downstream` resumes `clean` and lifts the pause made by `barca
+pause clean --downstream` from each node below it. `report` stays paused, because the
+operator's own pause still holds it. A resume answers `removed` (the nodes no pause holds
+any more) and `kept` (the nodes in its scope that another pause still holds):
+
+```json
+{"removed": ["pipeline.py:clean"], "kept": ["pipeline.py:report"], "total": 1, "paused": [...], "schedules": []}
+```
+
+A target matches a pause made with another spelling of it: `clean` and `pipeline.py:clean` are
+one target, as are `pipeline.py` and `./pipeline.py`. `barca resume report` names `report`, so
+it lifts every pause of `report` and leaves the other nodes of a `--downstream` pause paused.
+`barca resume --all` lifts every pause of every node.
 
 Resuming lets the next tick compute the node again. The ticks it skipped while paused are not
 caught up. A pause is separate from a schedule's pause (`barca pause --schedule NODE`, `POST

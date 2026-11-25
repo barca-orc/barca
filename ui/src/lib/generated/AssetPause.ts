@@ -2,7 +2,8 @@
 
 /**
  * One paused node: since when (unix seconds) and what was paused to pause it (`via`: the
- * node itself, the node a `--downstream` pause started from, or a file).
+ * node itself, the node a `--downstream` pause started from, or a file). `paused_at` and
+ * `via` are the earliest pause that holds it, and `vias` every one, earliest first.
  */
 export type AssetPause = { id: string,
 /**
@@ -12,4 +13,9 @@ paused_at: number,
 /**
  * What the pause named: the node, the node a downstream pause started from, or a file.
  */
-via: string, };
+via: string,
+/**
+ * Every pause target that holds the node, earliest first. The node stays paused until a
+ * resume lifts the last of them.
+ */
+vias: Array<string>, };

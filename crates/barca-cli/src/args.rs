@@ -455,7 +455,7 @@ Examples:
   barca pause clean --downstream --server  # clean and everything below it
   barca pause pipeline.py --server         # every node of the file
   barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
-  barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
+  barca pause --server --json              # {total, paused: [{id, paused_at, via, vias}], schedules: [{id, paused_at, until}]}
   barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
   barca pause --schedule nightly --until 2h --server   # resumes by itself in two hours
   barca pause --schedule nightly --until 2026-10-21T06:00:00Z --server --json   # the schedule's entry: {id, cron, paused, paused_until, next_fire, ...}
@@ -466,9 +466,10 @@ More: barca docs incidents";
 const RESUME_HELP: &str = "\
 Examples:
   barca resume clean --server               # the next tick computes clean again
-  barca resume clean --downstream --server  # clean and everything below it
+  barca resume clean --downstream --server  # clean, and the pause of clean --downstream below it
+  barca resume clean --downstream --server --json   # {removed, kept, total, paused, schedules}: kept stay paused by another pause
   barca resume pipeline.py --server         # every node of the file
-  barca resume --all --server --json        # {removed, total, paused, schedules}
+  barca resume --all --server --json        # {removed, total, paused, schedules}: every pause of every node
   barca resume --schedule nightly --server  # the schedule fires again from its next tick
   barca resume --schedule nightly --server --json   # the schedule's entry: {id, cron, paused: false, next_fire, ...}
 
@@ -1206,9 +1207,10 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream", "all"])]
         #[arg(help = "Resume the schedule of this scheduled node instead of nodes", long_help = None)]
         schedule: Option<String>,
-        /// Resume every node downstream of TARGET too
+        /// Also lift this target's own pause from every node downstream of TARGET; a node
+        /// another pause also holds stays paused
         #[arg(long, requires = "target")]
-        #[arg(help = "Also resume every node downstream of the target", long_help = None)]
+        #[arg(help = "Also lift this target's pause from every node below it; other pauses stay", long_help = None)]
         downstream: bool,
         /// Resume every paused node
         #[arg(long)]

@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Breaking
+
+- `barca resume X --downstream` (and `POST /pauses/resume` with `downstream`) lifts only its own pause from the nodes below `X`. Before, it removed every pause in its scope, also a pause that someone else set on a node below `X`, so a deliberate hold was lost when an incident pause above it was resumed. A node now stays paused while any pause holds it, and `asset_pause_vias` records every pause of each node. The nodes a resume names (`X`, or every node of a file) still lose every pause, and `barca resume --all` still lifts every pause. The resume answers `kept` (the nodes another pause still holds), and each entry of `paused` has `vias` (every pause target that holds it). A database paused by an older release keeps its pauses: each node is held by its recorded `via`.
+
 ## 0.47.0 (2026-11-24)
 
 ### Breaking

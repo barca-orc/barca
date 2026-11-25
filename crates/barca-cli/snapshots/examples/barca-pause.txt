@@ -45,7 +45,7 @@ Examples:
   barca pause clean --downstream --server  # clean and everything below it
   barca pause pipeline.py --server         # every node of the file
   barca pause clean --downstream --dry-run --server --json   # pauses nothing: covers: {targets, downstream, schedules: [{id, relation}]}
-  barca pause --server --json              # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
+  barca pause --server --json              # {total, paused: [{id, paused_at, via, vias}], schedules: [{id, paused_at, until}]}
   barca pause --schedule nightly --server  # the schedule of `nightly` does not fire until resumed
   barca pause --schedule nightly --until 2h --server   # resumes by itself in two hours
   barca pause --schedule nightly --until 2026-10-21T06:00:00Z --server --json   # the schedule's entry: {id, cron, paused, paused_until, next_fire, ...}

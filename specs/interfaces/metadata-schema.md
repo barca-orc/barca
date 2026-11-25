@@ -337,6 +337,14 @@ every database from before 0.29.2 (#629):
   `node_id`: a node an operator paused. `paused_at` is unix seconds; `via` is the target the pause
   named (the node, the node a `--downstream` pause started from, or a file). A scheduled tick does
   not compute a paused node. A database without the table has no pauses; older binaries ignore it.
+  It holds the earliest pause of each node; `asset_pause_vias` holds all of them.
+- `asset_pause_vias (node_id, via, paused_at)` (unreleased), primary key `(node_id, via)`: every
+  pause that holds a paused node, one row per pause target. A resume deletes every row of the
+  nodes it names and, below them (`--downstream`), only the rows of its own target. A node leaves `asset_pauses` when its last row goes; otherwise its
+  `asset_pauses` row takes its earliest remaining pause. Every write first makes the two tables
+  agree: a paused node without rows gets its `asset_pauses` pause, and rows of a node that is not
+  in `asset_pauses` (resumed by an older binary) are deleted. A database without the table holds
+  each paused node by its `asset_pauses` row alone; older binaries ignore it.
 - `logs.stream` (`stdout` / `stderr`) and `logs.ts` (RFC 3339 UTC, milliseconds), both TEXT,
   nullable (0.29.2): which stream a recorded line came from and when it arrived. Lines recorded
   before keep `NULL` in both and read as stdout with no time (`barca logs --stream stdout`

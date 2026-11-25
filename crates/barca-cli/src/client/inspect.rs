@@ -1039,6 +1039,13 @@ pub(crate) async fn resume(
         pauses.removed.as_ref().map_or(0, Vec::len),
         server.shown_url
     );
+    if let Some(kept) = pauses.kept.as_ref().filter(|k| !k.is_empty()) {
+        barca_service::errln!(
+            "[barca] {} node(s) stay paused by another pause: {}",
+            kept.len(),
+            kept.join(", ")
+        );
+    }
     print_pauses(&body, &pauses, json);
     Ok(())
 }

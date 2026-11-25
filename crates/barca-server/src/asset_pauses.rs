@@ -49,12 +49,20 @@ pub async fn list(
     Ok(Json(pauses))
 }
 
+/// The request's target: a pause or a resume of nodes needs one.
+fn target_of(req: &PauseRequest) -> Result<&str, ApiError> {
+    req.target
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "a target is required\nSend {\"target\": \"<node or file.py>\"}.".into(),
+            )
+        })
+}
+
 async fn scope(reads: &Reads, req: &PauseRequest) -> Result<Vec<String>, ApiError> {
-    let Some(target) = req.target.as_deref().filter(|t| !t.is_empty()) else {
-        return Err(ApiError::BadRequest(
-            "a target is required\nSend {\"target\": \"<node or file.py>\"}.".into(),
-        ));
-    };
+    let target = target_of(req)?;
     let dag = reads.loaded_dag().await?;
     Ok(pauses::scope(&dag, target, req.downstream)?)
 }
@@ -82,22 +90,35 @@ pub async fn pause(
     }))
 }
 
-/// `POST /pauses/resume` — resume `target` (with `downstream`, everything below it too), or
-/// with `all`, every paused node. Answers the ids it resumed (`removed`).
+/// `POST /pauses/resume` — resume `target` (with `downstream`, everything below it too). The
+/// nodes `target` names lose every pause; a node below them loses only the pause that named
+/// `target`, and stays paused (`kept`) while another pause holds it. With `all`, every paused node, whatever holds it. Answers the ids it
+/// resumed (`removed`).
 pub async fn resume(
     State(reads): State<Reads>,
     Json(req): Json<PauseRequest>,
 ) -> Result<Json<Pauses>, ApiError> {
     crate::guards::refuse_if_read_only(&reads.config)?;
     let db_path = &reads.config.resolved.db_path;
-    let removed = if req.all {
-        pauses::resume(db_path, None).await?
+    let (removed, kept) = if req.all {
+        (pauses::resume(db_path, None).await?, None)
     } else {
-        pauses::resume(db_path, Some(scope(&reads, &req).await?)).await?
+        let target = target_of(&req)?;
+        let dag = reads.loaded_dag().await?;
+        let resumed = pauses::resume_target(db_path, &dag, target, req.downstream).await?;
+        (resumed.removed, Some(resumed.kept))
     };
-    barca_service::errln!("[barca] resumed {} node(s)", removed.len());
+    match kept.as_ref().filter(|k| !k.is_empty()) {
+        Some(kept) => barca_service::errln!(
+            "[barca] resumed {} node(s); {} stay paused by another pause",
+            removed.len(),
+            kept.len()
+        ),
+        None => barca_service::errln!("[barca] resumed {} node(s)", removed.len()),
+    }
     Ok(Json(Pauses {
         removed: Some(removed),
+        kept,
         ..body(&reads).await?
     }))
 }

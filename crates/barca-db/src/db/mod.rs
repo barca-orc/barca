@@ -60,7 +60,8 @@ pub(crate) mod uploads;
 // Every family's items keep their `db::X` path. The private `use`s are `pub(super)` helpers one
 // family calls in another; each family file starts with `use super::*`.
 pub(crate) use asset_pauses::CREATE as CREATE_ASSET_PAUSES;
-pub use asset_pauses::{AssetPause, get_asset_pauses, pause_assets, resume_assets};
+pub(crate) use asset_pauses::CREATE_VIAS as CREATE_ASSET_PAUSE_VIAS;
+pub use asset_pauses::{AssetPause, get_asset_pauses, lift_pauses, pause_assets, resume_assets};
 pub use cache_reader::{CacheReader, READ_STAMP_REFRESH};
 pub use cost_estimates::cost_estimates_for;
 use cost_estimates::cost_estimates_on;
