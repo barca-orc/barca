@@ -75,10 +75,13 @@ pub async fn get_asset_pauses(db_path: &str) -> Result<Vec<AssetPause>, BarcaErr
 }
 
 /// Pause `ids`, each `via` the given target, at `now`. A node already paused keeps its
-/// first pause time and `via`.
+/// first pause time and `via`, unless it is one of `named` (the nodes the target names, not
+/// those below them): an explicit pause of a node takes it over, so a `--downstream` resume of
+/// the earlier pause leaves it paused.
 pub async fn pause_assets(
     db_path: &str,
     ids: &[String],
+    named: &[String],
     via: &str,
     now: i64,
 ) -> Result<(), BarcaError> {
@@ -88,13 +91,17 @@ pub async fn pause_assets(
         .await
         .map_err(|e| BarcaError::Db(format!("failed to create asset_pauses: {e}")))?;
     for id in ids {
-        conn.execute(
+        let sql = if named.contains(id) {
             "INSERT INTO asset_pauses (node_id, paused_at, via) VALUES (?1, ?2, ?3)
-             ON CONFLICT(node_id) DO NOTHING",
-            [id.clone(), now.to_string(), via.to_string()],
-        )
-        .await
-        .map_err(|e| BarcaError::Db(format!("failed to record a pause: {e}")))?;
+             ON CONFLICT(node_id) DO UPDATE SET paused_at = excluded.paused_at, via = excluded.via
+             WHERE asset_pauses.via <> excluded.via"
+        } else {
+            "INSERT INTO asset_pauses (node_id, paused_at, via) VALUES (?1, ?2, ?3)
+             ON CONFLICT(node_id) DO NOTHING"
+        };
+        conn.execute(sql, [id.clone(), now.to_string(), via.to_string()])
+            .await
+            .map_err(|e| BarcaError::Db(format!("failed to record a pause: {e}")))?;
     }
     Ok(())
 }
@@ -142,7 +149,7 @@ mod tests {
         let path = dir.path().join("metadata.db").display().to_string();
         init_db(&path).await.unwrap();
         let ids = ["p.py:a".to_string()];
-        pause_assets(&path, &ids, "p.py:a", 1).await.unwrap();
+        pause_assets(&path, &ids, &ids, "p.py:a", 1).await.unwrap();
         {
             let (_db, conn) = open_conn(&path).await.unwrap();
             conn.execute(
@@ -161,5 +168,43 @@ mod tests {
             .unwrap();
         let left: i64 = rows.next().await.unwrap().unwrap().get(0).unwrap();
         assert_eq!(left, 0);
+    }
+
+    /// A pause that names a node already held by a `--downstream` pause takes it over; a node
+    /// it only reaches from above keeps the pause it had.
+    #[tokio::test]
+    async fn a_named_pause_takes_over_a_node_and_a_downstream_one_does_not() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("metadata.db").display().to_string();
+        init_db(&path).await.unwrap();
+        let ids =
+            |names: &[&str]| -> Vec<String> { names.iter().map(|n| format!("p.py:{n}")).collect() };
+        let held = ids(&["held"]);
+        let below_root = ids(&["root", "held"]);
+        pause_assets(&path, &held, &held, "held", 1).await.unwrap();
+        pause_assets(&path, &below_root, &ids(&["root"]), "root", 2)
+            .await
+            .unwrap();
+        let vias = |paused: Vec<AssetPause>| -> Vec<(String, i64, String)> {
+            paused
+                .into_iter()
+                .map(|p| (p.id, p.paused_at, p.via))
+                .collect()
+        };
+        assert_eq!(
+            vias(get_asset_pauses(&path).await.unwrap()),
+            [
+                ("p.py:held".into(), 1, "held".into()),
+                ("p.py:root".into(), 2, "root".into())
+            ]
+        );
+        // Named again by a pause of its own, `held` takes that pause; a repeat keeps its time.
+        pause_assets(&path, &held, &held, "root", 3).await.unwrap();
+        pause_assets(&path, &held, &held, "held", 4).await.unwrap();
+        pause_assets(&path, &held, &held, "held", 5).await.unwrap();
+        assert_eq!(
+            vias(get_asset_pauses(&path).await.unwrap())[0],
+            ("p.py:held".into(), 4, "held".into())
+        );
     }
 }

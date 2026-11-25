@@ -8,6 +8,10 @@ GitHub Releases, apart from the upgrade notes kept below for 0.10.0 to 0.20.0; t
 
 ## Pending
 
+### Bug Fixes
+
+- `barca resume X --downstream` (and `POST /pauses/resume` with `downstream`) no longer lifts a pause someone else set below `X`: it resumes `X` and, below it, only the nodes that the pause of `X` holds. A pause that names a node now takes it over from an earlier `--downstream` pause, so an operator's hold outlives an incident's resume in either order. To lift everything below `X` as before, resume those nodes by name or use `barca resume --all` (`barca docs incidents`, "Overlapping pauses").
+
 ## 0.47.0 (2026-11-24)
 
 ### Breaking

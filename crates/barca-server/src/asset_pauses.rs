@@ -49,14 +49,16 @@ pub async fn list(
     Ok(Json(pauses))
 }
 
-async fn scope(reads: &Reads, req: &PauseRequest) -> Result<Vec<String>, ApiError> {
-    let Some(target) = req.target.as_deref().filter(|t| !t.is_empty()) else {
-        return Err(ApiError::BadRequest(
-            "a target is required\nSend {\"target\": \"<node or file.py>\"}.".into(),
-        ));
-    };
-    let dag = reads.loaded_dag().await?;
-    Ok(pauses::scope(&dag, target, req.downstream)?)
+/// The target a request names, refused when it names none.
+fn target(req: &PauseRequest) -> Result<&str, ApiError> {
+    req.target
+        .as_deref()
+        .filter(|t| !t.is_empty())
+        .ok_or_else(|| {
+            ApiError::BadRequest(
+                "a target is required\nSend {\"target\": \"<node or file.py>\"}.".into(),
+            )
+        })
 }
 
 /// `POST /pauses` — pause `target` (and with `downstream`, everything below it). Answers the
@@ -71,10 +73,17 @@ pub async fn pause(
             "`all` is for resuming\nPause a target, or a file to pause every node of it.".into(),
         ));
     }
-    let ids = scope(&reads, &req).await?;
+    let via = target(&req)?;
+    let dag = reads.loaded_dag().await?;
     let cfg = &reads.config.resolved;
-    let via = req.target.clone().unwrap_or_default();
-    pauses::pause(cfg, &ids, &via, chrono::Utc::now().timestamp()).await?;
+    let ids = pauses::pause(
+        cfg,
+        &dag,
+        via,
+        req.downstream,
+        chrono::Utc::now().timestamp(),
+    )
+    .await?;
     barca_service::errln!("[barca] paused {} node(s) via {via}", ids.len());
     Ok(Json(Pauses {
         added: Some(ids),
@@ -82,8 +91,9 @@ pub async fn pause(
     }))
 }
 
-/// `POST /pauses/resume` — resume `target` (with `downstream`, everything below it too), or
-/// with `all`, every paused node. Answers the ids it resumed (`removed`).
+/// `POST /pauses/resume` — resume `target` (with `downstream`, the nodes below it that its
+/// pause holds too; a node another pause holds stays paused), or with `all`, every paused
+/// node. Answers the ids it resumed (`removed`).
 pub async fn resume(
     State(reads): State<Reads>,
     Json(req): Json<PauseRequest>,
@@ -91,9 +101,11 @@ pub async fn resume(
     crate::guards::refuse_if_read_only(&reads.config)?;
     let db_path = &reads.config.resolved.db_path;
     let removed = if req.all {
-        pauses::resume(db_path, None).await?
+        pauses::resume_all(db_path).await?
     } else {
-        pauses::resume(db_path, Some(scope(&reads, &req).await?)).await?
+        let target = target(&req)?;
+        let dag = reads.loaded_dag().await?;
+        pauses::resume_target(db_path, &dag, target, req.downstream).await?
     };
     barca_service::errln!("[barca] resumed {} node(s)", removed.len());
     Ok(Json(Pauses {

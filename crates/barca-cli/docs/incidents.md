@@ -11,7 +11,7 @@ barca pause pipeline.py --server           # every node defined in pipeline.py
 barca pause clean --downstream --dry-run --server   # pauses nothing: what the pause would cover
 barca pause --server --json                # {total, paused: [{id, paused_at, via}], schedules: [{id, paused_at, until}]}
 barca resume clean --server                # the next tick computes clean again
-barca resume clean --downstream --server   # clean and every node below it
+barca resume clean --downstream --server   # clean, and the nodes below it that its pause holds
 barca resume --all --server                # every paused node
 ```
 
@@ -91,6 +91,27 @@ caught up. A pause is separate from a schedule's pause (`barca pause --schedule 
 /schedule/{id}/pause`: it holds back one scheduled job's ticks, `barca docs scheduling`, "Pausing
 one schedule"; `barca pause` with no target lists both kinds) and from the run queue's pause (`barca queue pause`, which holds
 back every queued run); the web UI's asset panel offers all three in one place.
+
+## Overlapping pauses
+
+A node has one pause, recorded with the target that paused it (`via` in `barca pause --json`).
+A pause that names a node takes it over from an earlier pause; a `--downstream` pause leaves a
+node below its target that is already paused with the pause it had. `barca resume TARGET
+--downstream` resumes the nodes `TARGET` names, whatever paused them, and below them only the
+nodes whose `via` is `TARGET` (another spelling of it counts: `clean` and `pipeline.py:clean`
+are one target). So a hold set on its own outlives the resume of an incident's `--downstream`
+pause above it:
+
+```bash
+barca pause report --server                # an operator holds report
+barca pause clean --downstream --server    # an incident: report already paused, keeps via report
+barca resume clean --downstream --server   # resumes clean; report stays paused
+```
+
+Known limitation: when two `--downstream` pauses overlap, the nodes below both keep the first
+one's `via`. Resuming the first with `--downstream` lifts them, and only the inner target stays
+paused; pause it with `--downstream` again afterwards to hold them. `barca resume --all` lifts
+every pause.
 
 ## Known limitations
 

@@ -181,37 +181,90 @@ pub fn parse_until(text: &str, now: chrono::DateTime<chrono::Utc>) -> Result<i64
     Ok(at)
 }
 
-/// Pause `ids` (the [`scope`] of `via`, the target as given) at `now` (unix seconds), creating
-/// the metadata DB when there is none.
+/// Pause `target` (with `downstream`, everything below it too) at `now` (unix seconds),
+/// creating the metadata DB when there is none. Answers the ids it covers ([`scope`]). A node
+/// the target names takes this pause over from any pause that already holds it, so resuming
+/// that other pause with `--downstream` leaves it paused ([`resume_target`]); a node below
+/// them keeps the pause it had.
 pub async fn pause(
     cfg: &barca_model::config::ResolvedConfig,
-    ids: &[String],
-    via: &str,
+    dag: &Dag,
+    target: &str,
+    downstream: bool,
     now: i64,
-) -> Result<(), BarcaError> {
+) -> Result<Vec<String>, BarcaError> {
+    let named = scope(dag, target, false)?;
+    let ids = if downstream {
+        below(dag, &named)
+    } else {
+        named.clone()
+    };
     barca_db::open::open_metadata(cfg).await?;
-    barca_db::db::pause_assets(&cfg.db_path, ids, via, now).await
+    barca_db::db::pause_assets(&cfg.db_path, &ids, &named, target, now).await?;
+    Ok(ids)
 }
 
-/// Resume `ids` (every paused node with `None`) in the metadata DB at `db_path`. Answers the
-/// ids it resumed: those of `ids` that were paused.
-pub async fn resume(db_path: &str, ids: Option<Vec<String>>) -> Result<Vec<String>, BarcaError> {
+/// Resume every paused node in the metadata DB at `db_path`, whatever paused it. Answers the
+/// ids it resumed.
+pub async fn resume_all(db_path: &str) -> Result<Vec<String>, BarcaError> {
+    let ids = barca_db::db::get_asset_pauses(db_path)
+        .await?
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    barca_db::db::resume_assets(db_path, None).await?;
+    Ok(ids)
+}
+
+/// Resume `target` in the metadata DB at `db_path`: the nodes it names, whatever paused them,
+/// and with `downstream`, each node below them that a pause of `target` holds (its `via`
+/// names the same node or file). A node below them that another pause holds stays paused: a
+/// deliberate hold under an incident's `--downstream` pause outlives the incident's resume.
+/// Answers the ids it resumed, in dependency order.
+pub async fn resume_target(
+    db_path: &str,
+    dag: &Dag,
+    target: &str,
+    downstream: bool,
+) -> Result<Vec<String>, BarcaError> {
+    let named = scope(dag, target, false)?;
+    let reach = if downstream {
+        below(dag, &named)
+    } else {
+        named.clone()
+    };
     let paused = barca_db::db::get_asset_pauses(db_path).await?;
-    match ids {
-        None => {
-            let ids: Vec<String> = paused.into_iter().map(|p| p.id).collect();
-            barca_db::db::resume_assets(db_path, None).await?;
-            Ok(ids)
-        }
-        Some(ids) => {
-            let ids: Vec<String> = ids
-                .into_iter()
-                .filter(|id| paused.iter().any(|p| &p.id == id))
-                .collect();
-            barca_db::db::resume_assets(db_path, Some(&ids)).await?;
-            Ok(ids)
-        }
+    let ids: Vec<String> = reach
+        .into_iter()
+        .filter(|id| {
+            paused
+                .iter()
+                .any(|p| &p.id == id && (named.contains(id) || same_target(dag, &p.via, target)))
+        })
+        .collect();
+    barca_db::db::resume_assets(db_path, Some(&ids)).await?;
+    Ok(ids)
+}
+
+/// Whether the pause targets `a` and `b` name the same thing: the same text, the same source
+/// file, or names that resolve to the same node. A name that no longer resolves (its node was
+/// removed) matches its own text only.
+fn same_target(dag: &Dag, a: &str, b: &str) -> bool {
+    if a == b {
+        return true;
     }
+    if a.ends_with(".py") || b.ends_with(".py") {
+        let (a, b) = (a.trim_start_matches("./"), b.trim_start_matches("./"));
+        return a.ends_with(".py")
+            && b.ends_with(".py")
+            && (a == b || a.ends_with(&format!("/{b}")) || b.ends_with(&format!("/{a}")));
+    }
+    let node = |name: &str| {
+        barca_compile::targets::resolve_target(dag, Some(name), "")
+            .ok()
+            .flatten()
+    };
+    node(a).is_some_and(|id| node(b).as_ref() == Some(&id))
 }
 
 /// The usage error for a request that names the paused node `id`.
@@ -287,5 +340,106 @@ mod tests {
         );
         assert!(paused_target(&["report".to_string()], &paused).is_none());
         assert!(paused_target(&["p.py:clean".to_string()], &paused).is_some());
+    }
+
+    fn db_cfg(dir: &std::path::Path) -> barca_model::config::ResolvedConfig {
+        let mut cfg =
+            barca_model::config::resolve_with(None, dir, barca_model::config::Vars::NONE).unwrap();
+        std::fs::create_dir_all(dir.join(".barca")).unwrap();
+        cfg.db_path = dir
+            .join(".barca/metadata.db")
+            .to_string_lossy()
+            .into_owned();
+        cfg
+    }
+
+    async fn paused(cfg: &barca_model::config::ResolvedConfig) -> Vec<(String, String)> {
+        list(&cfg.db_path)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|p| (short_name(&p.id).to_string(), p.via))
+            .collect()
+    }
+
+    #[test]
+    fn a_pause_target_matches_its_other_spellings() {
+        let d = dag();
+        assert!(same_target(&d, "clean", "p.py:clean"));
+        assert!(same_target(&d, "./p.py", "p.py"));
+        assert!(same_target(&d, "gone", "gone"));
+        assert!(!same_target(&d, "clean", "raw"));
+        assert!(!same_target(&d, "p.py", "clean"));
+        assert!(!same_target(&d, "gone", "clean"));
+    }
+
+    /// An operator holds `report`, an incident pauses `raw --downstream` over it (in either
+    /// order), and the incident's resume leaves the operator's hold in place (ONE-5892).
+    #[tokio::test]
+    async fn a_downstream_resume_keeps_a_hold_another_pause_set() {
+        let d = dag();
+        for hold_first in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let cfg = db_cfg(dir.path());
+            if hold_first {
+                pause(&cfg, &d, "report", false, 1).await.unwrap();
+            }
+            let covered = pause(&cfg, &d, "p.py:raw", true, 2).await.unwrap();
+            assert_eq!(names(&covered), ["raw", "clean", "report"]);
+            if !hold_first {
+                pause(&cfg, &d, "report", false, 3).await.unwrap();
+            }
+            let resumed = resume_target(&cfg.db_path, &d, "raw", true).await.unwrap();
+            assert_eq!(
+                names(&resumed),
+                ["raw", "clean"],
+                "hold first: {hold_first}"
+            );
+            assert_eq!(paused(&cfg).await, [("report".into(), "report".into())]);
+        }
+    }
+
+    /// The nodes a resume names lose their pause whatever set it; below them, only the
+    /// resumed target's pause is lifted.
+    #[tokio::test]
+    async fn a_resume_lifts_the_named_nodes_and_its_own_pause_below_them() {
+        let d = dag();
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = db_cfg(dir.path());
+        pause(&cfg, &d, "raw", true, 1).await.unwrap();
+        // Without --downstream, only the named node.
+        assert_eq!(
+            names(
+                &resume_target(&cfg.db_path, &d, "clean", false)
+                    .await
+                    .unwrap()
+            ),
+            ["clean"]
+        );
+        // `clean --downstream` names clean (not paused now) and reaches report, which `raw`
+        // paused: report stays.
+        assert!(
+            resume_target(&cfg.db_path, &d, "clean", true)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            paused(&cfg).await,
+            [
+                ("raw".into(), "raw".into()),
+                ("report".into(), "raw".into())
+            ]
+        );
+        // A file names every node of it, so its resume lifts every pause of them.
+        pause(&cfg, &d, "other", false, 2).await.unwrap();
+        let resumed = resume_target(&cfg.db_path, &d, "./p.py", false)
+            .await
+            .unwrap();
+        assert_eq!(names(&resumed), ["other", "raw", "report"]);
+        assert_eq!(
+            resume_all(&cfg.db_path).await.unwrap(),
+            Vec::<String>::new()
+        );
     }
 }

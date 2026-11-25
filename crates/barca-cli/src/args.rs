@@ -466,7 +466,7 @@ More: barca docs incidents";
 const RESUME_HELP: &str = "\
 Examples:
   barca resume clean --server               # the next tick computes clean again
-  barca resume clean --downstream --server  # clean and everything below it
+  barca resume clean --downstream --server  # clean, and the nodes below it that its pause holds
   barca resume pipeline.py --server         # every node of the file
   barca resume --all --server --json        # {removed, total, paused, schedules}
   barca resume --schedule nightly --server  # the schedule fires again from its next tick
@@ -1206,9 +1206,10 @@ pub(crate) enum Cli {
         #[arg(long, value_name = "NODE", conflicts_with_all = ["target", "downstream", "all"])]
         #[arg(help = "Resume the schedule of this scheduled node instead of nodes", long_help = None)]
         schedule: Option<String>,
-        /// Resume every node downstream of TARGET too
+        /// Also resume the nodes downstream of TARGET that a pause of TARGET holds; a node
+        /// another pause holds stays paused
         #[arg(long, requires = "target")]
-        #[arg(help = "Also resume every node downstream of the target", long_help = None)]
+        #[arg(help = "Also resume the nodes below the target that its pause holds", long_help = None)]
         downstream: bool,
         /// Resume every paused node
         #[arg(long)]
