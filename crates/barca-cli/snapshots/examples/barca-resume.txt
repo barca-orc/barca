@@ -11,7 +11,7 @@ Options:
           Resume the schedule of this scheduled node instead of nodes
 
       --downstream
-          Also resume every node downstream of the target
+          Also resume the nodes below the target that its pause holds
 
       --all
           Resume every paused node
@@ -39,7 +39,7 @@ Options:
 
 Examples:
   barca resume clean --server               # the next tick computes clean again
-  barca resume clean --downstream --server  # clean and everything below it
+  barca resume clean --downstream --server  # clean, and the nodes below it that its pause holds
   barca resume pipeline.py --server         # every node of the file
   barca resume --all --server --json        # {removed, total, paused, schedules}
   barca resume --schedule nightly --server  # the schedule fires again from its next tick

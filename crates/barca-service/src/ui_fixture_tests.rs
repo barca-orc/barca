@@ -768,8 +768,9 @@ impl Project {
         // Held: one asset paused.
         crate::pauses::pause(
             &self.cfg,
-            &[self.id("orders.py:customers")],
+            &self.dag,
             "customers",
+            false,
             at("2026-11-17T09:00:00Z").timestamp(),
         )
         .await

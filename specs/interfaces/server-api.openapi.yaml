@@ -2723,7 +2723,8 @@ paths:
               schema:
                 $ref: '#/components/schemas/Error'
       description: 'Pause target (a node named as a run target is, or a deployed file.py: every node of
-        it), and with downstream every node below it. A node already paused keeps its first pause. A POST
+        it), and with downstream every node below it. A node the target names takes the pause over; a
+        node below it already paused keeps its pause. A POST
         /runs that names a paused node is refused (400, exit 2) unless it sends allow_paused. Experimental.'
   /pauses/resume:
     post:
@@ -2768,8 +2769,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/Error'
-      description: Resume target (with downstream, every node below it too) or, with all, every paused
-        node. The next scheduled tick computes them again; the ticks they skipped are not caught up.
+      description: Resume target (with downstream, also the nodes below it whose pause named the target;
+        a node another pause holds stays paused) or, with all, every paused node. The next scheduled tick computes them again; the ticks they skipped are not caught up.
         Resuming a node that is not paused changes nothing. Experimental.
   /schedule:
     get:
